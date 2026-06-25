@@ -6,10 +6,9 @@
 %%  Initial draft targeting ACM FSE.
 %% ---------------------------------------------------------------------------
 
-\settopmatter{printacmref=false}
+\settopmatter{printacmref=true}
 \setcopyright{none}
 \renewcommand\footnotetextcopyrightpermission[1]{}
-\pagestyle{plain}
 
 %% ----- Packages ------------------------------------------------------------
 \usepackage{tikz}
@@ -22,6 +21,9 @@
 \usepackage{mathtools}
 \usepackage{microtype}
 \usepackage{enumitem}
+\Urlmuskip=0mu plus 2mu\relax
+\raggedbottom
+\vfuzz=1.5pt
 
 %% Define theorem environments explicitly (avoid relying on acmart option state).
 \theoremstyle{plain}
@@ -434,13 +436,14 @@ and the empirical need to study migration paths for existing cyclic graphs.
 \begin{figure}[t]
 \centering
 \input{fig_aggregation}
-\caption{One graph, two altitudes, drawn from \textsc{vLLM}. Two type-driven
-leaf-level import edges (bottom, where agents work)---\texttt{execute\_model()}
-consuming \texttt{SchedulerOutput} and \texttt{sample\_tokens()} consuming
-\texttt{GrammarOutput}---aggregate to a single package-level arrow
-\texttt{executor}\,$\Rightarrow$\,\texttt{core/sched} (top, where humans review).
-The arrow carries the witness set of leaf edges it summarizes, so a change that
-does not touch those edges cannot change the arrow.}
+\caption{Aggregation across review altitudes. Two type-driven leaf imports
+inside \textsc{vLLM}'s \texttt{executor} package aggregate to one package-level
+arrow into \texttt{core/sched}. The arrow carries the witness set of leaf edges
+it summarizes, so a change that does not touch those edges cannot change the
+package-level arrow.}
+\Description{A two-level architecture graph showing two executor leaf imports
+into scheduler leaf types aggregating into one package-level executor to
+core/scheduler arrow.}
 \label{fig:aggregation}
 \end{figure}
 
@@ -578,7 +581,7 @@ whether it qualifies for the boundary-preserving fast path of
 concerns (Figure~\ref{fig:substrate}). Four are a \emph{fixed substrate}; the
 fifth is deliberately \emph{open}.
 
-\begin{description}[leftmargin=0em,itemsep=2pt,topsep=2pt,style=nextline]
+\begin{description}[leftmargin=*,itemsep=2pt,topsep=2pt,style=nextline]
 \item[\textsf{1.\ Extraction} (language $\to$ graph)] Parses source into the
 \emph{actual} graph---nodes at all altitudes, typed primitive edges, surfaces,
 external boxes, and evidence metadata. This is the main ecosystem-specific
@@ -590,9 +593,9 @@ graph: the single object all other concerns read. It stores structure and
 contracts, not source, and must diff, address any node stably
 (\S\ref{sec:identity}), and project to any altitude (Definition~\ref{def:agg}).
 \item[\textsf{3.\ Conformance} (structural gate)] Given two graph versions and
-the declared rules, emits the structural part of the review report:
-acyclicity, per-altitude spread, surface, and typed-edge changes
-(\S\ref{sec:enforce}). Purely structural---fast, total, deterministic.
+the declared rules, emits the structural review report: acyclicity, spread,
+surface, and typed-edge changes (\S\ref{sec:enforce}). Purely structural---fast,
+total, deterministic.
 \item[\textsf{4.\ Evidence} (contract gate)] Checks or records the evidence
 obligations attached to implicated contracts: tests, fuzzing, traces,
 benchmarks, static checks, or human approval. Grows lazily, per box and per
@@ -625,6 +628,9 @@ proposes changes to it.
 concern~5---the proposers---is \emph{open}. Every proposer, human or machine,
 emits the same artifact (a graph delta plus code) and is admitted only through
 the same structural and evidence gates (Property~\ref{prop:funnel}).}
+\Description{A pipeline diagram with extraction, representation, conformance,
+and verification as fixed substrate layers, and human or machine proposers
+feeding candidate graph deltas and code changes into those gates.}
 \label{fig:substrate}
 \end{figure}
 
@@ -821,6 +827,10 @@ holds, it may be accepted without human review. A candidate that touches any
 boundary takes Door~2: its delta is reviewed by a human and, if approved,
 advances the baseline. No proposer can reach the Door-1 fast path while
 changing a boundary (Property~\ref{prop:doors}).}
+\Description{A decision diagram in which a candidate graph delta and code change
+is routed by whether its boundary delta is empty. Empty-boundary changes take an
+automatic internal-evolution path; boundary-changing proposals take a human
+design-review path.}
 \label{fig:doors}
 \end{figure*}
 
