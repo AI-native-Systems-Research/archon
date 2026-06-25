@@ -823,13 +823,15 @@ theorem; it is the empirical frontier the evaluation must measure.
 \section{Evaluation Plan}\label{sec:eval}
 %% ===========================================================================
 
-The claims above require empirical support at three levels. First, the substrate
+The claims above require empirical support at four levels. First, the substrate
 must be implementable for languages with different module and visibility
 mechanisms. Second, graph deltas must be useful in real review histories, rather
-than merely well defined. Third, the Door-1 protocol must be tested against
-agentic changes and independent behavioral oracles. We therefore plan three
-linked studies: an implementation study, a retrospective pull-request study, and
-a controlled agentic-evolution study.
+than merely well defined. Third, the algebra of graphs, deltas, projections, and
+gates must be tested as software, not only specified on paper. Fourth, the Door-1
+protocol must be tested against agentic changes and independent behavioral
+oracles. We therefore plan four linked studies: an implementation study, a
+retrospective pull-request study, an executable-invariants study, and a
+controlled agentic-evolution study.
 
 \paragraph{Subjects and case studies.}
 We will study three large open-source repositories spanning different levels of
@@ -876,6 +878,13 @@ suite.
 \item[\textbf{RQ6}] (Cost and workflow fit) What is the latency of extraction,
 diffing, identity inference, and gating per push, and can the results be
 presented in a form that reviewers can act on in ordinary code review?
+\item[\textbf{RQ7}] (Executable invariants) Which ARCHON claims can be made
+executable? We test graph algebra, delta computation, identity, repair edits,
+and gates with generated graphs and generated changes, and we study a brownfield
+system whose own behavioral invariants are being moved toward property-based
+tests. We measure faults found, minimized counterexample size, and which claims
+require runtime instrumentation, static checks, or type-level boundaries rather
+than ordinary generated tests.
 \end{description}
 
 \paragraph{Retrospective pull-request study.}
@@ -898,6 +907,22 @@ repair PRs, to ask whether the graph deltas make progress and regression
 visible. The key measures are debt reduction per PR, number of code edits needed
 per graph edit, reviewer effort to approve the graph edit, and whether the
 ratchet blocks changes maintainers would consider routine.
+
+\paragraph{Executable-invariants study.}
+ARCHON's core substrate can be exercised with generated structures. We will
+write property-based tests over hierarchical graphs, projected views, identity
+correspondences, deltas, and repair edits. The tests should check, for
+example, that projection agrees with leaf-edge witnesses, pure renames and moves
+do not create spurious arrows, Door-1 eligibility fails on any boundary-changing
+delta, SCC collapse preserves external arrows, and ratcheting policies do not
+increase the chosen debt metric. We will also separate graph-substrate laws from
+system-specific behavioral laws. Some claims, such as request conservation in a
+simulator, can be tested over generated executions; others, such as ``the
+proposer cannot bypass the gate'' or ``a contract cannot mention private
+entities,'' are structural code-path claims. We will treat those as separate
+checks, using API boundaries, access guards, or static analysis rather than
+forcing them into a property-testing harness. Appendix~\ref{app:blis} sketches
+BLIS as a first brownfield exemplar for this study.
 
 \paragraph{Agentic evolution study.}
 RQ5 is the load-bearing study for the conditional safety claim. For each
@@ -930,7 +955,8 @@ precision and recall and spurious-delta reduction (RQ2); delta-compression ratio
 empty-delta fraction, and reviewer-label agreement (RQ3); gate classification
 rates, false positives, false negatives, and migration-policy outcomes (RQ4);
 escaped regressions per accepted Door-1 change and their cause classification
-(RQ5); wall-clock latency and review artifact size per PR (RQ6).
+(RQ5); wall-clock latency and review artifact size per PR (RQ6); property-test
+coverage, minimized counterexample size, and structural-check gaps (RQ7).
 
 %% ===========================================================================
 \section{Related Work}\label{sec:related}
@@ -1023,6 +1049,17 @@ the distance to that target. This raises technical questions about debt metrics,
 minimal repair suggestions, and how to present graph edits so maintainers review
 them as design changes rather than as opaque tool output.
 
+\paragraph{Executable architectural invariants.}
+Once architecture is represented as a graph artifact, many claims become
+executable. Projection, aggregation, identity, delta computation, and repair
+ratchets all have algebraic properties that can be checked over generated
+graphs. Other claims are structural. For example, no proposer should bypass the
+gates, and a Door-1 contract should mention only the public surface of its box.
+These resemble code-path invariants more than output invariants, so they require
+API design, access guards, or static checks. The research question is how much
+of the architecture-as-contract discipline can be made executable, and which
+claims remain matters of review and evidence.
+
 \paragraph{The aggregation of contracts.}
 We chose to restate a parent's behavioral contract independently rather than
 derive it from its children (\S\ref{sec:contracts}). When is a sound
@@ -1064,6 +1101,57 @@ box. The next step is empirical. Building \textsc{Archon} and studying it on
 real monorepos will show which parts of the model are practical today, where
 extractors lose precision, and how much behavioral contract coverage is needed
 before autonomous internal evolution is a defensible engineering practice.
+
+\appendix
+
+%% ===========================================================================
+\section{BLIS as a Brownfield Exemplar}\label{app:blis}
+%% ===========================================================================
+
+This appendix sketches one candidate exemplar for the executable-invariants
+study. BLIS is useful because it was not constructed for this paper. The public
+artifacts include a Go simulator for LLM serving (\texttt{inference-sim}) and a
+related Python calibration artifact for trace-only step-level coefficient
+estimation~\cite{inferencesim,blisrepo}. The
+simulator documentation names system invariants such as request conservation,
+clock monotonicity, KV-cache conservation, lifecycle causality, determinism,
+signal freshness, work conservation, oracle-knowledge boundaries, session
+completeness, and preemption completeness~\cite{blisinvariants}. A public design
+discussion proposes turning those invariants into property-based tests using
+\texttt{rapid}, together with Go fuzz targets for parsers, KV allocation, batch
+formation, and admission~\cite{blispropertydiscussion}.
+
+This makes BLIS a brownfield case in the sense relevant to ARCHON. The
+invariants were written after substantial system behavior already existed, and
+some proposed checks cannot yet be automated because the simulator lacks the
+observability fields needed to expose the relevant facts~\cite{blisobservability}.
+That is exactly the adoption problem a graph substrate should handle: capture
+the current design, expose the missing boundary and instrumentation facts, and
+ratchet toward a cleaner target. BLIS also separates three kinds of claims that
+ARCHON must keep distinct. Some are conservation identities, such as request or
+KV-cache conservation. Some are ordering properties, such as clock monotonicity
+and lifecycle causality. Others are structural code-path properties, such as the
+rule that admission must not read oracle output tokens. The first two fit
+property-based testing over generated simulation configurations. The third needs
+API boundaries, access guards, or static checks.
+
+An ARCHON study would use BLIS in two complementary ways. At the architecture
+level, we would extract boxes for routing, scheduling, KV state, workload
+generation, session management, metrics, and trace replay, then replay
+historical changes to ask whether architectural deltas expose the same boundary
+issues the invariant documents name. At the executable-invariant level, we would
+translate selected ARCHON graph laws into generated tests: projection agrees
+with leaf-edge witnesses, repair edits preserve external arrows, Door-1 routing
+fails on boundary deltas, and behavioral contracts mention only public-surface
+entities. The BLIS invariants provide the exemplar's behavioral side: generated
+simulation configurations check conservation, causality, and determinism, while
+structural guards enforce oracle-knowledge boundaries.
+
+The point is not that BLIS alone validates ARCHON. It is a first brownfield case
+in a broader exemplar set. A later greenfield exemplar should start with an
+intended graph and executable invariants before implementation, so we can compare
+the two adoption paths: snapshot-and-ratchet for brownfield systems, and
+contract-first construction for greenfield systems.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{refs}
