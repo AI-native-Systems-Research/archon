@@ -74,7 +74,7 @@
 
 \begin{document}
 
-\title{Architecture as Contract: A Hierarchical Graph Substrate
+\title{Architecture as Contract: A Practical Graph Substrate
 for Reviewable and Agentic Software Evolution}
 
 \author{Anonymous Author(s)}
@@ -99,21 +99,23 @@ connected to the code.
 We present \textsc{Archon}, a substrate for treating architecture as a
 versioned, mechanically checked contract. \textsc{Archon} represents a
 repository as a \emph{hierarchical attributed graph}: boxes nest from packages
-down to functions, dependency arrows aggregate along the containment tree, and
-nodes carry structural contracts describing their public surface and permitted
-dependencies. Where automated evolution is intended, nodes may also carry
-behavioral contracts stated over that surface. The unit of review is a
-\emph{graph delta} projected to the altitude at which the change should be
-understood. We formalize the model, define node identity across refactorings,
-and state a boundary-locality theorem: under explicit assumptions about
-encapsulation and contract adequacy, an implementation change with an empty
-boundary delta and a preserved behavioral contract is unobservable outside the
-box. The theorem is not a claim that current repositories satisfy these
-assumptions automatically; rather, it identifies the checks and evidence needed
-to make autonomous internal evolution defensible. We separate this fixed
-substrate from the open set of proposers, including humans, coding agents, and
-search-based systems, and outline the empirical studies needed to evaluate the
-approach across Go, Rust, and Python monorepos.
+down to functions, typed arrows record not only imports and calls but also
+protocol fields, configuration keys, platform obligations, capabilities,
+metrics, traces, and external runtime dependencies, and contracts state what
+evidence is required at each boundary. The unit of review is a \emph{graph
+delta} projected to the altitude at which the change should be understood,
+together with an evidence-gap report: which boundaries changed, which contracts
+are implicated, who should review them, and what tests, traces, proofs,
+benchmarks, or human approvals are missing. We formalize the model, define node
+identity across refactorings, and state a boundary-locality theorem: under
+explicit assumptions about encapsulation and contract adequacy, an
+implementation change with an empty boundary delta and a preserved behavioral
+contract is unobservable outside the box. The theorem is not a claim that
+current repositories satisfy these assumptions automatically; rather, it
+identifies the checks and evidence needed to make autonomous internal evolution
+defensible. The same substrate supports greenfield contract-first design and
+brownfield snapshot-and-ratchet adoption, including instrumentation edits that
+make previously unobservable invariants checkable.
 \end{abstract}
 
 \begin{CCSXML}
@@ -164,6 +166,16 @@ ambiguous, or accidentally broad. For both human and machine-authored changes,
 the important review question is not simply how many lines changed. It is
 whether the change alters a boundary that other parts of the system depend on.
 
+The boundary is often not a source-level import. In systems such as LLM serving
+engines, desktop application frameworks, and simulators, the review-relevant
+fact may be that a pull request adds a sampling parameter, changes an IPC
+permission, depends on a GPU backend, weakens a replay guarantee, removes an
+observability field, or changes a minimum toolchain version. A practical
+architecture substrate must therefore model \emph{operational} edges, not only
+compiler edges, and it must report what evidence is missing when those edges
+move. Otherwise it will be precise on toy module diagrams and unhelpful in the
+repositories where reviewers most need it.
+
 \paragraph{Thesis.}
 We argue that the boxes-and-arrows view should become a \emph{first-class,
 versioned, mechanically checked artifact} serving three related uses:
@@ -181,22 +193,41 @@ same artifact documents the repository, defines the review delta, and supplies
 the boundary checked for automated changes, then humans and tools share the same
 architectural vocabulary.
 
+\paragraph{Adoption constraint.}
+For the method to matter outside research prototypes, and for it to be
+plausibly adoptable in CNCF-style infrastructure projects, it must be useful
+before a repository is clean, fully specified, or ready for autonomous changes. We
+therefore design for two adoption paths. In a \emph{greenfield} project, teams
+can write the intended graph, contracts, and required evidence before or during
+implementation. In a \emph{brownfield} project, the system first snapshots what
+exists, classifies which boundaries are real design commitments and which are
+tolerated debt, and then ratchets through reviewed graph edits. The first useful
+product is not a proof. It is a review-triage artifact: this change touched
+these boundaries, implicated these contracts, needs these reviewers, and is
+missing this evidence. Stronger automation grows only where that evidence has
+been earned.
+
 \paragraph{Approach.}
 We represent a repository as a \emph{hierarchical attributed graph}
 (\S\ref{sec:model}). Boxes nest along a containment tree---repository
-$\supseteq$ package $\supseteq$ module $\supseteq$ function---and arrows exist at
-every level, with a coarse arrow defined as the \emph{aggregation} of the finer
-arrows beneath it (Figure~\ref{fig:aggregation}). This single structure
-reconciles the two granularities that the problem demands: humans review at the
-package altitude, agents evolve at the function altitude, and the two are
-\emph{projections of the same graph} rather than separate models that can drift
-apart. Each node carries a \emph{structural contract}---its public surface and
-the dependencies it is permitted to have---and, where we intend to automate its
-evolution, a \emph{behavioral contract}: properties stated \emph{purely over its
-public surface}. A change is gated by its \emph{graph delta}, computed by
-extracting the graph before and after and diffing the two; gating decisions are
-made per-altitude, so a change that is a thousand-line internal rewrite at the
-function level can be \emph{empty} at the package level and reviewed as such.
+$\supseteq$ package $\supseteq$ module $\supseteq$ function---and arrows are
+typed. Some arrows are ordinary source dependencies; others represent protocol
+fields, configuration variables, endpoint obligations, metrics, platform
+targets, toolchain policies, or declared external systems. Coarse arrows are
+defined as the \emph{aggregation} of the finer arrows beneath them
+(Figure~\ref{fig:aggregation}). This single structure reconciles the two
+granularities that the problem demands: humans review at the package altitude,
+agents evolve at the function altitude, and the two are \emph{projections of the
+same graph} rather than separate models that can drift apart. Each node carries
+a \emph{structural contract}---its public surface and the typed arrows it is
+permitted to have---and, where we intend to automate its evolution, behavioral
+or operational obligations stated over that surface. Each obligation is
+evidence-typed: structural check, unit or property test, replay trace,
+differential oracle, benchmark, static check, or human approval. A change is
+gated by its \emph{graph delta}, computed by extracting the graph before and
+after and diffing the two; gating decisions are made per-altitude, so a change
+that is a thousand-line internal rewrite at the function level can be
+\emph{empty} at the package level and reviewed as such.
 
 \paragraph{The safety argument.}
 The model also makes explicit what must be true before internal automation can
@@ -216,7 +247,7 @@ substitutable.
 A substrate for automated evolution should not depend on a particular agent or
 search procedure. We therefore separate five concerns
 (Figure~\ref{fig:substrate}) into a \emph{fixed substrate}: extraction,
-representation, structural conformance, and behavioral verification, and an
+representation, structural conformance, and evidence checking, and an
 \emph{open} space of \emph{proposers}: humans, coding agents, and synthesis or
 search systems such as those targeted by \textsc{nous} and \textsc{skydiscover}.
 Every proposer emits the same kind of artifact, a graph delta plus a code
@@ -228,8 +259,8 @@ proposer.
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
 \item A \emph{hierarchical attributed graph} model of a repository that unifies
 documentation, review, and agentic evolution as consumers of one versioned
-artifact, with arrows and contracts that aggregate along a containment tree
-(\S\ref{sec:model}).
+artifact, with typed operational arrows and contracts that aggregate along a
+containment tree (\S\ref{sec:model}).
 \item A definition of \emph{node identity} stable under rename and move, which
 makes architectural deltas signal rather than noise and makes ``the boundary
 did not change'' computable (\S\ref{sec:identity}).
@@ -239,14 +270,19 @@ implies unobservability to the rest of the system under those assumptions,
 providing the conditional basis for fine-grained autonomous evolution under
 coarse-grained human review
 (\S\ref{sec:guarantees}).
-\item A \emph{conformance regime} of composable gates: an acyclicity policy, a
-per-altitude spread gate that bounds review blast radius, and a surface gate,
-together with an evolution protocol that routes
-boundary-preserving changes to automated gates and boundary-changing changes to
-human review of the delta (\S\ref{sec:enforce},~\S\ref{sec:evolve}).
+\item A \emph{conformance and evidence regime} of composable gates: acyclicity,
+per-altitude spread, surface change, and evidence-gap reporting, together with
+an evolution protocol that routes boundary-preserving changes to automated gates
+and boundary-changing changes to human review of the delta
+(\S\ref{sec:enforce},~\S\ref{sec:evolve}).
+\item A practical \emph{adoption methodology} for both greenfield and brownfield
+repositories: contract-first construction where possible, snapshot-and-ratchet
+where necessary, and instrumentation edits as first-class architectural repairs
+(\S\ref{sec:adoption}).
 \item A concrete \emph{evaluation plan} across Go, Rust, and Python monorepos,
-including retrospective pull-request studies, implementation case studies, and
-agentic evolution experiments focused on behavioral-contract coverage
+including review-triage studies, retrospective pull-request replay,
+brownfield-repair studies, implementation case studies, and agentic evolution
+experiments focused on behavioral-contract coverage
 (\S\ref{sec:eval},~\S\ref{sec:agenda}).
 \end{itemize}
 
@@ -318,8 +354,11 @@ at some altitude---repository, package, module/file, or leaf
 \item $\mathsf{par}:V \rightharpoonup V$ is a partial \emph{parent} map whose
 graph is a rooted tree $T$ (the \emph{containment tree}): $\mathsf{par}(v)$ is
 the box that directly contains $v$, undefined only at the root $r$;
-\item $E \subseteq V \times V$ is a set of directed \emph{arrows}
-(dependencies); and
+\item $E \subseteq V \times \mathcal{K} \times V$ is a set of directed,
+typed \emph{arrows}; the edge kind $k\in\mathcal{K}$ records whether the arrow
+is, for example, an import, call, protocol field, configuration key, endpoint,
+capability, metric, trace, platform target, toolchain policy, or external
+runtime obligation; and
 \item $\sigma$ assigns to each node its \emph{attributes}, including its
 public surface and contracts (\S\ref{sec:contracts}).
 \end{itemize}
@@ -331,26 +370,32 @@ The containment tree is what gives the model its two-altitude character: a
 human reads a \emph{cut} of $T$ near the root (packages), an agent operates on
 the leaves, and both are views of the same $V$.
 
-\paragraph{Edges live at the leaves; coarse arrows are derived.}
-We take the \emph{primitive} dependencies to be those the compiler or
-type-checker actually sees---one leaf referring to another (a call, a field
-access, an implemented interface). Formally $E$ is given at the leaf level, and
-arrows between interior boxes are defined by \emph{aggregation}.
+\paragraph{Primitive edges are typed; coarse arrows are derived.}
+Many primitive edges are compiler-visible facts: one leaf imports another,
+calls another, reads a field, or implements an interface. Others are extracted
+from schemas, build metadata, configuration files, permission manifests, trace
+schemas, benchmark harnesses, or project policy files. A repository may also
+declare \emph{external boxes} for dependencies that cannot be extracted with the
+same precision: a GPU runtime, browser webview, model artifact, package
+manager, cloud service, or adjacent repository. External boxes have surfaces
+and declared contracts, but their internals are opaque. Formally $E$ is given at
+the finest extracted or declared level, and arrows between interior boxes are
+defined by \emph{aggregation}.
 
 \begin{definition}[Arrow aggregation / projection]\label{def:agg}
 For boxes $a,b \in V$ with $a \neq b$ and neither containing the other, the
-\emph{aggregated arrow} $a \Rightarrow b$ exists iff some leaf of $a$ depends on
-some leaf of $b$:
+typed \emph{aggregated arrow} $a \xRightarrow{k} b$ exists iff some leaf of $a$
+has an edge of kind $k$ to some leaf of $b$:
 \[
-a \Rightarrow b \quad\Longleftrightarrow\quad
+a \xRightarrow{k} b \quad\Longleftrightarrow\quad
 \exists\, \ell_a \in \mathsf{leaves}(a),\ \ell_b \in \mathsf{leaves}(b)
-\;:\; (\ell_a,\ell_b)\in E .
+\;:\; (\ell_a,k,\ell_b)\in E .
 \]
-The \emph{witness set} $W(a\!\Rightarrow\! b)=\{(\ell_a,\ell_b)\in E :
-\ell_a\sqsubseteq a,\ \ell_b\sqsubseteq b\}$ records the leaf edges the arrow
-summarizes. The \emph{projection} of $G$ to an antichain $A\subseteq V$ of $T$
-(a set of boxes, no one containing another, covering all leaves) is the graph
-on $A$ whose arrows are the aggregated arrows among members of $A$.
+The \emph{witness set} $W(a\!\xRightarrow{k}\! b)=\{(\ell_a,k,\ell_b)\in E :
+\ell_a\sqsubseteq a,\ \ell_b\sqsubseteq b\}$ records the primitive edges the
+arrow summarizes. The \emph{projection} of $G$ to an antichain $A\subseteq V$ of
+$T$ (a set of boxes, no one containing another, covering all leaves) is the
+typed graph on $A$ whose arrows are the aggregated arrows among members of $A$.
 \end{definition}
 
 Projection is the formal meaning of ``zoom'': choosing the antichain of all
@@ -358,8 +403,10 @@ packages yields the human's review diagram; choosing the antichain of all
 leaves yields the agent's working graph. Because every coarse arrow carries its
 witness set, the human can expand any arrow to see exactly which leaf
 dependencies realize it (Figure~\ref{fig:aggregation}), and---crucially---a
-change that does not alter $E$ within $W(a\!\Rightarrow\! b)$ cannot alter the
-arrow $a\!\Rightarrow\! b$.
+change that does not alter $E$ within $W(a\!\xRightarrow{k}\! b)$ cannot alter
+the typed arrow $a\!\xRightarrow{k}\! b$. The edge kind controls the evidence expected later:
+changing a call edge is not the same review event as changing a permission edge,
+a replay-trace edge, or a hardware-backend edge.
 
 \subsection{Public surface and well-formedness}
 
@@ -370,7 +417,7 @@ because it, not the box's code, is what other boxes may depend on.
 The \emph{public surface} $\mathsf{surf}(v)$ of a box $v$ is the set of its
 entities (and their types/signatures) that are visible outside $v$. We require
 graphs to be \emph{encapsulated}: every cross-box leaf edge enters its target
-box through that box's surface. Formally, if $(\ell_a,\ell_b)\in E$ and the
+box through that box's surface. Formally, if $(\ell_a,k,\ell_b)\in E$ and the
 nearest common ancestor of $\ell_a,\ell_b$ is a proper ancestor of $\ell_b$'s
 parent box $b'$, then $\ell_b \in \mathsf{surf}(b')$.
 \end{definition}
@@ -400,15 +447,17 @@ does not touch those edges cannot change the arrow.}
 \subsection{Contracts: structural and behavioral}\label{sec:contracts}
 
 Attributes $\sigma(v)$ carry two contracts per box, and optionally one per
-arrow.
+arrow. Contracts are paired with \emph{evidence obligations}: the kind of
+artifact required before a change touching the contract can be accepted.
 
 \begin{definition}[Structural contract]
 The \emph{structural contract} of a box $v$ is the pair
 $\mathsf{SC}(v)=\big(\mathsf{surf}(v),\,\mathsf{Allow}(v)\big)$, where
 $\mathsf{surf}(v)$ is its public surface and $\mathsf{Allow}(v)\subseteq V$ is
-the set of boxes $v$ is permitted to depend on (its allowed out-arrows). A box
-\emph{satisfies} its structural contract when its actual surface is a subset of
-the declared one and its actual out-arrows target only allowed boxes.
+the set of typed targets $(k,u)$ that $v$ is permitted to depend on (its
+allowed out-arrows by kind). A box \emph{satisfies} its structural contract when
+its actual surface is a subset of the declared one and its actual out-arrows
+target only allowed boxes by allowed edge kinds.
 \end{definition}
 
 \begin{definition}[Behavioral contract]\label{def:bc}
@@ -419,15 +468,31 @@ the entities in $\mathsf{surf}(v)$. A behavioral contract may not refer to any
 entity not in $\mathsf{surf}(v)$.
 \end{definition}
 
+\begin{definition}[Evidence obligation]\label{def:evidence}
+An \emph{evidence obligation} is a pair $(p,\tau)$ attached to a box, arrow, or
+surface element, where $p$ is the contract property and $\tau$ is the expected
+evidence type. Evidence types include structural extraction, static analysis,
+unit or property tests, fuzzing, replay traces, differential tests,
+metamorphic tests, benchmarks, numerical tolerances, security or capability
+checks, and explicit human approval.
+\end{definition}
+
 The surface-only restriction in Definition~\ref{def:bc} is deliberate and
 load-bearing: a property that mentions a box's internals is not a contract but
 a test of a particular implementation, and it would forbid exactly the internal
 evolution we want to enable. Contracts at the surface are the obligations a
 box's neighbors are entitled to rely on; everything else is free to change. We
 return to this in \S\ref{sec:guarantees}, where it underwrites the safety
-theorem. An \emph{arrow contract} on $a\!\Rightarrow\! b$ is a consumer-driven
+theorem. An \emph{arrow contract} on $a\!\xRightarrow{k}\! b$ is a consumer-driven
 contract~\cite{fowler2006cdc}: the subset of $\mathsf{BC}(b)$ that $a$ actually
 relies upon, which lets $b$ evolve freely so long as that subset holds.
+
+Evidence obligations are what keep the methodology practical. A determinism
+contract may require replay traces; a performance contract may require a
+benchmark and confidence interval; a security/capability contract may require a
+manifest check; a toolchain policy may require static metadata; and a design
+change may require human approval. A missing obligation is not silently treated
+as success. It becomes an \emph{evidence gap} surfaced in review.
 
 \paragraph{Aggregating contracts up the tree.}
 Arrows aggregate mechanically (Definition~\ref{def:agg}); contracts do not. We
@@ -498,7 +563,7 @@ Property~\ref{prop:identity} is what makes a refactor diff as a refactor.
 recall against developer-labeled refactorings) as a first-class research
 question, since the value of every delta the system reports is bounded by it.
 We are explicit about the failure mode: an \emph{incorrect} $\iota$ does not
-threaten \emph{safety}---the structural and behavioral gates still run on the
+threaten \emph{safety}---the structural and evidence gates still run on the
 post-change graph regardless of how nodes were matched---but it degrades
 \emph{legibility}, surfacing a clean refactor as a noisy delta. Safety depends
 on the gates; identity governs only how clearly the change is presented and
@@ -515,19 +580,23 @@ fifth is deliberately \emph{open}.
 
 \begin{description}[leftmargin=0em,itemsep=2pt,topsep=2pt,style=nextline]
 \item[\textsf{1.\ Extraction} (language $\to$ graph)] Parses source into the
-\emph{actual} graph---nodes at all altitudes, leaf edges, surfaces. This is the
-\emph{only} language-specific concern; its output is language-neutral. It
-reports facts and decides no policy.
+\emph{actual} graph---nodes at all altitudes, typed primitive edges, surfaces,
+external boxes, and evidence metadata. This is the main ecosystem-specific
+concern: Python, Go, Rust, build systems, permission manifests, trace schemas,
+and CI metadata each require different extractors. Extraction reports facts and
+decides no policy.
 \item[\textsf{2.\ Representation} (the artifact)] The versioned hierarchical
 graph: the single object all other concerns read. It stores structure and
 contracts, not source, and must diff, address any node stably
 (\S\ref{sec:identity}), and project to any altitude (Definition~\ref{def:agg}).
 \item[\textsf{3.\ Conformance} (structural gate)] Given two graph versions and
-the declared rules, emits pass/fail: acyclicity, per-altitude spread, surface
+the declared rules, emits the structural part of the review report:
+acyclicity, per-altitude spread, surface, and typed-edge changes
 (\S\ref{sec:enforce}). Purely structural---fast, total, deterministic.
-\item[\textsf{4.\ Verification} (behavioral gate)] Holds a box's behavioral
-contract while its internals change (\S\ref{sec:guarantees}). Grows lazily,
-per box, as automation ambition grows.
+\item[\textsf{4.\ Evidence} (contract gate)] Checks or records the evidence
+obligations attached to implicated contracts: tests, fuzzing, traces,
+benchmarks, static checks, or human approval. Grows lazily, per box and per
+edge kind, as review needs and automation ambition grow.
 \item[\textsf{5.\ Evolution} (proposers)] Anything that proposes a change: a
 human, a coding agent, a synthesis or search system. \emph{Open by design.}
 \end{description}
@@ -555,7 +624,7 @@ proposes changes to it.
 \caption{Five concerns. Concerns 1--4 form a \emph{fixed} substrate;
 concern~5---the proposers---is \emph{open}. Every proposer, human or machine,
 emits the same artifact (a graph delta plus code) and is admitted only through
-the same structural and behavioral gates (Property~\ref{prop:funnel}).}
+the same structural and evidence gates (Property~\ref{prop:funnel}).}
 \label{fig:substrate}
 \end{figure}
 
@@ -570,9 +639,10 @@ review and gating is not the textual diff but the \emph{graph delta}.
 Given $G,G'$ and identity correspondence $\iota$ (\S\ref{sec:identity}), the
 \emph{delta} $\Delta(G,G')$ is the labeled set of changes:
 nodes created/deleted, nodes renamed/moved/internally-changed, arrows
-added/removed/reversed, and surfaces widened/narrowed---each computed up to
-$\iota$. The \emph{delta at altitude $A$} (an antichain of $T$) is the delta of
-the projections, $\Delta(\pi_A G,\ \pi_A G')$.
+added/removed/reversed by kind, surfaces widened/narrowed, and evidence
+obligations added, discharged, or left missing---each computed up to $\iota$.
+The \emph{delta at altitude $A$} (an antichain of $T$) is the delta of the
+projections, $\Delta(\pi_A G,\ \pi_A G')$.
 \end{definition}
 
 The same physical change has different deltas at different altitudes
@@ -582,12 +652,12 @@ what lets a large textual diff be reviewed as a small architectural one, and it
 makes the reviewer's blast radius a measurable quantity rather than a
 gut feeling.
 
-\subsection{Three composable gates}
+\subsection{Four composable gates}
 
 Conformance is the comparison of the actual graph against the intended baseline
 $G_\star$ (seeded by snapshotting the actual graph at adoption; advanced only by
-accepted deltas). We define three gates that cover cycles, change spread, and
-public surfaces.
+accepted deltas). We define four gates that cover cycles, change spread, public
+surfaces, and evidence.
 
 \paragraph{(G1) Acyclicity policy.}
 In the base model, the package-level projection of $G'$ must be acyclic. Cycles
@@ -623,38 +693,97 @@ the affected callers are included in the same reviewed design change. G3 is what
 makes ``the contract changed'' an event a human must approve, rather than an
 accident hidden inside a textual diff.
 
+\paragraph{(G4) Evidence --- per implicated contract.}
+For every changed box, arrow, or surface element, ARCHON computes the contracts
+whose scope includes that change and checks whether the required evidence
+obligations (Definition~\ref{def:evidence}) have been discharged. G4 is not a
+single pass/fail predicate in the same sense as acyclicity. It produces an
+evidence status: \emph{satisfied}, \emph{missing}, \emph{stale}, or
+\emph{human-review required}. This is the mechanism that turns the graph delta
+into a practical review artifact: reviewers see not only what changed, but what
+must be believed, tested, benchmarked, traced, or approved for the change to be
+accepted.
+
 \begin{definition}[Conformant change]\label{def:conformant}
-A change $G \to G'$ is \emph{conformant} iff $G'$ is well-formed
-(\S\ref{sec:model}) and satisfies G1--G3 against $G_\star$.
+A change $G \to G'$ is \emph{structurally conformant} iff $G'$ is well-formed
+(\S\ref{sec:model}) and satisfies G1--G3 against $G_\star$. It is
+\emph{evidence-complete} iff G4 reports no missing or stale obligation and no
+unapproved human-review requirement. It is \emph{fully conformant} iff both
+conditions hold.
 \end{definition}
 
-The three gates are independent and composed by conjunction; each is a total
-function of $(G_\star, G', \iota)$ and so is deterministic and replayable in
-CI. Crucially, all three are \emph{structural}: they never run the program.
-This is what makes them cheap enough to gate every push and is why they form
-the first line of the safety argument, before any behavioral check.
+G1--G3 are independent and composed by conjunction; each is a total function of
+$(G_\star, G', \iota)$ and so is deterministic and replayable in CI. Crucially,
+they are \emph{structural}: they never run the program. This makes them cheap
+enough to gate every push and is why they form the first line of the safety
+argument. G4 connects that structural result to the slower checks or human
+approvals that the changed boundaries require.
 
-\subsection{Brownfield repair as graph edits}
+%% ===========================================================================
+\section{Adoption Methodology}\label{sec:adoption}
+%% ===========================================================================
 
-The same delta mechanism supports incremental architectural repair. In a
-brownfield monorepo, the initial snapshot may contain cycles, inappropriate
-dependencies, oversized boxes, and surfaces that grew through convenience rather
-than design. Treating that snapshot as $G_\star$ does not endorse the mess; it
-records the current contract so that new erosion is visible. Cleanup then
-proceeds by reviewing a sequence of \emph{intended graph edits}: split a box,
-merge a strongly connected component into an explicit larger box, introduce an
-adapter boundary, remove an allowed arrow, narrow a surface after migrating its
-callers, or replace a direct dependency with a dependency on an interface.
+\textsc{Archon} is intended to be useful in repositories that are clean enough
+to design deliberately and in repositories that are already messy. The same
+artifact supports both, but the workflow differs.
 
+\paragraph{Greenfield: contract-first construction.}
+In a greenfield project, the intended graph $G_\star$ is written before or
+alongside the first implementation. Teams declare boxes, public surfaces,
+allowed typed arrows, external boxes, and evidence obligations while the design
+is still cheap to change. Code then fills in the leaves. Every pull request is
+reviewed against the same artifact the team used to design the system: if it
+introduces a new endpoint, permission, toolchain constraint, backend target, or
+configuration key, the graph delta makes that design choice visible. This path
+is the strongest setting for Door-1 automation because contracts and evidence
+can be attached before agents are allowed to optimize internals.
+
+\paragraph{Brownfield: snapshot, classify, ratchet.}
+In a brownfield monorepo, the initial snapshot may contain cycles,
+inappropriate dependencies, oversized boxes, missing observability, implicit
+platform assumptions, and surfaces that grew through convenience rather than
+design. Treating that snapshot as $G_\star$ does not endorse the mess; it
+records the current contract so that new erosion is visible. Adoption proceeds
+in four steps. First, extract and snapshot the actual graph. Second, classify
+edges and surfaces as intended design, tolerated debt, or extractor uncertainty.
+Third, install non-regression policies such as ``no new cycles,'' ``no new
+dependence on this internal package,'' or ``no new public API without a graph
+delta.'' Fourth, review a sequence of repair edits that move the baseline
+toward a cleaner graph.
+
+\paragraph{Repair edits.}
+A repair edit is an intended graph edit plus an evidence obligation. Common
+repairs include splitting a box, merging a strongly connected component into an
+explicit larger box, introducing an adapter boundary, replacing a direct
+dependency with an interface, removing an allowed arrow, narrowing a surface
+after migrating callers, declaring an external box, or adding a missing
+observability field. The last case is important: instrumentation is not merely
+debugging support. If a contract cannot be checked until a trace field, metric,
+event, or replay hook exists, then adding that observable fact is an
+architectural repair.
+
+\paragraph{Review-triage mode.}
+The first deployment mode should not require complete formal safety. For a
+large project, the immediately valuable output is a triage report: boundaries
+touched, owners, contracts implicated, and evidence gaps.
+For example, a change may touch a sampling-parameter boundary, a KV-transfer
+path, and a backend-dispatch edge; it may implicate determinism and performance
+contracts; and it may be missing a replay test or benchmark. Such a report is
+useful even when the final decision remains human. It makes review routing,
+test selection, and architectural discussion explicit, and it gives teams a
+path from lightweight review aid to stronger automated gates as evidence
+coverage improves.
+
+\paragraph{Debt ratchets.}
 Each repair edit creates a target graph $G_{\mathrm{target}}$ that is cleaner
-than the current baseline according to an explicit policy, such as fewer
-package cycles, lower fan-in to unstable internals, smaller public surfaces, or
-fewer cross-layer arrows. Code changes are then evaluated against that target:
-a PR either realizes part of the repair, leaves the debt unchanged, or moves the
-repository farther away and is routed to review. This gives teams a ratchet
-rather than a flag day. The architectural debt can be made visible immediately,
-but enforcement can become stricter one boundary, one SCC, or one surface at a
-time.
+than the current baseline according to an explicit policy, such as fewer package
+cycles, lower fan-in to unstable internals, smaller public surfaces, fewer
+cross-layer arrows, or greater observability for a contract. Code changes are
+then evaluated against that target: a PR either realizes part of the repair,
+leaves the debt unchanged, or moves the repository farther away and is routed to
+review. This gives teams a ratchet rather than a flag day. The architectural
+debt can be made visible immediately, but enforcement becomes stricter one
+boundary, one SCC, one edge kind, or one evidence obligation at a time.
 
 %% ===========================================================================
 \section{Evolution: Two Doors}\label{sec:evolve}
@@ -689,8 +818,9 @@ witness sets of all arrows incident on $v$ are unchanged up to $\iota$.
 \paragraph{Door 1: internal evolution (auto-gated).}
 A change whose boundary delta is empty for every box it touches changes only
 box interiors, relative to the extracted model. It is eligible for automatic
-admission if it (i)~is conformant (Definition~\ref{def:conformant}) and
-(ii)~preserves the behavioral contracts of the boxes it touches (concern~4).
+admission if it (i)~is fully conformant (Definition~\ref{def:conformant}) and
+(ii)~preserves the behavioral contracts of the boxes it touches, with the
+required evidence discharged (concern~4).
 This is the intended fast path for autonomous agents: an agent assigned the
 interior of box $v$ may propose an implementation rewrite, and the gates check
 that the proposal did not change the modeled boundary and did preserve the
@@ -704,6 +834,13 @@ graph delta that is \emph{itself} the reviewable artifact: a human (or a
 higher-privilege policy) approves the \emph{delta}, which then advances the
 baseline $G_\star$. Only after the boundary exists may Door-1 evolution fill in
 the new box's interior.
+
+Door~2 is also the normal path for evidence gaps. A proposal may be structurally
+conformant yet missing the replay trace, benchmark, static check, or human
+approval attached to an implicated contract. In that case ARCHON should not
+pretend the change is safe or reject it without context. It routes the proposal
+with an evidence-gap report, so maintainers can ask for the missing artifact,
+approve an explicit exception, or revise the contract.
 
 \begin{property}[Door separation]\label{prop:doors}
 The two doors use the same artifact and the same gates; they differ only in
@@ -828,15 +965,18 @@ theorem; it is the empirical frontier the evaluation must measure.
 \section{Evaluation Plan}\label{sec:eval}
 %% ===========================================================================
 
-The claims above require empirical support at four levels. First, the substrate
-must be implementable for languages with different module and visibility
-mechanisms. Second, graph deltas must be useful in real review histories, rather
-than merely well defined. Third, the algebra of graphs, deltas, projections, and
-gates must be tested as software, not only specified on paper. Fourth, the Door-1
-protocol must be tested against agentic changes and independent behavioral
-oracles. We therefore plan four linked studies: an implementation study, a
-retrospective pull-request study, an executable-invariants study, and a
-controlled agentic-evolution study.
+The claims above require empirical support at five levels. First, the substrate
+must be implementable for languages and ecosystems with different module,
+visibility, configuration, policy, and runtime mechanisms. Second, graph deltas
+and evidence-gap reports must be useful in real review histories, rather than
+merely well defined. Third, the adoption workflow must work for both
+contract-first greenfield projects and snapshot-and-ratchet brownfield projects.
+Fourth, the algebra of graphs, deltas, projections, and gates must be tested as
+software, not only specified on paper. Fifth, the Door-1 protocol must be tested
+against agentic changes and independent behavioral oracles. We therefore plan
+linked studies covering implementation, review triage, retrospective pull
+requests, brownfield repair, executable invariants, and controlled agentic
+evolution.
 
 \paragraph{Subjects and case studies.}
 We will study large open-source repositories spanning different levels of native
@@ -855,37 +995,42 @@ are the units on which behavioral contracts and agentic rewrites will be studied
 \begin{description}[leftmargin=2.6em,itemsep=2pt,topsep=2pt,style=sameline]
 \item[\textbf{RQ1}] (Extraction) What architecture graph can be extracted with
 useful precision in Python, Go, and Rust? We measure extraction coverage for
-nodes, surfaces, and leaf dependencies, and manually classify missing or
-spurious edges, including dynamic imports, reflection, generated code, global
-state, and file or network channels.
+nodes, surfaces, typed edges, external boxes, and evidence metadata, and
+manually classify missing or spurious edges, including dynamic imports,
+reflection, generated code, global state, configuration, protocol fields,
+permission manifests, platform labels, toolchain policies, and file or network
+channels.
 \item[\textbf{RQ2}] (Identity) Can $\iota$ recover developer-intended renames
 and moves? We measure
 precision and recall of inferred correspondences against labeled refactoring
 commits, and the reduction in spurious delta size compared with path-keyed
 identity.
-\item[\textbf{RQ3}] (Review legibility) For historical pull requests, how does
-the architectural delta compare with the textual diff? We report distributions
-of lines changed versus boxes, arrows, and surfaces changed at package and module
-altitudes; the fraction of PRs with empty package-level deltas; and examples
-where the graph delta exposes architectural risk that is hard to see in the
-textual diff.
+\item[\textbf{RQ3}] (Review triage) For historical pull requests, how does the
+architectural delta compare with the textual diff? We report distributions of
+lines changed versus boxes, typed arrows, surfaces, implicated contracts, and
+evidence gaps at package and module altitudes; the fraction of PRs with empty
+package-level deltas; and examples where the graph delta exposes architectural
+risk that is hard to see in the textual diff. We also measure whether the report
+routes the PR to the same owners, tests, and review discussions that maintainers
+eventually used.
 \item[\textbf{RQ4}] (Policy and migration) How would the conformance gates
 classify historical changes under plausible budgets and cycle policies? We
-measure pass, route-to-review, and reject classifications; identify
-cycle-introducing, dependency-widening, and surface-changing PRs; and compare a
-strict acyclic policy with migration policies such as strongly-connected
-components as boxes, ``no new cycles,'' and ratcheting policies that require
-successive graph edits to reduce architectural debt.
+measure pass, route-to-review, and reject classifications; identify changes
+that introduce cycles, widen dependencies, alter typed edges, miss evidence, or
+change surfaces; and compare a strict acyclic policy with migration policies
+such as strongly-connected components as boxes, ``no new cycles,'' and ratchets
+that require successive graph edits to reduce architectural debt.
 \item[\textbf{RQ5}] (Agentic internal evolution) On case-study boxes equipped
 with behavioral contracts, do Door-1 agent rewrites that pass the structural and
-behavioral gates preserve behavior under independent oracles? We measure escaped
+evidence gates preserve behavior under independent oracles? We measure escaped
 regressions, classify each by hidden channel versus inadequate contract, and
 compare against a baseline in which the agent is constrained only by the test
 suite.
 \item[\textbf{RQ6}] (Cost and workflow fit) What is the latency of extraction,
 diffing, identity inference, and gating per push, and can the results be
 presented in a form that reviewers can act on in ordinary code review and issue
-triage?
+triage? We measure report size, false-alarm rate, reviewer agreement, and the
+time required to understand or dismiss an ARCHON report.
 \item[\textbf{RQ7}] (Executable invariants) Which ARCHON claims can be made
 executable? We test graph algebra, delta computation, identity, repair edits,
 and gates with generated graphs and generated changes, and we study a brownfield
@@ -893,17 +1038,25 @@ system whose own behavioral invariants are being moved toward property-based
 tests. We measure faults found, minimized counterexample size, and which claims
 require runtime instrumentation, static checks, or type-level boundaries rather
 than ordinary generated tests.
+\item[\textbf{RQ8}] (Adoption) How far can teams get before writing rich
+behavioral contracts? We compare greenfield contract-first construction with
+brownfield snapshot-and-ratchet adoption, measuring time to first useful report,
+number of tolerated-debt annotations, repair edits accepted, instrumentation
+edits needed, and the fraction of sampled PRs for which ARCHON provides useful
+triage even when it cannot justify Door-1 automation.
 \end{description}
 
 \paragraph{Retrospective pull-request study.}
 For each subject repository, we will replay a stratified sample of historical
 pull requests. The strata should include routine fixes, refactorings, dependency
-changes, performance changes, and architectural reorganizations. For every PR,
-we extract $G$ and $G'$, infer identity, compute graph deltas at several
-altitudes, and apply the conformance gates under a small set of documented
+changes, operational-edge changes, performance changes, evidence-only changes,
+instrumentation changes, and architectural reorganizations. For every PR, we
+extract $G$ and $G'$, infer identity, compute graph deltas at several altitudes,
+and apply the conformance and evidence gates under a small set of documented
 policies. A human labeling pass will classify whether each PR is routine,
-boundary-changing, or architecture-significant; this label is used to estimate
-false positives and false negatives for the gate policies, not to train them.
+boundary-changing, evidence-changing, or architecture-significant; this label is
+used to estimate false positives and false negatives for the gate policies, not
+to train them.
 
 \paragraph{Review-friction scoping study.}
 Before the retrospective replay, we will sample public issues, pull requests,
@@ -913,7 +1066,11 @@ runtime behavior, performance claims, dependency and toolchain policy, user
 configuration failures, observability gaps, and low-quality agent-generated
 submissions. This study is not evidence that ARCHON solves those problems. Its
 purpose is to decide which frictions are architectural enough for a graph delta
-to help. In BLIS, recent activity around lazy request generation and
+to help, which are only partially addressable, and which are outside scope. A
+driver mismatch, an upstream platform bug, or a user misconfiguration may be
+important but not architectural; a changed permission boundary, protocol field,
+backend dispatch path, or trace obligation is architectural. In BLIS, recent
+activity around lazy request generation and
 property-tested invariants is largely architectural: the review burden is to
 preserve determinism, run/replay parity, trace export, and simulator invariants
 while changing the request-source boundary~\cite{blislazyrequests,blisrequestsource}.
@@ -931,11 +1088,13 @@ labels, environment variables, and external runtime obligations.
 For repositories with visible architectural debt, we will construct a small
 sequence of graph repair plans with project maintainers or expert reviewers. A
 plan consists of intended graph edits, such as collapsing an SCC, extracting an
-interface, forbidding a dependency, or narrowing a public surface, together with
-a measurable debt objective. We then replay historical PRs, or implement focused
-repair PRs, to ask whether the graph deltas make progress and regression
-visible. The key measures are debt reduction per PR, number of code edits needed
-per graph edit, reviewer effort to approve the graph edit, and whether the
+interface, forbidding a dependency, declaring an external box, adding an
+observability field, or narrowing a public surface, together with a measurable
+debt objective and evidence obligation. We then replay historical PRs, or
+implement focused repair PRs, to ask whether the graph deltas make progress and
+regression visible. The key measures are debt reduction per PR, number of code
+edits needed per graph edit, reviewer effort to approve the graph edit,
+instrumentation needed before an invariant becomes checkable, and whether the
 ratchet blocks changes maintainers would consider routine.
 
 \paragraph{Executable-invariants study.}
@@ -971,22 +1130,26 @@ the main negative result. Each is classified as evidence of a hidden channel
 \paragraph{Implementation case studies.}
 The implementation study should report where the model needed adaptation rather
 than only where it succeeded. For Python, the likely issues are dynamic imports,
-reflection, convention-based public surfaces, and monkey patching. For Go, the
-questions are how well packages and \texttt{internal} directories approximate
-the intended boxes and whether generated code introduces noisy edges. For Rust,
-the questions are how crate-level visibility, features, macros, and trait
-implementations affect node identity and surface extraction. These case studies
-make clear which parts of \textsc{Archon} are language-neutral and which parts
-are extractor engineering.
+reflection, convention-based public surfaces, model/backend dispatch, and
+monkey patching. For Go, the questions are how well packages and
+\texttt{internal} directories approximate the intended boxes, whether generated
+code introduces noisy edges, and how trace schemas and metrics become evidence
+obligations. For Rust, the questions are how crate-level visibility, features,
+macros, trait implementations, permission manifests, and toolchain policies
+affect node identity and surface extraction. These case studies make clear which
+parts of \textsc{Archon} are language-neutral and which parts are extractor
+engineering.
 
 \paragraph{Metrics summary.}
-Extraction precision and recall for nodes, surfaces, and edges (RQ1); identity
-precision and recall and spurious-delta reduction (RQ2); delta-compression ratio,
-empty-delta fraction, and reviewer-label agreement (RQ3); gate classification
-rates, false positives, false negatives, and migration-policy outcomes (RQ4);
-escaped regressions per accepted Door-1 change and their cause classification
-(RQ5); wall-clock latency and review artifact size per PR (RQ6); property-test
-coverage, minimized counterexample size, and structural-check gaps (RQ7).
+We will measure extraction precision and recall for nodes, surfaces, typed
+edges, external boxes, and evidence metadata (RQ1); identity precision and
+spurious-delta reduction (RQ2); delta compression, empty-delta fraction,
+owner/test routing, and reviewer-label agreement (RQ3); gate classifications,
+false positives, false negatives, evidence gaps, and migration outcomes (RQ4);
+escaped regressions per accepted Door-1 change (RQ5); latency, report size, and
+reviewer effort (RQ6); property-test coverage, minimized counterexamples, and
+structural-check gaps (RQ7); and time to first useful report, repair throughput,
+tolerated-debt annotations, and useful triage before rich contracts (RQ8).
 
 %% ===========================================================================
 \section{Related Work}\label{sec:related}
@@ -1001,32 +1164,34 @@ an option to change the interior freely. Design Structure
 Matrices~\cite{sangal2005using} and empirical studies of dependency
 structure~\cite{maccormack2006exploring} represent dependencies as a matrix
 rather than a drawing and reveal cycles and modularity violations at scale; our
-hierarchical graph is the same dependency relation, but versioned, per-change
-diffable, and equipped with contracts, and our projection operator is the
-analogue of viewing a DSM at a chosen aggregation.
+hierarchical graph generalizes that dependency relation with typed operational
+edges, versioned per-change diffs, evidence obligations, and a projection
+operator analogous to viewing a DSM at a chosen aggregation.
 
 \paragraph{Architecture conformance.}
 Reflexion models check an implementation's dependencies against a high-level
 model the architect supplies~\cite{murphy2001software}; dependency-constraint
 languages and static conformance checkers~\cite{terra2009dependency,
 passos2010static} enforce ``layer A may not depend on layer B'' rules in CI,
-the lineage of our gate G2/G3. We differ in three ways that matter for the FSE
+the lineage of our structural gates. We differ in four ways that matter for the FSE
 agenda: (i)~our intended model is \emph{derived-then-frozen} rather than
 hand-authored, removing the adoption cost that has limited conformance tools in
 practice; (ii)~conformance is computed on a \emph{per-change delta} at a chosen
 altitude, making it a review instrument rather than a periodic audit; and
-(iii)~we pair structural conformance with a \emph{behavioral} contract and a
-locality \emph{theorem}, so the regime can support conditional automation rather
-than only architectural hygiene.
+(iii)~we model operational edges such as configuration, protocol, capability,
+platform, and observability obligations; and (iv)~we pair structural conformance
+with evidence-typed contracts and a locality \emph{theorem}, so the regime can
+support conditional automation rather than only architectural hygiene.
 
 \paragraph{Contracts and verification.}
 Design by contract~\cite{beck2003contract}, property-based
 testing~\cite{claessen2000quickcheck}, consumer-driven
 contracts~\cite{fowler2006cdc}, and automatic verifiers~\cite{leino2010dafny}
-are the techniques we attach at box surfaces (concern~4). Our contribution is
-not a new verification technique but a \emph{placement discipline}: contracts
-live at the public surface and nowhere else (Definition~\ref{def:bc}), because
-that is the boundary at which other boxes observe the implementation.
+are the techniques we attach at box surfaces as evidence obligations. Our
+contribution is not a new verification technique but a \emph{placement
+discipline}: contracts live at the public surface and nowhere else
+(Definition~\ref{def:bc}), because that is the boundary at which other boxes
+observe the implementation.
 
 \paragraph{Build and differencing.}
 Fine-grained build systems~\cite{bazel} make per-target incrementality visible
@@ -1055,12 +1220,12 @@ This work opens questions we believe are productive for the community.
 \paragraph{Contract coverage as the frontier of safe automation.}
 Theorem~\ref{thm:locality} is only as strong as
 Assumption~\ref{asm:adequate}. The central open question is empirical: \emph{how
-much} behavioral contract must a box carry before autonomous evolution of its
-interior is trustworthy, and can that coverage be grown
-\emph{incrementally}---a box earning a richer contract exactly when an agent is
-pointed at it? We conjecture a favorable economics: contracts are authored once
-per box but amortized over unbounded agent iterations, so the cost is paid where
-automation is most valuable.
+much} evidence must a boundary carry before autonomous evolution of its interior
+is trustworthy, and can that coverage be grown \emph{incrementally}---a box
+earning richer contracts, traces, tests, or benchmarks exactly when agents or
+review history make them valuable? We conjecture a favorable economics:
+evidence obligations are authored once per boundary but amortized over unbounded
+human and machine changes, so the cost is paid where review pressure is highest.
 
 \paragraph{Detecting hidden channels.}
 Assumption~\ref{asm:surface} fails in the presence of global state, reflection,
@@ -1090,16 +1255,22 @@ API design, access guards, or static checks. The research question is how much
 of the architecture-as-contract discipline can be made executable, and which
 claims remain matters of review and evidence.
 
-\paragraph{Operational contracts beyond imports.}
-The case-study repositories show that many review-relevant boundaries are not
-ordinary source dependencies. \textsc{vLLM} changes often hinge on API fields,
+\paragraph{Operational-edge extractors.}
+The model treats operational edges as first-class, but extracting them precisely
+is an empirical problem. \textsc{vLLM} changes often hinge on API fields,
 runtime flags, backend dispatch, hardware paths, and numerical tolerances. Tauri
 changes often hinge on platform labels, webview lifetimes, plugin permissions,
 bundling metadata, and upstream runtime behavior. BLIS changes often hinge on
-observability fields and replay determinism. ARCHON therefore needs a typed
-edge model: import edges are only one class of arrow. Configuration, protocol,
-capability, platform, metric, and observability edges should be represented as
-first-class architectural facts when they are the boundary reviewers care about.
+observability fields and replay determinism. The open question is which edge
+kinds can be extracted mechanically, which require lightweight declarations, and
+how much uncertainty reviewers will tolerate before the report becomes noise.
+
+\paragraph{Governance of graph edits.}
+Because an intended graph is a design artifact, changing it is governance, not
+tool output. The open question is how teams should approve graph edits,
+time-bound exceptions, tolerated debt annotations, and external-box contracts
+without turning ARCHON into another heavyweight process. The adoption target is
+that the graph edit is smaller and clearer than the code diff it explains.
 
 \paragraph{The aggregation of contracts.}
 We chose to restate a parent's behavioral contract independently rather than
@@ -1131,17 +1302,20 @@ package systems of Go, Rust, and Python but may not for all artifacts.
 Engineers have long drawn their systems as boxes and arrows. We argued that, in
 large repositories increasingly changed by both humans and machines, that view
 should become a checked, versioned artifact: one object serving as documentation,
-review lens, and contract boundary for automated proposers. We gave a
-hierarchical attributed graph that reconciles human package-level review and
-agent function-level edits as projections of one structure, a notion of node
-identity stable under refactoring, and a conformance regime built around graph
-deltas. The technical core is a conditional boundary-locality result: if the
-modeled boundary does not change and the surface contract is preserved, then
+review lens, and contract boundary for automated proposers. We gave a typed
+hierarchical graph that reconciles human package-level review and agent
+function-level edits as projections of one structure, a notion of node identity
+stable under refactoring, and a conformance regime built around graph deltas and
+evidence gaps. The technical core is a conditional boundary-locality result: if
+the modeled boundary does not change and the surface contract is preserved, then
 under explicit assumptions the implementation change is unobservable outside the
-box. The next step is empirical. Building \textsc{Archon} and studying it on
-real monorepos will show which parts of the model are practical today, where
-extractors lose precision, and how much behavioral contract coverage is needed
-before autonomous internal evolution is a defensible engineering practice.
+box. The practical core is the adoption path: greenfield teams can design with
+contracts first, while brownfield teams can snapshot, classify, instrument, and
+ratchet without a flag day. The next step is empirical. Building \textsc{Archon}
+and studying it on real monorepos will show which typed edges can be extracted
+precisely, which evidence obligations reviewers value, and how much contract
+coverage is needed before autonomous internal evolution is a defensible
+engineering practice.
 
 \appendix
 
