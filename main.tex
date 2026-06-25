@@ -289,10 +289,14 @@ Throughout, we distinguish the \emph{actual} graph, extracted mechanically from
 source and thus always faithful to the code, from the \emph{intended} graph, a
 declared baseline that the actual graph is checked against. A pull request is
 \emph{conformant} when the actual graph stays within what the intended graph
-permits. The intended graph is seeded by snapshotting the actual graph
-(\S\ref{sec:enforce}); it then advances only through reviewed deltas, so it
-encodes accumulated architectural intent without anyone having to draw the
-whole architecture up front.
+permits. For a greenfield repository, the intended graph may be written before
+or alongside the first implementation. For a brownfield repository, which is the
+more common and more difficult case, the intended graph is seeded by snapshotting
+the actual graph (\S\ref{sec:enforce}); it then advances only through reviewed
+deltas, so it encodes accumulated architectural intent without anyone having to
+draw the whole architecture up front. This makes adoption descriptive before it
+is prescriptive: first make the existing architecture visible, then decide which
+future deltas are allowed.
 
 %% ===========================================================================
 \section{The Hierarchical Attributed Graph}\label{sec:model}
@@ -625,6 +629,28 @@ CI. Crucially, all three are \emph{structural}: they never run the program.
 This is what makes them cheap enough to gate every push and is why they form
 the first line of the safety argument, before any behavioral check.
 
+\subsection{Brownfield repair as graph edits}
+
+The same delta mechanism supports incremental architectural repair. In a
+brownfield monorepo, the initial snapshot may contain cycles, inappropriate
+dependencies, oversized boxes, and surfaces that grew through convenience rather
+than design. Treating that snapshot as $G_\star$ does not endorse the mess; it
+records the current contract so that new erosion is visible. Cleanup then
+proceeds by reviewing a sequence of \emph{intended graph edits}: split a box,
+merge a strongly connected component into an explicit larger box, introduce an
+adapter boundary, remove an allowed arrow, narrow a surface after migrating its
+callers, or replace a direct dependency with a dependency on an interface.
+
+Each repair edit creates a target graph $G_{\mathrm{target}}$ that is cleaner
+than the current baseline according to an explicit policy, such as fewer
+package cycles, lower fan-in to unstable internals, smaller public surfaces, or
+fewer cross-layer arrows. Code changes are then evaluated against that target:
+a PR either realizes part of the repair, leaves the debt unchanged, or moves the
+repository farther away and is routed to review. This gives teams a ratchet
+rather than a flag day. The architectural debt can be made visible immediately,
+but enforcement can become stricter one boundary, one SCC, or one surface at a
+time.
+
 %% ===========================================================================
 \section{Evolution: Two Doors}\label{sec:evolve}
 %% ===========================================================================
@@ -839,7 +865,8 @@ classify historical changes under plausible budgets and cycle policies? We
 measure pass, route-to-review, and reject classifications; identify
 cycle-introducing, dependency-widening, and surface-changing PRs; and compare a
 strict acyclic policy with migration policies such as strongly-connected
-components as boxes or ``no new cycles.''
+components as boxes, ``no new cycles,'' and ratcheting policies that require
+successive graph edits to reduce architectural debt.
 \item[\textbf{RQ5}] (Agentic internal evolution) On case-study boxes equipped
 with behavioral contracts, do Door-1 agent rewrites that pass the structural and
 behavioral gates preserve behavior under independent oracles? We measure escaped
@@ -860,6 +887,17 @@ altitudes, and apply the conformance gates under a small set of documented
 policies. A human labeling pass will classify whether each PR is routine,
 boundary-changing, or architecture-significant; this label is used to estimate
 false positives and false negatives for the gate policies, not to train them.
+
+\paragraph{Brownfield repair study.}
+For repositories with visible architectural debt, we will construct a small
+sequence of graph repair plans with project maintainers or expert reviewers. A
+plan consists of intended graph edits, such as collapsing an SCC, extracting an
+interface, forbidding a dependency, or narrowing a public surface, together with
+a measurable debt objective. We then replay historical PRs, or implement focused
+repair PRs, to ask whether the graph deltas make progress and regression
+visible. The key measures are debt reduction per PR, number of code edits needed
+per graph edit, reviewer effort to approve the graph edit, and whether the
+ratchet blocks changes maintainers would consider routine.
 
 \paragraph{Agentic evolution study.}
 RQ5 is the load-bearing study for the conditional safety claim. For each
@@ -974,6 +1012,16 @@ or out-of-band coupling. Can extraction \emph{soundly over-approximate} these
 channels---surfacing them as additional arrows so the structural gate accounts
 for them---and what is the precision cost? This connects architecture
 extraction to escape and effect analysis.
+
+\paragraph{Architecture repair without a flag day.}
+Many repositories do not begin with clean boundaries. They contain cycles,
+informal layering violations, and APIs that exist because they were convenient
+for one historical caller. The brownfield question is whether graph edits can
+support a practical repair loop: identify a debt pattern in the actual graph,
+declare a cleaner target graph, and admit only deltas that preserve or reduce
+the distance to that target. This raises technical questions about debt metrics,
+minimal repair suggestions, and how to present graph edits so maintainers review
+them as design changes rather than as opaque tool output.
 
 \paragraph{The aggregation of contracts.}
 We chose to restate a parent's behavioral contract independently rather than
