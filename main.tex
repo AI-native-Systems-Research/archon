@@ -74,7 +74,7 @@
 
 \begin{document}
 
-\title{Architecture as Contract: A Practical Graph Substrate
+\title{Architecture as Contract: Typed Graphs
 for Reviewable and Agentic Software Evolution}
 
 \author{Anonymous Author(s)}
@@ -113,7 +113,7 @@ implementation change with an empty boundary delta and a preserved behavioral
 contract is unobservable outside the box. The theorem is not a claim that
 current repositories satisfy these assumptions automatically; rather, it
 identifies the checks and evidence needed to make autonomous internal evolution
-defensible. The same substrate supports greenfield contract-first design and
+defensible. \textsc{Archon} supports greenfield contract-first design and
 brownfield snapshot-and-ratchet adoption, including instrumentation edits that
 make previously unobservable invariants checkable.
 \end{abstract}
@@ -178,7 +178,8 @@ repositories where reviewers most need it.
 
 \paragraph{Thesis.}
 We argue that the boxes-and-arrows view should become a \emph{first-class,
-versioned, mechanically checked artifact} serving three related uses:
+versioned, mechanically checked artifact}. We call that artifact
+\textsc{Archon}, and design it to serve three related uses:
 \begin{enumerate}[leftmargin=1.4em,itemsep=2pt,topsep=2pt]
 \item \textbf{documentation}: a zoomable picture of the system derived from the
 source rather than maintained separately;
@@ -194,13 +195,13 @@ the boundary checked for automated changes, then humans and tools share the same
 architectural vocabulary.
 
 \paragraph{Adoption constraint.}
-For the method to matter outside research prototypes, and for it to be
+For \textsc{Archon} to matter outside research prototypes, and for it to be
 plausibly adoptable in CNCF-style infrastructure projects, it must be useful
 before a repository is clean, fully specified, or ready for autonomous changes. We
 therefore design for two adoption paths. In a \emph{greenfield} project, teams
 can write the intended graph, contracts, and required evidence before or during
-implementation. In a \emph{brownfield} project, the system first snapshots what
-exists, classifies which boundaries are real design commitments and which are
+implementation. In a \emph{brownfield} project, \textsc{Archon} first snapshots
+what exists, classifies which boundaries are real design commitments and which are
 tolerated debt, and then ratchets through reviewed graph edits. The first useful
 product is not a proof. It is a review-triage artifact: this change touched
 these boundaries, implicated these contracts, needs these reviewers, and is
@@ -208,7 +209,7 @@ missing this evidence. Stronger automation grows only where that evidence has
 been earned.
 
 \paragraph{Approach.}
-We represent a repository as a \emph{hierarchical attributed graph}
+\textsc{Archon} represents a repository as a \emph{hierarchical attributed graph}
 (\S\ref{sec:model}). Boxes nest along a containment tree---repository
 $\supseteq$ package $\supseteq$ module $\supseteq$ function---and arrows are
 typed. Some arrows are ordinary source dependencies; others represent protocol
@@ -229,27 +230,27 @@ after and diffing the two; gating decisions are made per-altitude, so a change
 that is a thousand-line internal rewrite at the function level can be
 \emph{empty} at the package level and reviewed as such.
 
-\paragraph{The safety argument.}
+\paragraph{Pipeline justification.}
 The model also makes explicit what must be true before internal automation can
 be treated as low risk. We define node identity to be stable under the moves and
-renames that refactoring and agents perform (\S\ref{sec:identity}); otherwise a
-routine refactor would appear as deletion plus creation and architectural deltas
-would be noisy. We then state and prove \emph{boundary locality}
-(\S\ref{sec:guarantees}): if a change leaves a box's boundary delta empty and
-preserves the box's behavioral contract, then, under explicit assumptions about
-encapsulation and contract adequacy, the change is unobservable to other boxes.
-This is a familiar modularity intuition, but the graph substrate turns it into a
-checkable review condition: first establish that the boundary did not move, then
-check the behavioral obligations that justify treating the implementation as
-substitutable.
+renames that refactoring and agents perform; otherwise a routine refactor would
+appear as deletion plus creation and architectural deltas would be noisy. We
+then state a boundary-locality result: if a change leaves a box's boundary delta
+empty and preserves the box's behavioral contract, then, under explicit
+assumptions about encapsulation and contract adequacy, the change is
+unobservable to other boxes. The result is intentionally conditional: it does
+not make automation safe by assertion, but identifies the facts the review
+pipeline must establish. \textsc{Archon}'s contribution is to make those
+preconditions visible in ordinary review: first establish that the boundary did
+not move, then check or report the evidence needed to treat the implementation
+as substitutable.
 
 \paragraph{Separating the fixed from the open.}
 A substrate for automated evolution should not depend on a particular agent or
-search procedure. We therefore separate five concerns
-(Figure~\ref{fig:substrate}) into a \emph{fixed substrate}: extraction,
-representation, structural conformance, and evidence checking, and an
-\emph{open} space of \emph{proposers}: humans, coding agents, and synthesis or
-search systems such as those targeted by \textsc{nous} and \textsc{skydiscover}.
+search procedure. We therefore separate five concerns. Four form a \emph{fixed
+substrate}: extraction, representation, structural conformance, and evidence
+checking. The fifth is an \emph{open} space of \emph{proposers}: humans, coding
+agents, and synthesis or search systems.
 Every proposer emits the same kind of artifact, a graph delta plus a code
 change, and is evaluated by the same gates. The point is not to predict which
 proposer will be best, but to make the acceptance boundary independent of the
@@ -264,12 +265,11 @@ containment tree (\S\ref{sec:model}).
 \item A definition of \emph{node identity} stable under rename and move, which
 makes architectural deltas signal rather than noise and makes ``the boundary
 did not change'' computable (\S\ref{sec:identity}).
-\item A \emph{boundary-locality theorem} with proof sketch and explicit
-assumptions: an empty boundary delta plus a preserved behavioral contract
-implies unobservability to the rest of the system under those assumptions,
-providing the conditional basis for fine-grained autonomous evolution under
-coarse-grained human review
-(\S\ref{sec:guarantees}).
+\item A \emph{pipeline justification} for fine-grained autonomous evolution
+under coarse-grained human review: node identity, boundary deltas, evidence
+obligations, and a boundary-locality theorem that states the assumptions under
+which the Door-1 fast path is justified (\S\ref{sec:identity},
+\S\ref{sec:guarantees}).
 \item A \emph{conformance and evidence regime} of composable gates: acyclicity,
 per-altitude spread, surface change, and evidence-gap reporting, together with
 an evolution protocol that routes boundary-preserving changes to automated gates
@@ -286,9 +286,9 @@ experiments focused on behavioral-contract coverage
 (\S\ref{sec:eval},~\S\ref{sec:agenda}).
 \end{itemize}
 
-We name the substrate \textsc{Archon}. This paper presents the model, the
-conditional guarantee it supports, and the empirical plan needed to test whether
-the required assumptions are practical in real repositories.
+This paper presents \textsc{Archon}'s model, the conditional guarantee it
+supports, and the empirical plan needed to test whether the required assumptions
+are practical in real repositories.
 
 %% ===========================================================================
 \section{Overview and Running Example}\label{sec:overview}
@@ -335,7 +335,7 @@ is prescriptive: first make the existing architecture visible, then decide which
 future deltas are allowed.
 
 %% ===========================================================================
-\section{The Hierarchical Attributed Graph}\label{sec:model}
+\section{\textsc{Archon}'s Hierarchical Attributed Graph}\label{sec:model}
 %% ===========================================================================
 
 We model a repository state as a single artifact that carries structure
@@ -571,10 +571,10 @@ whether it qualifies for the boundary-preserving fast path of
 \S\ref{sec:evolve}.
 
 %% ===========================================================================
-\section{Separation of Concerns}\label{sec:concerns}
+\section{\textsc{Archon}'s Separation of Concerns}\label{sec:concerns}
 %% ===========================================================================
 
-The model of \S\ref{sec:model}--\ref{sec:identity} is realized by five
+\textsc{Archon}'s model of \S\ref{sec:model}--\ref{sec:identity} is realized by five
 concerns (Figure~\ref{fig:substrate}). Four are a \emph{fixed substrate}; the
 fifth is deliberately \emph{open}.
 
@@ -629,7 +629,7 @@ the same structural and evidence gates (Property~\ref{prop:funnel}).}
 \end{figure}
 
 %% ===========================================================================
-\section{The Graph Delta and Structural Conformance}\label{sec:enforce}
+\section{\textsc{Archon}'s Graph Delta and Structural Conformance}\label{sec:enforce}
 %% ===========================================================================
 
 A pull request transforms the actual graph from $G$ to $G'$. The unit of
@@ -678,12 +678,13 @@ number of boxes and arrows:
 |\text{arrows}(\Delta_A)| \le \alpha_A .
 \end{aligned}
 \]
-G2 is the formal answer to the ``56 files, 24 boxes, 73 arrows'' pull request:
-a change that is self-contained at the package altitude passes with a tight
-budget, while a genuine cross-cutting change exceeds it and is \emph{routed to
-heightened review}, not silently blocked. Budgets are per altitude because a
-change may legitimately be broad at the leaf altitude (an agent rewriting one
-box) yet must be narrow at the package altitude.
+G2 is the formal answer to a common review pattern: a pull request may touch
+dozens of files, boxes, and arrows, but still be self-contained at the package
+altitude. Such a change can pass with a tight budget, while a genuine
+cross-cutting change exceeds it and is \emph{routed to heightened review}, not
+silently blocked. Budgets are per altitude because a change may legitimately be
+broad at the leaf altitude (an agent rewriting one box) yet must be narrow at
+the package altitude.
 
 \paragraph{(G3) Surface --- per box.}
 No box's public surface may grow relative to $G_\star$ without an explicit,
@@ -694,7 +695,7 @@ makes ``the contract changed'' an event a human must approve, rather than an
 accident hidden inside a textual diff.
 
 \paragraph{(G4) Evidence --- per implicated contract.}
-For every changed box, arrow, or surface element, ARCHON computes the contracts
+For every changed box, arrow, or surface element, \textsc{Archon} computes the contracts
 whose scope includes that change and checks whether the required evidence
 obligations (Definition~\ref{def:evidence}) have been discharged. G4 is not a
 single pass/fail predicate in the same sense as acyclicity. It produces an
@@ -715,8 +716,8 @@ conditions hold.
 G1--G3 are independent and composed by conjunction; each is a total function of
 $(G_\star, G', \iota)$ and so is deterministic and replayable in CI. Crucially,
 they are \emph{structural}: they never run the program. This makes them cheap
-enough to gate every push and is why they form the first line of the safety
-argument. G4 connects that structural result to the slower checks or human
+enough to gate every push and is why they form the first line of the review
+pipeline. G4 connects that structural result to the slower checks or human
 approvals that the changed boundaries require.
 
 %% ===========================================================================
@@ -735,8 +736,9 @@ is still cheap to change. Code then fills in the leaves. Every pull request is
 reviewed against the same artifact the team used to design the system: if it
 introduces a new endpoint, permission, toolchain constraint, backend target, or
 configuration key, the graph delta makes that design choice visible. This path
-is the strongest setting for Door-1 automation because contracts and evidence
-can be attached before agents are allowed to optimize internals.
+is the strongest setting for the internal-evolution fast path
+(\S\ref{sec:evolve}), because contracts and evidence can be attached before
+agents are allowed to optimize internals.
 
 \paragraph{Brownfield: snapshot, classify, ratchet.}
 In a brownfield monorepo, the initial snapshot may contain cycles,
@@ -786,10 +788,10 @@ debt can be made visible immediately, but enforcement becomes stricter one
 boundary, one SCC, one edge kind, or one evidence obligation at a time.
 
 %% ===========================================================================
-\section{Evolution: Two Doors}\label{sec:evolve}
+\section{\textsc{Archon} Evolution: Two Doors}\label{sec:evolve}
 %% ===========================================================================
 
-The model admits exactly two kinds of change, distinguished by a single
+\textsc{Archon} admits exactly two kinds of change, distinguished by a single
 predicate on the delta---\emph{does it touch any box boundary?}---and this
 predicate determines which door a change goes through
 (Figure~\ref{fig:doors}).
@@ -837,7 +839,7 @@ the new box's interior.
 
 Door~2 is also the normal path for evidence gaps. A proposal may be structurally
 conformant yet missing the replay trace, benchmark, static check, or human
-approval attached to an implicated contract. In that case ARCHON should not
+approval attached to an implicated contract. In that case \textsc{Archon} should not
 pretend the change is safe or reject it without context. It routes the proposal
 with an evidence-gap report, so maintainers can ask for the missing artifact,
 approve an explicit exception, or revise the contract.
@@ -858,15 +860,17 @@ our regime that proposal has a nonempty boundary delta and is routed through
 Door~2, where the architectural change is visible.
 
 %% ===========================================================================
-\section{Guarantees}\label{sec:guarantees}
+\section{\textsc{Archon}'s Conditional Guarantee}\label{sec:guarantees}
 %% ===========================================================================
 
 We now make precise the conditional claim behind Door-1 evolution. The claim is
 \emph{boundary locality}: a change confined to a box's interior, preserving its
 contract, is unobservable to the rest of the system if interaction is mediated
 through the box surface and the contract captures the observations contexts rely
-on. We state the observational model, the assumptions, the theorem, and a proof
-sketch.
+on. The result is deliberately narrow. Its purpose is to state the acceptance
+condition for internal rewrites in terms that a review pipeline can check or
+report: boundary preservation is structural; behavioral preservation is an
+evidence obligation.
 
 \subsection{Observational model}
 
@@ -904,6 +908,11 @@ is what the extractor must establish; Assumption~\ref{asm:adequate} is what
 contract authoring (and its coverage) must establish.
 
 \subsection{Boundary locality}
+
+The theorem below packages the review obligation. The mechanically checkable
+part is the empty boundary delta: same surface, same allowed arrows, same
+witnesses. The evidence-dependent part is contract preservation. Where either
+part is unavailable, \textsc{Archon} reports the gap instead of claiming safety.
 
 \begin{theorem}[Boundary locality]\label{thm:locality}
 Let a change transform box $v$ into $v'$ with an \emph{empty boundary delta}
@@ -944,15 +953,17 @@ in any order, and to the original.
 Each rewrite is unobservable to its context by Theorem~\ref{thm:locality}; in
 particular each is unobservable to the other rewritten boxes, which lie in the
 context. Observational equivalence is a congruence under the well-formed
-contexts here (encapsulation makes box composition a context-forming operation),
-so independent equivalences compose and commute.
+contexts here: replacing a well-formed box by an observationally equivalent box
+preserves the surface and incident arrows through which any enclosing box can
+observe it. Therefore the enclosing box is itself a valid context, and
+independent equivalences compose and commute.
 \end{proof}
 
 \noindent
-Theorem~\ref{thm:locality} is the formal basis for the protocol in
-\S\ref{sec:evolve}: the structural check establishes that the modeled boundary
-did not change, and the behavioral check establishes the obligations needed to
-treat the new implementation as substitutable at that boundary.
+Theorem~\ref{thm:locality} justifies the protocol in \S\ref{sec:evolve}: the
+structural check establishes that the modeled boundary did not change, and the
+behavioral check establishes the obligations needed to treat the new
+implementation as substitutable at that boundary.
 Corollary~\ref{cor:autonomy} explains when such changes can be composed across
 disjoint boxes. The structural check alone is not sufficient for behavioral
 safety: it shows that the \emph{interface} did not move, not that
@@ -965,7 +976,7 @@ theorem; it is the empirical frontier the evaluation must measure.
 \section{Evaluation Plan}\label{sec:eval}
 %% ===========================================================================
 
-The claims above require empirical support at five levels. First, the substrate
+\textsc{Archon}'s claims require empirical support at five levels. First, the substrate
 must be implementable for languages and ecosystems with different module,
 visibility, configuration, policy, and runtime mechanisms. Second, graph deltas
 and evidence-gap reports must be useful in real review histories, rather than
@@ -992,58 +1003,35 @@ tests or specifications to support independent behavioral checking. These boxes
 are the units on which behavioral contracts and agentic rewrites will be studied.
 
 \paragraph{Research questions.}
-\begin{description}[leftmargin=2.6em,itemsep=2pt,topsep=2pt,style=sameline]
-\item[\textbf{RQ1}] (Extraction) What architecture graph can be extracted with
-useful precision in Python, Go, and Rust? We measure extraction coverage for
-nodes, surfaces, typed edges, external boxes, and evidence metadata, and
-manually classify missing or spurious edges, including dynamic imports,
-reflection, generated code, global state, configuration, protocol fields,
-permission manifests, platform labels, toolchain policies, and file or network
-channels.
-\item[\textbf{RQ2}] (Identity) Can $\iota$ recover developer-intended renames
-and moves? We measure
-precision and recall of inferred correspondences against labeled refactoring
-commits, and the reduction in spurious delta size compared with path-keyed
-identity.
-\item[\textbf{RQ3}] (Review triage) For historical pull requests, how does the
-architectural delta compare with the textual diff? We report distributions of
-lines changed versus boxes, typed arrows, surfaces, implicated contracts, and
-evidence gaps at package and module altitudes; the fraction of PRs with empty
-package-level deltas; and examples where the graph delta exposes architectural
-risk that is hard to see in the textual diff. We also measure whether the report
-routes the PR to the same owners, tests, and review discussions that maintainers
-eventually used.
-\item[\textbf{RQ4}] (Policy and migration) How would the conformance gates
-classify historical changes under plausible budgets and cycle policies? We
-measure pass, route-to-review, and reject classifications; identify changes
-that introduce cycles, widen dependencies, alter typed edges, miss evidence, or
-change surfaces; and compare a strict acyclic policy with migration policies
-such as strongly-connected components as boxes, ``no new cycles,'' and ratchets
-that require successive graph edits to reduce architectural debt.
-\item[\textbf{RQ5}] (Agentic internal evolution) On case-study boxes equipped
-with behavioral contracts, do Door-1 agent rewrites that pass the structural and
-evidence gates preserve behavior under independent oracles? We measure escaped
-regressions, classify each by hidden channel versus inadequate contract, and
-compare against a baseline in which the agent is constrained only by the test
-suite.
-\item[\textbf{RQ6}] (Cost and workflow fit) What is the latency of extraction,
-diffing, identity inference, and gating per push, and can the results be
-presented in a form that reviewers can act on in ordinary code review and issue
-triage? We measure report size, false-alarm rate, reviewer agreement, and the
-time required to understand or dismiss an ARCHON report.
-\item[\textbf{RQ7}] (Executable invariants) Which ARCHON claims can be made
-executable? We test graph algebra, delta computation, identity, repair edits,
-and gates with generated graphs and generated changes, and we study a brownfield
-system whose own behavioral invariants are being moved toward property-based
-tests. We measure faults found, minimized counterexample size, and which claims
-require runtime instrumentation, static checks, or type-level boundaries rather
-than ordinary generated tests.
-\item[\textbf{RQ8}] (Adoption) How far can teams get before writing rich
-behavioral contracts? We compare greenfield contract-first construction with
-brownfield snapshot-and-ratchet adoption, measuring time to first useful report,
-number of tolerated-debt annotations, repair edits accepted, instrumentation
-edits needed, and the fraction of sampled PRs for which ARCHON provides useful
-triage even when it cannot justify Door-1 automation.
+The evaluation is deliberately asymmetric. The central claim is not that every
+repository can be made safe for automation immediately. It is that a typed graph
+and evidence report can improve review immediately, while identifying the
+conditions under which automation becomes justified. We therefore organize the
+study around four questions.
+
+\begin{description}[leftmargin=2.6em,itemsep=3pt,topsep=2pt,style=sameline]
+\item[\textbf{RQ1}] (Model extraction) What typed architecture graph can be
+extracted with useful precision? We measure coverage for nodes, surfaces, typed
+edges, external boxes, evidence metadata, and identity across refactorings. The
+error analysis classifies dynamic imports, reflection, generated code, global
+state, configuration, protocol fields, permission manifests, platform labels,
+toolchain policies, and file or network channels.
+\item[\textbf{RQ2}] (Review value) Do graph deltas and evidence gaps improve
+ordinary review? For historical pull requests, we compare lines changed against
+boxes, typed arrows, surfaces, implicated contracts, and evidence gaps; measure
+empty package-level deltas; and test whether reports route changes to the same
+owners, tests, and review discussions that maintainers eventually used.
+\item[\textbf{RQ3}] (Adoption and repair) Can teams adopt \textsc{Archon} before
+their architecture is clean or fully specified? We compare greenfield use with
+brownfield use, measuring time to first useful report, tolerated-debt
+annotations, repair edits, instrumentation edits, and whether ratchets block
+changes maintainers consider routine.
+\item[\textbf{RQ4}] (Door-1 automation) When does the internal-evolution fast
+path preserve behavior? On case-study boxes with surface contracts, we ask
+agents to improve internal objectives and admit candidates only when the
+boundary delta is empty and required evidence is discharged. Escaped regressions
+are the main negative result and are classified as hidden channels, inadequate
+contracts, or inadequate evidence.
 \end{description}
 
 \paragraph{Retrospective pull-request study.}
@@ -1064,7 +1052,7 @@ and discussions in each subject repository and classify the friction they expose
 The categories should include boundary-changing refactors, cross-platform
 runtime behavior, performance claims, dependency and toolchain policy, user
 configuration failures, observability gaps, and low-quality agent-generated
-submissions. This study is not evidence that ARCHON solves those problems. Its
+submissions. This study is not evidence that \textsc{Archon} solves those problems. Its
 purpose is to decide which frictions are architectural enough for a graph delta
 to help, which are only partially addressable, and which are outside scope. A
 driver mismatch, an upstream platform bug, or a user misconfiguration may be
@@ -1098,7 +1086,7 @@ instrumentation needed before an invariant becomes checkable, and whether the
 ratchet blocks changes maintainers would consider routine.
 
 \paragraph{Executable-invariants study.}
-ARCHON's core substrate can be exercised with generated structures. We will
+\textsc{Archon}'s core substrate can be exercised with generated structures. We will
 write property-based tests over hierarchical graphs, projected views, identity
 correspondences, deltas, and repair edits. The tests should check, for
 example, that projection agrees with leaf-edge witnesses, pure renames and moves
@@ -1114,18 +1102,18 @@ forcing them into a property-testing harness. Appendix~\ref{app:blis} sketches
 BLIS as a first brownfield exemplar for this study.
 
 \paragraph{Agentic evolution study.}
-RQ5 is the load-bearing study for the conditional safety claim. For each
+RQ4 is the load-bearing study for the conditional automation claim. For each
 case-study box, we will author a behavioral contract over the public surface and
 then ask one or more coding agents, and optionally a search-based proposer, to
 improve an internal objective such as throughput, memory use, or code
 simplification. A candidate is eligible for Door~1 only if its boundary delta is
-empty and its behavioral contract holds. We then run an independent,
+empty and its required evidence is discharged. We then run an independent,
 contract-blind oracle: property and metamorphic tests over the surface,
 differential tests against the incumbent implementation, and, where feasible,
 the downstream test closure of clients that use the box. Escaped regressions are
 the main negative result. Each is classified as evidence of a hidden channel
-(Assumption~\ref{asm:surface}) or an inadequate contract
-(Assumption~\ref{asm:adequate}).
+(Assumption~\ref{asm:surface}), an inadequate contract
+(Assumption~\ref{asm:adequate}), or an inadequate evidence obligation.
 
 \paragraph{Implementation case studies.}
 The implementation study should report where the model needed adaptation rather
@@ -1142,14 +1130,12 @@ engineering.
 
 \paragraph{Metrics summary.}
 We will measure extraction precision and recall for nodes, surfaces, typed
-edges, external boxes, and evidence metadata (RQ1); identity precision and
-spurious-delta reduction (RQ2); delta compression, empty-delta fraction,
-owner/test routing, and reviewer-label agreement (RQ3); gate classifications,
-false positives, false negatives, evidence gaps, and migration outcomes (RQ4);
-escaped regressions per accepted Door-1 change (RQ5); latency, report size, and
-reviewer effort (RQ6); property-test coverage, minimized counterexamples, and
-structural-check gaps (RQ7); and time to first useful report, repair throughput,
-tolerated-debt annotations, and useful triage before rich contracts (RQ8).
+edges, external boxes, evidence metadata, and identity (RQ1); delta compression,
+empty-delta fraction, owner/test routing, reviewer-label agreement, report size,
+latency, and reviewer effort (RQ2); gate classifications, false positives, false
+negatives, evidence gaps, migration outcomes, repair throughput,
+tolerated-debt annotations, and time to first useful report (RQ3); and escaped
+regressions per accepted Door-1 change, with cause classification (RQ4).
 
 %% ===========================================================================
 \section{Related Work}\label{sec:related}
@@ -1173,15 +1159,16 @@ Reflexion models check an implementation's dependencies against a high-level
 model the architect supplies~\cite{murphy2001software}; dependency-constraint
 languages and static conformance checkers~\cite{terra2009dependency,
 passos2010static} enforce ``layer A may not depend on layer B'' rules in CI,
-the lineage of our structural gates. We differ in four ways that matter for the FSE
-agenda: (i)~our intended model is \emph{derived-then-frozen} rather than
-hand-authored, removing the adoption cost that has limited conformance tools in
-practice; (ii)~conformance is computed on a \emph{per-change delta} at a chosen
-altitude, making it a review instrument rather than a periodic audit; and
-(iii)~we model operational edges such as configuration, protocol, capability,
-platform, and observability obligations; and (iv)~we pair structural conformance
-with evidence-typed contracts and a locality \emph{theorem}, so the regime can
-support conditional automation rather than only architectural hygiene.
+the lineage of our structural gates. We differ in four ways that matter for
+this agenda: (i)~in brownfield adoption, the intended model can be
+\emph{derived-then-frozen} rather than hand-authored, reducing the initial cost
+that has limited conformance tools in practice; (ii)~conformance is computed on
+a \emph{per-change delta} at a chosen altitude, making it a review instrument
+rather than a periodic audit; (iii)~we model operational edges such as
+configuration, protocol, capability, platform, and observability obligations;
+and (iv)~we pair structural conformance with evidence-typed contracts and a
+locality result, so the regime can support conditional automation rather than
+only architectural hygiene.
 
 \paragraph{Contracts and verification.}
 Design by contract~\cite{beck2003contract}, property-based
@@ -1269,7 +1256,7 @@ how much uncertainty reviewers will tolerate before the report becomes noise.
 Because an intended graph is a design artifact, changing it is governance, not
 tool output. The open question is how teams should approve graph edits,
 time-bound exceptions, tolerated debt annotations, and external-box contracts
-without turning ARCHON into another heavyweight process. The adoption target is
+without turning \textsc{Archon} into another heavyweight process. The adoption target is
 that the graph edit is smaller and clearer than the code diff it explains.
 
 \paragraph{The aggregation of contracts.}
@@ -1299,19 +1286,21 @@ package systems of Go, Rust, and Python but may not for all artifacts.
 \section{Conclusion}\label{sec:conclusion}
 %% ===========================================================================
 
-Engineers have long drawn their systems as boxes and arrows. We argued that, in
-large repositories increasingly changed by both humans and machines, that view
-should become a checked, versioned artifact: one object serving as documentation,
-review lens, and contract boundary for automated proposers. We gave a typed
+Engineers have long drawn their systems as boxes and arrows. We presented
+\textsc{Archon}, a way to make that view a checked, versioned artifact in large
+repositories increasingly changed by both humans and machines: one object
+serving as documentation, review lens, and contract boundary for automated
+proposers. We gave a typed
 hierarchical graph that reconciles human package-level review and agent
 function-level edits as projections of one structure, a notion of node identity
 stable under refactoring, and a conformance regime built around graph deltas and
-evidence gaps. The technical core is a conditional boundary-locality result: if
-the modeled boundary does not change and the surface contract is preserved, then
-under explicit assumptions the implementation change is unobservable outside the
-box. The practical core is the adoption path: greenfield teams can design with
-contracts first, while brownfield teams can snapshot, classify, instrument, and
-ratchet without a flag day. The next step is empirical. Building \textsc{Archon}
+evidence gaps. The boundary-locality result explains when that pipeline justifies
+the internal-evolution fast path: if the modeled boundary does not change and
+the surface contract is preserved, then under explicit assumptions the
+implementation change is unobservable outside the box. The practical center is
+the adoption path: greenfield teams can design with contracts first, while
+brownfield teams can snapshot, classify, instrument, and ratchet without a flag
+day. The next step is empirical. Building \textsc{Archon}
 and studying it on real monorepos will show which typed edges can be extracted
 precisely, which evidence obligations reviewers value, and how much contract
 coverage is needed before autonomous internal evolution is a defensible
@@ -1345,33 +1334,33 @@ discussion proposes turning those invariants into property-based tests using
 \texttt{rapid}, together with Go fuzz targets for parsers, KV allocation, batch
 formation, and admission~\cite{blispropertydiscussion}.
 
-This makes BLIS a brownfield case in the sense relevant to ARCHON. The
+This makes BLIS a brownfield case in the sense relevant to \textsc{Archon}. The
 invariants were written after substantial system behavior already existed, and
 some proposed checks cannot yet be automated because the simulator lacks the
 observability fields needed to expose the relevant facts~\cite{blisobservability}.
 That is exactly the adoption problem a graph substrate should handle: capture
 the current design, expose the missing boundary and instrumentation facts, and
 ratchet toward a cleaner target. BLIS also separates three kinds of claims that
-ARCHON must keep distinct. Some are conservation identities, such as request or
+\textsc{Archon} must keep distinct. Some are conservation identities, such as request or
 KV-cache conservation. Some are ordering properties, such as clock monotonicity
 and lifecycle causality. Others are structural code-path properties, such as the
 rule that admission must not read oracle output tokens. The first two fit
 property-based testing over generated simulation configurations. The third needs
 API boundaries, access guards, or static checks.
 
-An ARCHON study would use BLIS in two complementary ways. At the architecture
+An \textsc{Archon} study would use BLIS in two complementary ways. At the architecture
 level, we would extract boxes for routing, scheduling, KV state, workload
 generation, session management, metrics, and trace replay, then replay
 historical changes to ask whether architectural deltas expose the same boundary
 issues the invariant documents name. At the executable-invariant level, we would
-translate selected ARCHON graph laws into generated tests: projection agrees
+translate selected \textsc{Archon} graph laws into generated tests: projection agrees
 with leaf-edge witnesses, repair edits preserve external arrows, Door-1 routing
 fails on boundary deltas, and behavioral contracts mention only public-surface
 entities. The BLIS invariants provide the exemplar's behavioral side: generated
 simulation configurations check conservation, causality, and determinism, while
 structural guards enforce oracle-knowledge boundaries.
 
-The point is not that BLIS alone validates ARCHON. It is a first brownfield case
+The point is not that BLIS alone validates \textsc{Archon}. It is a first brownfield case
 in a broader exemplar set. A later greenfield exemplar should start with an
 intended graph and executable invariants before implementation, so we can compare
 the two adoption paths: snapshot-and-ratchet for brownfield systems, and
@@ -1380,11 +1369,11 @@ contract-first construction for greenfield systems.
 \subsection{\textsc{vLLM}: review at high velocity}
 \label{app:vllm}
 
-\textsc{vLLM} stresses a different part of ARCHON. The project receives a large
+\textsc{vLLM} stresses a different part of \textsc{Archon}. The project receives a large
 volume of issue and pull-request activity across Python, C++, Rust, CUDA, ROCm,
 CPU, XPU, frontend APIs, multimodal serving, KV transfer, and CI/build
 infrastructure~\cite{vllmrepo}. Much of this friction is not architectural in
-ARCHON's sense: a driver mismatch, a model-specific template bug, or an
+\textsc{Archon}'s sense: a driver mismatch, a model-specific template bug, or an
 environment-specific build failure still needs domain debugging. The relevant
 question is narrower: when does a change alter a surface that many contributors
 and users rely on, and can that fact be made visible before reviewers infer it
@@ -1401,7 +1390,7 @@ argues that the token-in/token-out path should avoid sending large preprocessed
 \texttt{pixel\_values} payloads from \texttt{/render} to
 \texttt{/generate}; the real design question is where preprocessing belongs and
 which cache/routing metadata must remain stable~\cite{vllmmultimodalrfc}. Both
-cases suggest that ARCHON must model protocol fields, API parameters, route
+cases suggest that \textsc{Archon} must model protocol fields, API parameters, route
 semantics, and backend dispatch edges, not only import edges.
 
 \subsection{Tauri: platform and plugin boundaries}
@@ -1418,18 +1407,18 @@ setup. Others concern framework boundaries: command registration, plugin
 ownership, event listeners tied to webview lifetimes, capability permissions,
 updater metadata, and MSRV policy~\cite{taurieventlisteners,taurimsrv}.
 
-ARCHON would not make platform-specific behavior disappear. It can, however,
-make the review surface explicit. A stale-listener issue is not just a memory
-bug; it names a lifecycle contract between JavaScript listeners, webview
+\textsc{Archon} would not make platform-specific behavior disappear. It can,
+however, make the review surface explicit. A stale-listener issue is not just a
+memory bug; it names a lifecycle contract between JavaScript listeners, webview
 destruction, and backend listener maps~\cite{taurieventlisteners}. An MSRV RFC
 is not a code dependency edge; it is a toolchain-policy contract that constrains
 all crates and dependency updates~\cite{taurimsrv}. Tauri therefore pushes
-ARCHON toward typed operational edges: plugin-command edges, capability edges,
-platform-support edges, toolchain-policy edges, and upstream-runtime edges. It
-also provides a useful stress test for agentic evolution, because some recent
-activity is explicitly labeled as low-quality AI-generated contribution; an
-ARCHON gate could route such changes by boundary impact and missing evidence
-rather than by authorship alone~\cite{tauriaislop}.
+\textsc{Archon} toward typed operational edges: plugin-command edges,
+capability edges, platform-support edges, toolchain-policy edges, and
+upstream-runtime edges. It also provides a useful stress test for agentic
+evolution, because some recent activity is explicitly labeled as low-quality
+AI-generated contribution. An \textsc{Archon} gate could route such changes by
+boundary impact and missing evidence, not by authorship~\cite{tauriaislop}.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{refs}
