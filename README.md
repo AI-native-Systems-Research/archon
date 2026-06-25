@@ -29,6 +29,7 @@ latexmk -C main.tex
 - `fig_aggregation.tex` - graph aggregation figure
 - `fig_substrate.tex` - substrate/proposer separation figure
 - `fig_doors.tex` - two-door evolution protocol figure
+- `STYLE.md` - writing and argument style guide for the paper
 
 ## Current Framing
 
