@@ -273,11 +273,11 @@ claim that might disagree with the code; it is the \emph{aggregation} of the
 leaf-level edges, recomputed from the source on every change. This is the
 property that keeps the documentation honest and the review legible at once.
 
-Now suppose an evolution agent rewrites the body of \texttt{execute\_model()}
-to batch its forward passes for throughput. At the leaf altitude this may be a
-large implementation diff. At the package altitude it may be \emph{empty}: the
-set of edges from \texttt{executor} to \texttt{core/sched} is unchanged, and
-\texttt{execute\_model()}'s signature is unchanged. We want a system in which
+Now suppose an evolution agent rewrites \texttt{execute\_model} to batch its
+forward passes for throughput. At the leaf altitude this may be a large
+implementation diff. At the package altitude it may be \emph{empty}: the set of
+edges from \texttt{executor} to \texttt{core/sched} is unchanged, and the
+function's signature is unchanged. We want a system in which
 (i)~the reviewer can see that the cross-package architecture did not change, and
 (ii)~the automated gate can distinguish this case from a rewrite that quietly
 adds a dependency or widens an interface. If the relevant behavioral obligations
@@ -375,9 +375,9 @@ nearest common ancestor of $\ell_a,\ell_b$ is a proper ancestor of $\ell_b$'s
 parent box $b'$, then $\ell_b \in \mathsf{surf}(b')$.
 \end{definition}
 
-Encapsulation is what language mechanisms such as Go's \texttt{internal}
-packages, Rust's \texttt{pub(crate)} visibility, and Python's \texttt{\_\_all\_\_}
-conventions approximate; an extractor can read these signals to compute
+Encapsulation is what language mechanisms such as Go internal packages, Rust's
+\texttt{pub(crate)} visibility, and Python's \texttt{\_\_all\_\_} conventions
+approximate; an extractor can read these signals to compute
 $\mathsf{surf}$. A graph is \emph{well-formed} if it is encapsulated and its
 \emph{package-level projection satisfies the repository's cycle policy};
 \S\ref{sec:enforce} discusses the strict acyclic policy used in the base model
@@ -448,12 +448,12 @@ Everything downstream---legible diffs, the ``boundary unchanged'' check, the
 safety theorem---rests on being able to say that a node \emph{after} a change
 is ``the same node'' as one before, even though refactoring and agents
 routinely rename entities and move them between files. If identity were keyed on
-qualified path, then moving \texttt{execute\_model()} from
-\texttt{executor/abstract.py} to \texttt{executor/base.py} would read as
-deleting one function and creating another: a maximal, alarming delta for a
-no-op refactor, and worse, a spurious change to every arrow incident on it. The delta would be noise, and ``the
-boundary did not change'' would be uncomputable. We therefore make identity a
-first-class, inferred relation rather than a syntactic key.
+qualified path, then moving \texttt{execute\_model} from one executor file to
+another would read as deleting one function and creating another: a maximal,
+alarming delta for a no-op refactor, and worse, a spurious change to every
+arrow incident on it. The delta would be noise, and ``the boundary did not
+change'' would be uncomputable. We therefore make identity a first-class,
+inferred relation rather than a syntactic key.
 
 \begin{definition}[Identity correspondence]\label{def:identity}
 Let $G,G'$ be the graphs before and after a change. An \emph{identity
@@ -599,10 +599,15 @@ strongly connected component as a box or enforce a monotonic policy such as ``no
 new cycles''; we include this migration question in the evaluation plan.
 
 \paragraph{(G2) Spread --- per altitude.}
-For each altitude $A$, the delta $\Delta(\pi_A G_\star, \pi_A G')$ must touch no
-more than a budgeted number of boxes and arrows:
-$|\text{boxes}(\Delta)| \le \beta_A$ and
-$|\text{arrows}(\Delta)| \le \alpha_A$.
+For each altitude $A$, the projected delta must touch no more than a budgeted
+number of boxes and arrows:
+\[
+\begin{aligned}
+\Delta_A &= \Delta(\pi_A G_\star, \pi_A G'),\\
+|\text{boxes}(\Delta_A)| &\le \beta_A,\qquad
+|\text{arrows}(\Delta_A)| \le \alpha_A .
+\end{aligned}
+\]
 G2 is the formal answer to the ``56 files, 24 boxes, 73 arrows'' pull request:
 a change that is self-contained at the package altitude passes with a tight
 budget, while a genuine cross-cutting change exceeds it and is \emph{routed to
@@ -692,7 +697,7 @@ that the proposal did not change the modeled boundary and did preserve the
 surface obligations. \S\ref{sec:guarantees} states the assumptions under which
 that is enough to justify accepting the change without human review.
 
-\paragraph{Door 2: design evolution (delta-reviewed).}
+\paragraph{Door 2: design evolution.}
 A change with a nonempty boundary delta---a new box, a new arrow, a widened
 surface, a new interface---alters the intended architecture. It produces a
 graph delta that is \emph{itself} the reviewable artifact: a human (or a
@@ -746,7 +751,7 @@ out-of-band file/network coupling---by which the context observes a box except
 through $\mathsf{surf}(v)$.
 \end{assumption}
 
-\begin{assumption}[Contract adequacy]\label{asm:adequate}
+\begin{assumption}[Adequate contract]\label{asm:adequate}
 The behavioral contract $\mathsf{BC}(v)$ captures every surface behavior any
 context relies upon: if $\mathsf{BC}(v)$ holds of two implementations, they are
 interchangeable with respect to what surface observations contexts can make.
@@ -773,10 +778,10 @@ contract elsewhere in the graph, changes.
 \end{theorem}
 
 \begin{proof}[Proof sketch]
-An empty boundary delta gives, by Definition~\ref{def:bdelta}, that
+By Definition~\ref{def:bdelta}, an empty boundary delta gives
 $\mathsf{surf}(v') = \mathsf{surf}(v)$, $\mathsf{Allow}(v')=\mathsf{Allow}(v)$,
-and the witness sets of all arrows incident on $v$ are unchanged: the interface
-the context binds against is identical. By Assumption~\ref{asm:surface}, any
+and unchanged witness sets for all arrows incident on $v$. The interface the
+context binds against is therefore identical. By Assumption~\ref{asm:surface}, any
 context $C$ interacts with the hole solely through that interface, so $C$'s
 observations of $v$ versus $v'$ are determined entirely by the surface
 behaviors $\llbracket v\rrbracket,\llbracket v'\rrbracket$ restricted to
@@ -834,11 +839,13 @@ retrospective pull-request study, an executable-invariants study, and a
 controlled agentic-evolution study.
 
 \paragraph{Subjects and case studies.}
-We will study three large open-source repositories spanning different levels of
-native boundary enforcement: \textsc{vLLM} or a similar Python monorepo, where
-visibility is largely conventional; a Go monorepo, where packages and
-\texttt{internal} directories provide partial enforcement; and a Rust workspace,
-where crates and \texttt{pub(crate)} provide stronger static signals. For each
+We will study large open-source repositories spanning different levels of native
+boundary enforcement and different kinds of review friction. Candidate subjects
+include \textsc{vLLM}, a high-velocity Python/C++/Rust inference engine with
+many hardware and API surfaces; BLIS, a Go inference-simulation codebase with
+explicit behavioral invariants; and Tauri, a Rust/TypeScript application
+framework organized around runtime, plugin, IPC, packaging, and platform
+boundaries~\cite{vllmrepo,inferencesim,taurirepo,tauriarchitecture}. For each
 repository we will also select two to four implementation case-study boxes:
 components with nontrivial internal logic, a stable public surface, and enough
 tests or specifications to support independent behavioral checking. These boxes
@@ -851,8 +858,8 @@ useful precision in Python, Go, and Rust? We measure extraction coverage for
 nodes, surfaces, and leaf dependencies, and manually classify missing or
 spurious edges, including dynamic imports, reflection, generated code, global
 state, and file or network channels.
-\item[\textbf{RQ2}] (Identity) How accurately can $\iota$
-(\S\ref{sec:identity}) recover developer-intended renames and moves? We measure
+\item[\textbf{RQ2}] (Identity) Can $\iota$ recover developer-intended renames
+and moves? We measure
 precision and recall of inferred correspondences against labeled refactoring
 commits, and the reduction in spurious delta size compared with path-keyed
 identity.
@@ -877,7 +884,8 @@ compare against a baseline in which the agent is constrained only by the test
 suite.
 \item[\textbf{RQ6}] (Cost and workflow fit) What is the latency of extraction,
 diffing, identity inference, and gating per push, and can the results be
-presented in a form that reviewers can act on in ordinary code review?
+presented in a form that reviewers can act on in ordinary code review and issue
+triage?
 \item[\textbf{RQ7}] (Executable invariants) Which ARCHON claims can be made
 executable? We test graph algebra, delta computation, identity, repair edits,
 and gates with generated graphs and generated changes, and we study a brownfield
@@ -896,6 +904,28 @@ altitudes, and apply the conformance gates under a small set of documented
 policies. A human labeling pass will classify whether each PR is routine,
 boundary-changing, or architecture-significant; this label is used to estimate
 false positives and false negatives for the gate policies, not to train them.
+
+\paragraph{Review-friction scoping study.}
+Before the retrospective replay, we will sample public issues, pull requests,
+and discussions in each subject repository and classify the friction they expose.
+The categories should include boundary-changing refactors, cross-platform
+runtime behavior, performance claims, dependency and toolchain policy, user
+configuration failures, observability gaps, and low-quality agent-generated
+submissions. This study is not evidence that ARCHON solves those problems. Its
+purpose is to decide which frictions are architectural enough for a graph delta
+to help. In BLIS, recent activity around lazy request generation and
+property-tested invariants is largely architectural: the review burden is to
+preserve determinism, run/replay parity, trace export, and simulator invariants
+while changing the request-source boundary~\cite{blislazyrequests,blisrequestsource}.
+In \textsc{vLLM}, many issues are hardware, model, or environment support, but
+several high-friction changes alter stable surfaces such as sampling parameters,
+multimodal render/generate payloads, and KV-transfer paths~\cite{vllmtracereplay,vllmmultimodalrfc}.
+In Tauri, the recurring boundary is different again: Rust crates, JavaScript
+APIs, plugin permissions, webview lifetimes, platform runtimes, bundling, and
+toolchain policy~\cite{taurieventlisteners,taurimsrv}. The output of this study
+is a refinement list for the extractor and contract model, especially for
+non-import dependencies such as configuration keys, protocol fields, platform
+labels, environment variables, and external runtime obligations.
 
 \paragraph{Brownfield repair study.}
 For repositories with visible architectural debt, we will construct a small
@@ -998,7 +1028,7 @@ not a new verification technique but a \emph{placement discipline}: contracts
 live at the public surface and nowhere else (Definition~\ref{def:bc}), because
 that is the boundary at which other boxes observe the implementation.
 
-\paragraph{Build systems and code differencing.}
+\paragraph{Build and differencing.}
 Fine-grained build systems~\cite{bazel} make per-target incrementality visible
 to tooling; our per-box gating is the conformance analogue of per-target
 builds. Tree-based source differencing~\cite{falleri2014finegrained} supplies
@@ -1060,6 +1090,17 @@ API design, access guards, or static checks. The research question is how much
 of the architecture-as-contract discipline can be made executable, and which
 claims remain matters of review and evidence.
 
+\paragraph{Operational contracts beyond imports.}
+The case-study repositories show that many review-relevant boundaries are not
+ordinary source dependencies. \textsc{vLLM} changes often hinge on API fields,
+runtime flags, backend dispatch, hardware paths, and numerical tolerances. Tauri
+changes often hinge on platform labels, webview lifetimes, plugin permissions,
+bundling metadata, and upstream runtime behavior. BLIS changes often hinge on
+observability fields and replay determinism. ARCHON therefore needs a typed
+edge model: import edges are only one class of arrow. Configuration, protocol,
+capability, platform, metric, and observability edges should be represented as
+first-class architectural facts when they are the boundary reviewers care about.
+
 \paragraph{The aggregation of contracts.}
 We chose to restate a parent's behavioral contract independently rather than
 derive it from its children (\S\ref{sec:contracts}). When is a sound
@@ -1105,13 +1146,22 @@ before autonomous internal evolution is a defensible engineering practice.
 \appendix
 
 %% ===========================================================================
-\section{BLIS as a Brownfield Exemplar}\label{app:blis}
+\section{Candidate Brownfield Exemplars}\label{app:exemplars}
 %% ===========================================================================
 
-This appendix sketches one candidate exemplar for the executable-invariants
-study. BLIS is useful because it was not constructed for this paper. The public
-artifacts include a Go simulator for LLM serving (\texttt{inference-sim}) and a
-related Python calibration artifact for trace-only step-level coefficient
+This appendix records three initial brownfield exemplars for the empirical
+study. They are not meant to be exhaustive. BLIS stresses executable invariants
+and ratcheting, \textsc{vLLM} stresses high-velocity review around serving
+surfaces, and Tauri stresses platform, plugin, lifecycle, and toolchain
+boundaries. Additional greenfield exemplars should be added later to test the
+contract-first path.
+
+\subsection{BLIS: executable invariants and ratcheting}
+\label{app:blis}
+
+BLIS is useful because it was not constructed for this paper. The public
+artifacts include the Go \texttt{inference-sim} simulator and a related Python
+calibration artifact for trace-only step-level coefficient
 estimation~\cite{inferencesim,blisrepo}. The
 simulator documentation names system invariants such as request conservation,
 clock monotonicity, KV-cache conservation, lifecycle causality, determinism,
@@ -1152,6 +1202,60 @@ in a broader exemplar set. A later greenfield exemplar should start with an
 intended graph and executable invariants before implementation, so we can compare
 the two adoption paths: snapshot-and-ratchet for brownfield systems, and
 contract-first construction for greenfield systems.
+
+\subsection{\textsc{vLLM}: review at high velocity}
+\label{app:vllm}
+
+\textsc{vLLM} stresses a different part of ARCHON. The project receives a large
+volume of issue and pull-request activity across Python, C++, Rust, CUDA, ROCm,
+CPU, XPU, frontend APIs, multimodal serving, KV transfer, and CI/build
+infrastructure~\cite{vllmrepo}. Much of this friction is not architectural in
+ARCHON's sense: a driver mismatch, a model-specific template bug, or an
+environment-specific build failure still needs domain debugging. The relevant
+question is narrower: when does a change alter a surface that many contributors
+and users rely on, and can that fact be made visible before reviewers infer it
+from a large textual diff?
+
+Two recent examples illustrate the fit. A trace-replay proposal adds a
+\texttt{trace\_decode\_token\_ids} field to sampling parameters and threads that
+obligation through sampler injection, request admission, and engine-core state
+so a fixed decode trace can be replayed while preserving real logprob
+computation~\cite{vllmtracereplay}. This is a boundary change: the public
+sampling surface grows, and the internal implementation must preserve a
+behavioral contract about forced tokens and unmodified logits. A multimodal RFC
+argues that the token-in/token-out path should avoid sending large preprocessed
+\texttt{pixel\_values} payloads from \texttt{/render} to
+\texttt{/generate}; the real design question is where preprocessing belongs and
+which cache/routing metadata must remain stable~\cite{vllmmultimodalrfc}. Both
+cases suggest that ARCHON must model protocol fields, API parameters, route
+semantics, and backend dispatch edges, not only import edges.
+
+\subsection{Tauri: platform and plugin boundaries}
+\label{app:tauri}
+
+Tauri is a Rust/TypeScript framework whose own architecture document separates
+core crates, build-time code generation, runtime abstractions, WRY-specific
+runtime integration, JavaScript APIs, CLI tooling, bundling, plugins, and
+upstream TAO/WRY dependencies~\cite{taurirepo,tauriarchitecture}. Its public
+activity shows a third kind of friction. Many issues are platform-specific:
+Windows WebView2 behavior, Android path resolution, macOS signing or ACL
+snapshots, Linux tray and Wayland behavior, and WSL/development-environment
+setup. Others concern framework boundaries: command registration, plugin
+ownership, event listeners tied to webview lifetimes, capability permissions,
+updater metadata, and MSRV policy~\cite{taurieventlisteners,taurimsrv}.
+
+ARCHON would not make platform-specific behavior disappear. It can, however,
+make the review surface explicit. A stale-listener issue is not just a memory
+bug; it names a lifecycle contract between JavaScript listeners, webview
+destruction, and backend listener maps~\cite{taurieventlisteners}. An MSRV RFC
+is not a code dependency edge; it is a toolchain-policy contract that constrains
+all crates and dependency updates~\cite{taurimsrv}. Tauri therefore pushes
+ARCHON toward typed operational edges: plugin-command edges, capability edges,
+platform-support edges, toolchain-policy edges, and upstream-runtime edges. It
+also provides a useful stress test for agentic evolution, because some recent
+activity is explicitly labeled as low-quality AI-generated contribution; an
+ARCHON gate could route such changes by boundary impact and missing evidence
+rather than by authorship alone~\cite{tauriaislop}.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{refs}
