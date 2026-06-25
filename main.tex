@@ -776,6 +776,20 @@ test selection, and architectural discussion explicit, and it gives teams a
 path from lightweight review aid to stronger automated gates as evidence
 coverage improves.
 
+\paragraph{Ordinary pull-request workflow.}
+\textsc{Archon} should not ask authors to stop making ordinary pull requests.
+Authors submit code, tests, documentation, migrations, and, when needed, a
+design note or specification. The tool extracts $G'$ from the head revision and
+computes the actual graph delta against the current baseline. If the boundary
+delta is empty, the report should be small: the change is internal at the chosen
+review altitude, the required evidence is satisfied or missing, and no
+architecture review is required. If the boundary delta is nonempty, the report
+becomes the review artifact: it names the boxes, arrows, surfaces, contracts,
+evidence, and owners implicated by the PR. Authors may then attach the PR to an
+existing design issue, create a graph amendment, or revise the code if the delta
+was unintended. Appendix~\ref{app:workflow} spells out this lifecycle, including
+specification-linked PRs, large tracking issues, and concurrent development.
+
 \paragraph{Debt ratchets.}
 Each repair edit creates a target graph $G_{\mathrm{target}}$ that is cleaner
 than the current baseline according to an explicit policy, such as fewer package
@@ -1020,12 +1034,13 @@ toolchain policies, and file or network channels.
 ordinary review? For historical pull requests, we compare lines changed against
 boxes, typed arrows, surfaces, implicated contracts, and evidence gaps; measure
 empty package-level deltas; and test whether reports route changes to the same
-owners, tests, and review discussions that maintainers eventually used.
+owners, tests, specifications, and review discussions that maintainers
+eventually used.
 \item[\textbf{RQ3}] (Adoption and repair) Can teams adopt \textsc{Archon} before
 their architecture is clean or fully specified? We compare greenfield use with
 brownfield use, measuring time to first useful report, tolerated-debt
-annotations, repair edits, instrumentation edits, and whether ratchets block
-changes maintainers consider routine.
+annotations, repair edits, instrumentation edits, plan-linked PRs, and whether
+ratchets block changes maintainers consider routine.
 \item[\textbf{RQ4}] (Door-1 automation) When does the internal-evolution fast
 path preserve behavior? On case-study boxes with surface contracts, we ask
 agents to improve internal objectives and admit candidates only when the
@@ -1040,11 +1055,13 @@ pull requests. The strata should include routine fixes, refactorings, dependency
 changes, operational-edge changes, performance changes, evidence-only changes,
 instrumentation changes, and architectural reorganizations. For every PR, we
 extract $G$ and $G'$, infer identity, compute graph deltas at several altitudes,
-and apply the conformance and evidence gates under a small set of documented
-policies. A human labeling pass will classify whether each PR is routine,
-boundary-changing, evidence-changing, or architecture-significant; this label is
-used to estimate false positives and false negatives for the gate policies, not
-to train them.
+apply the conformance and evidence gates under a small set of documented
+policies, and check whether the delta realizes, exceeds, conflicts with, or is
+unrelated to any linked issue, design note, or specification. A human labeling
+pass will classify whether each PR is routine, boundary-changing,
+evidence-changing, architecture-significant, plan-realizing, or plan-conflicting;
+this label is used to estimate false positives and false negatives for the gate
+policies, not to train them.
 
 \paragraph{Review-friction scoping study.}
 Before the retrospective replay, we will sample public issues, pull requests,
@@ -1080,9 +1097,10 @@ interface, forbidding a dependency, declaring an external box, adding an
 observability field, or narrowing a public surface, together with a measurable
 debt objective and evidence obligation. We then replay historical PRs, or
 implement focused repair PRs, to ask whether the graph deltas make progress and
-regression visible. The key measures are debt reduction per PR, number of code
-edits needed per graph edit, reviewer effort to approve the graph edit,
-instrumentation needed before an invariant becomes checkable, and whether the
+regression visible even when other development lands between repair PRs. The key
+measures are debt reduction per PR, number of code edits needed per graph edit,
+reviewer effort to approve the graph edit, instrumentation needed before an
+invariant becomes checkable, plan drift after intervening PRs, and whether the
 ratchet blocks changes maintainers would consider routine.
 
 \paragraph{Executable-invariants study.}
@@ -1307,6 +1325,221 @@ coverage is needed before autonomous internal evolution is a defensible
 engineering practice.
 
 \appendix
+
+%% ===========================================================================
+\section{Practical Pull-Request and Issue Workflows}\label{app:workflow}
+%% ===========================================================================
+
+This appendix makes the operational story explicit. The intended product
+experience is not that contributors manually maintain a second architecture
+artifact for every edit. Contributors keep using branches, issues, pull
+requests, design documents, and specifications. \textsc{Archon} adds one
+computed object to that workflow: the actual graph delta from the merge base to
+the proposed head. When a change is architectural, authors or reviewers may also
+attach an intended graph delta, usually through a design issue, repair plan, or
+\texttt{speckit}-style specification.
+
+\subsection{Authoring a pull request}
+
+\subsubsection{Routine internal change}
+
+An author changes an implementation inside a box, adds tests, and opens an
+ordinary PR. \textsc{Archon} extracts the graph before and after the change,
+infers node identity, projects the delta to the repository's review altitudes,
+and posts a compact report:
+\[
+\begin{array}{ll}
+\text{package delta} & \emptyset\\
+\text{boundary delta} & \emptyset\\
+\text{implicated contracts} & \texttt{scheduler.determinism}\\
+\text{evidence} & \text{unit tests and replay trace satisfied}\\
+\text{routing} & \text{no architecture reviewer required.}
+\end{array}
+\]
+The PR is still code-reviewed in the ordinary sense, but the architectural
+question is removed from the reviewer queue: the modeled package boundary did
+not move. This is the low-friction path. The report should be expandable, not a
+long comment that every contributor has to read.
+
+\subsubsection{Boundary-changing pull request}
+
+An author adds a public field, a new endpoint, a plugin permission, a runtime
+flag, or a dependency from one package to another. The same extraction step now
+produces a nonempty boundary delta. A trace-replay PR, for example, might report
+that the sampling-parameter surface grew a trace-decode-token field,
+that the API now carries an arrow to scheduler and engine-core state, that the
+decode-determinism and logprob-preservation contracts are implicated, that the
+replay test is missing or a benchmark is stale, and that API, scheduler, and
+performance owners should review the change.
+The author does not have to draw the graph by hand. The report gives three
+actions: attach the PR to an existing design issue, create a graph amendment
+that declares the delta intended, or revise the code if the boundary movement was
+accidental. The human review is then focused on the graph delta: should this
+surface grow, should this arrow exist, and is the requested evidence enough?
+
+\subsubsection{Graph-only and evidence-only pull requests}
+
+Some useful PRs change little or no product code. A graph-only PR may declare an
+external service, split a box, collapse an existing SCC into an explicit box,
+forbid a dependency, or annotate an existing edge as tolerated debt. An
+evidence-only PR may add a trace field, replay hook, benchmark, static check, or
+property test required by an existing contract. These are not second-class
+changes. In brownfield adoption they are often the highest-leverage PRs because
+they convert implicit review knowledge into a checkable baseline.
+
+\subsection{Specifications and design documents}
+
+A design document or \texttt{speckit}-style specification should describe intent,
+not duplicate the extracted graph. Its architectural section can be a small
+planned delta. This pattern appears in real issue trackers even when the graph
+is implicit. The \textsc{vLLM} NIXL P/D-disaggregation roadmap, for example,
+groups completed and pending PRs under core NIXL integration, asynchronous KV
+transfer, multi-transport backends, heterogeneous tensor parallelism, reliability
+and observability, speculative decoding, SSM support, known bugs, and future
+RFCs~\cite{vllmnixlroadmap}. In \textsc{Archon} terms, that roadmap is a
+specification whose intended delta spans connector boxes, scheduler/transfer
+arrows, telemetry surfaces, deployment examples, and compatibility evidence. Its
+implicit planned graph includes connector, scheduler, KV-transfer, and metrics
+boxes; scheduler-to-connector, connector-to-NIXL, and connector-to-metrics
+arrows; evidence such as compatibility hashes, transfer-failure tests, metrics,
+and deployment documentation; and known conflict surfaces such as TP-dependent
+block sizes, reasoning-trace stripping, and prefix-cache trimming.
+Each implementation PR is checked against that planned delta. The relation is
+reported explicitly: \emph{realizes} if the PR implements part of the plan,
+\emph{exceeds} if it adds an unplanned boundary, \emph{conflicts} if it moves
+away from the planned graph, and \emph{unrelated} if it touches different
+architecture. This keeps the specification alive over multiple PRs without
+requiring a long-lived branch.
+
+The same treatment applies to roadmaps that are not primarily about one
+connector. \textsc{vLLM}'s KV-offloading roadmap tracks completed features,
+backlog abstractions, tactical refactors, metrics, and policy changes in one
+issue~\cite{vllmkvoffloading}; its Mooncake Store roadmap organizes work by
+backend capability, scheduler coordination, model adaptation, and transfer
+optimization~\cite{vllmmooncakeroadmap}. An \textsc{Archon} report for any PR in
+those threads would say whether the actual delta realizes a planned item, adds a
+new dependency not present in the roadmap, or requires the roadmap's intended
+graph to be amended.
+
+\subsection{Reviewer and automation responsibilities}
+
+\subsubsection{Automated reviewer}
+
+The automated reviewer performs the total, replayable work: extract $G'$,
+compute identity, compute deltas at configured altitudes, check G1--G3, evaluate
+or record G4 evidence, compare the actual delta to any linked plan, and route
+owners. Its output should be a short status and a structured attachment. For an
+empty package-level delta, the status can be a single green check. For a
+boundary-changing PR, the status should say exactly what needs human judgment.
+The bot should also suppress repeated noise: if a push changes only function
+bodies and leaves the package delta unchanged, it updates the existing report
+instead of posting a new architectural essay.
+
+\subsubsection{Human reviewer}
+
+Human reviewers approve intent and risk. They decide whether a new arrow is an
+acceptable dependency, whether a surface should widen, whether a debt exception
+should be time-bound, whether a missing benchmark is blocking, and whether a
+specification should be revised. They should not have to rediscover the blast
+radius from file paths. The review prompt is: \emph{this is the architecture
+change that the code implies; is it intended, adequately evidenced, and owned by
+the right people?}
+
+\subsection{Large issues, tracking issues, and sub-issues}
+
+Large architectural work should be represented as a repair plan or design
+episode with a target graph, then decomposed into sub-issues. BLIS provides a
+concrete example. Issue~\#1393 tracks a saturation-classifier repair after
+rate-sweep evidence showed that saturated runs were misclassified as
+\texttt{TRANSIENT\_BACKLOG}; the umbrella decomposes the work into five
+self-contained sub-issues: include still-queued requests in backlog analysis
+(\#1389), exclude drain windows from slope regression (\#1390), introduce a
+\texttt{Backlog\allowbreak Classifier} interface and registry (\#1391), add a DrainRatio
+classifier and flip the default (\#1392), and add property tests for classifier
+policies (\#1394)~\cite{blissaturationtracking}. In graph terms, the target is
+to replace a hardcoded classifier with a policy registry; the repair sequence is
+two bug fixes, one pure refactor, and one default flip; the evidence PR installs
+property tests shared by all classifier policies; and the ratchet is that, after
+the registry lands, new classifiers must satisfy the P1--P6 policy properties.
+Every PR is still reviewed against the current baseline. In addition, \textsc{Archon}
+reports plan progress: this PR realizes one planned edge, leaves two planned
+edges outstanding, and does not introduce unplanned package-level deltas. The
+tracking issue becomes more than a checklist; it is a live graph objective whose
+distance can be recomputed after each merge.
+
+BLIS issue~\#982 is a second example, this time for evidence architecture rather
+than production code architecture. It organizes a test-coverage repair into
+three tiers: pure workload-generator structural tests (\#979),
+simulation-engine integration tests (\#980), and latency-backend invariant tests
+(\#981), with an explicit implementation order motivated by an earlier
+session-conflation bug~\cite{blistestcoverage}. \textsc{Archon} would represent
+this as an evidence target: a PR that adds a Tier~1 workload test realizes part
+of the plan even if it does not change a package boundary; a PR that changes
+session generation without updating the Tier~1 evidence would be routed as a
+plan conflict.
+
+Tauri shows a different shape of large issue. Its overlay/Spotlight tracking
+issue names several issue and PR dependencies across Tauri and the lower-level
+TAO windowing stack~\cite{taurioverlaytracking}; its Wayland global-shortcut
+issue is explicitly blocked by upstream protocol work and a related tracking
+issue in the \texttt{global-hotkey} repository~\cite{tauriwaylandshortcut}. These
+are not sub-issues in the same repository, but they are architectural
+dependencies: platform-support edges and upstream-runtime edges that a local PR
+cannot resolve alone. \textsc{Archon}'s role is to distinguish ``blocked by
+external platform contract'' from ``local code lacks a test'' or ``local
+boundary moved without approval.''
+
+\subsection{Interleaving and concurrent development}
+
+Long-running repair plans must survive ordinary concurrent development. Suppose
+plan $P$ is halfway through the BLIS saturation repair. The first two bug fixes
+may land while the registry refactor is still open; a separate observability PR
+may also land because it is needed by another experiment. \textsc{Archon} rebases
+the intent, not by rewriting code, but by comparing $P$ to the new accepted
+baseline:
+the new PR may be unrelated because it changes no boxes or arrows in $P$,
+helpful because it realizes one planned edge or evidence item, conflicting
+because it adds an arrow that $P$ intends to forbid, or merely overlapping
+because it touches the same boxes through a different boundary.
+Only the conflicting case requires governance. The maintainer can ask the new PR
+to amend its graph delta, revise plan $P$, or approve a time-bound exception.
+This is the practical reason the graph artifact is versioned: a design plan is
+not a stale document attached to a branch. It is an intent over a moving
+baseline, checked every time the baseline advances.
+
+The same interleaving pressure is visible in \textsc{vLLM}. The NIXL roadmap
+contains merged connector refactors, open push/write work, known bugs, related
+RFCs, and future documentation tasks in the same living issue~\cite{vllmnixlroadmap}.
+A PR that adds lease TTL renewal may make a later failure-handling task easier;
+a PR that changes role naming may conflict with a pending \texttt{kv\_both}
+deprecation RFC; a bug fix for prefix-cache trimming may be unrelated to
+multi-transport backend support but still touches adjacent connector code.
+\textsc{Archon}'s practical value is to classify those interactions by graph
+effect rather than by textual overlap alone.
+
+\subsection{How the exemplars exercise the workflow}
+
+The three brownfield exemplars in Appendix~\ref{app:exemplars} should be read as
+workflow exemplars as well as domain exemplars. BLIS exercises graph-only and
+evidence-only repair PRs: adding observability fields and property tests before
+stronger automation is justified. \textsc{vLLM} exercises high-velocity
+boundary-changing PRs: API fields, route semantics, backend dispatch, and
+performance evidence. Tauri exercises operational edges: permissions, plugin
+commands, webview lifetimes, platform labels, and toolchain policy. Together
+they provide concrete scenarios for empty-delta PRs, intended boundary changes,
+specification-linked PRs, evidence gaps, repair plans, and intervening work.
+
+\subsubsection{Scenario map}
+
+The scenario set is deliberately varied: BLIS saturation \#1393 is an umbrella
+repair with ordered sub-issues; BLIS test tiers \#982 are evidence obligations
+split by altitude; \textsc{vLLM} NIXL \#33702 is a roadmap/specification with
+planned connector, scheduler, and telemetry deltas; \textsc{vLLM} Mooncake
+\#45036 is a capability roadmap spanning backend, scheduler, model, and transfer
+edge families; Tauri Wayland shortcut \#3578 is a platform dependency where an
+external contract blocks local closure; Tauri overlay \#2801 is cross-repo
+tracking through TAO and runtime edges; and Tauri MSRV \#15579 is a governance
+policy expressed as a toolchain-policy edge affecting all crates.
 
 %% ===========================================================================
 \section{Candidate Brownfield Exemplars}\label{app:exemplars}
