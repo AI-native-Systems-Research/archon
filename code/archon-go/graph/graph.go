@@ -1,0 +1,103 @@
+// Package graph defines ARCHON's architecture graph at the package altitude.
+//
+// A Graph is the "actual" architecture extracted mechanically from source at a
+// single commit: boxes (packages), their public surface, and typed arrows
+// (currently import edges) that aggregate the file-level dependencies beneath
+// them. Every coarse arrow carries its witness set — the files that realize it —
+// so the package-level picture can never silently disagree with the code.
+package graph
+
+import (
+	"sort"
+)
+
+// Graph is the package-altitude architecture graph at one commit.
+type Graph struct {
+	Module   string    `json:"module"`
+	Commit   string    `json:"commit,omitempty"`
+	Packages []Package `json:"packages"`
+	Edges    []Edge    `json:"edges"`
+}
+
+// Package is a box: one Go package.
+type Package struct {
+	Path       string      `json:"path"`                 // import path, the stable identity at this altitude
+	Name       string      `json:"name"`                 // clause name
+	Internal   bool        `json:"internal"`             // true if part of the module under study
+	Files      []string    `json:"files,omitempty"`      // base filenames, sorted
+	Surface    []Symbol    `json:"surface,omitempty"`    // exported entities other packages may depend on
+	Invariants []Invariant `json:"invariants,omitempty"` // tests guarding this box (candidate invariants)
+	Allow      []string    `json:"allow,omitempty"`      // structural contract: internal packages this box is permitted to depend on
+}
+
+// Invariant is one test function that guards a box — a candidate system
+// invariant. Its Hash is a gofmt-normalized digest of the function body, so a
+// pure reformat does not read as a change, but touching what the test asserts
+// does. Modifying or deleting an invariant is a boundary event: it means a PR
+// changed a promise the system was making.
+type Invariant struct {
+	Name string `json:"name"` // test function name, e.g. TestScheduler_Determinism
+	File string `json:"file"` // base filename it lives in
+	Hash string `json:"hash"` // short digest of the normalized function, to detect modification
+}
+
+// Key identifies an invariant within its package (by test name).
+func (i Invariant) Key() string { return i.Name }
+
+// Symbol is one element of a package's public surface.
+type Symbol struct {
+	Kind string `json:"kind"`          // func | method | type | var | const
+	Name string `json:"name"`          // e.g. "NewScheduler" or "Scheduler.Step"
+	Sig  string `json:"sig,omitempty"` // rendered signature/type, package-relative
+}
+
+// Edge is a typed arrow between two boxes. Kind is one of:
+//   - "import"     — From imports To (the coarse "can reach" layer)
+//   - "call"       — From references an exported func/method of To
+//   - "implements" — a concrete type in From satisfies an interface in To
+//   - "config"     — From reads an env var / defines a CLI flag; To is the
+//     config-key node (path "env:KEY" or "flag:NAME")
+// Witnesses records what realizes the arrow (files for imports; callee symbols
+// for calls; "T |= I" pairs for implements; "role@file" for config), so a
+// change that does not touch a witness cannot change the package-level arrow.
+type Edge struct {
+	From      string   `json:"from"`
+	To        string   `json:"to"`
+	Kind      string   `json:"kind"`
+	Witnesses []string `json:"witnesses,omitempty"`
+}
+
+// Key uniquely identifies an edge at this altitude.
+func (e Edge) Key() string { return e.From + "\x00" + e.Kind + "\x00" + e.To }
+
+// Key uniquely identifies a surface symbol within its package.
+func (s Symbol) Key() string { return s.Kind + "\x00" + s.Name }
+
+// Sort orders every collection in the graph so that JSON output is
+// deterministic and two extractions of the same commit diff to nothing
+// (a reproducibility requirement for the baseline).
+func (g *Graph) Sort() {
+	sort.Slice(g.Packages, func(i, j int) bool { return g.Packages[i].Path < g.Packages[j].Path })
+	for pi := range g.Packages {
+		p := &g.Packages[pi]
+		sort.Strings(p.Files)
+		sort.Slice(p.Surface, func(i, j int) bool { return p.Surface[i].Key() < p.Surface[j].Key() })
+		sort.Slice(p.Invariants, func(i, j int) bool { return p.Invariants[i].Key() < p.Invariants[j].Key() })
+		sort.Strings(p.Allow)
+	}
+	sort.Slice(g.Edges, func(i, j int) bool { return g.Edges[i].Key() < g.Edges[j].Key() })
+	for ei := range g.Edges {
+		sort.Strings(g.Edges[ei].Witnesses)
+	}
+}
+
+// InternalPaths returns the set of import paths that belong to the module.
+func (g *Graph) InternalPaths() map[string]bool {
+	m := make(map[string]bool, len(g.Packages))
+	for _, p := range g.Packages {
+		if p.Internal {
+			m[p.Path] = true
+		}
+	}
+	return m
+}
