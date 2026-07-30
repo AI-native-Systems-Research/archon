@@ -26,9 +26,9 @@ import (
 // Result carries the extracted graph plus any load diagnostics, so callers can
 // distinguish "clean extraction" from "extracted with N package errors".
 type Result struct {
-	Graph      *graph.Graph
-	NumErrors  int
-	NumPkgs    int
+	Graph     *graph.Graph
+	NumErrors int
+	NumPkgs   int
 }
 
 // Extract loads all packages under dir (a module root) and builds the graph.
@@ -79,6 +79,7 @@ func Extract(dir string) (*Result, error) {
 			Internal:   true,
 			Files:      baseNames(pkg.GoFiles),
 			Surface:    surfaceOf(pkg),
+			Schema:     schemaOf(pkg),
 			Invariants: testInvariants(pkg),
 		}
 		g.Packages = append(g.Packages, box)
@@ -103,6 +104,33 @@ func Extract(dir string) (*Result, error) {
 			addExternalBox(e.To)
 		}
 
+		// Service edges (operational): importing a known client library is a
+		// dependency on the runtime service behind it (Postgres, Redis, Kafka…).
+		// The service becomes a "service:NAME" node, so a PR that wires in a new
+		// backing service shows up as a new arrow, not buried in the diff.
+		for _, e := range serviceEdges(pkg) {
+			g.Edges = append(g.Edges, e)
+			addExternalBox(e.To)
+		}
+
+		// Protocol edges (operational): HTTP routes the package registers. Each
+		// endpoint becomes an "api:METHOD /path" node, so adding or removing a
+		// route is a visible boundary change — the API surface, not an import.
+		for _, e := range protocolEdges(pkg) {
+			g.Edges = append(g.Edges, e)
+			addExternalBox(e.To)
+		}
+
+		// Capability edges (operational): importing an escape-hatch package
+		// (unsafe, reflect, os/exec, syscall, net, plugin) grants a capability
+		// that can observe or affect the world outside the box's surface — a
+		// candidate hidden channel for the boundary-locality assumption
+		// (Assumption: surface-mediated interaction).
+		for _, e := range capabilityEdges(pkg) {
+			g.Edges = append(g.Edges, e)
+			addExternalBox(e.To)
+		}
+
 		i, c := typeDefs(pkg)
 		ifaces = append(ifaces, i...)
 		concretes = append(concretes, c...)
@@ -112,6 +140,21 @@ func Extract(dir string) (*Result, error) {
 	// interface in another. This is invisible to imports (Go interfaces are
 	// structural) and is exactly the "architecture as contract" relation.
 	g.Edges = append(g.Edges, implementsEdges(concretes, ifaces)...)
+
+	// Bind guarding tests to the contracts they exercise (interfaces they touch
+	// as Guards, concrete types as Exercises), so the delta can verify that every
+	// implementer of an interface is covered by that interface's contract test.
+	// Best-effort and separate from the structural extraction above, so a binding
+	// failure never perturbs the graph's structure.
+	ifaceSet := make(map[string]bool, len(ifaces))
+	for _, i := range ifaces {
+		ifaceSet[i.pkgPath+"."+i.name] = true
+	}
+	concreteSet := make(map[string]bool, len(concretes))
+	for _, c := range concretes {
+		concreteSet[c.pkgPath+"."+c.name] = true
+	}
+	bindInvariants(g, dir, ifaceSet, concreteSet)
 
 	g.Sort()
 	return res, nil
@@ -313,6 +356,204 @@ func literalArg(call *ast.CallExpr, i int) (string, bool) {
 	return s, true
 }
 
+// httpVerbs is the set of HTTP methods recognized in route patterns and as
+// verb-named router methods.
+var httpVerbs = map[string]bool{
+	"GET": true, "POST": true, "PUT": true, "DELETE": true,
+	"PATCH": true, "HEAD": true, "OPTIONS": true, "CONNECT": true, "TRACE": true,
+}
+
+// protocolEdges extracts the HTTP endpoints a package registers, as
+// "api:METHOD /path" nodes. It recognizes two common, syntactic conventions
+// (no framework dependency): Go 1.22 method-prefixed patterns passed to
+// Handle/HandleFunc ("POST /tasks"), and verb-named router methods
+// (r.Get("/tasks", …)). String patterns built by concatenation with a base-URL
+// variable are folded from their literal parts. This is a heuristic extractor:
+// dynamically-computed routes are not resolved (a documented limitation, as with
+// non-literal config keys).
+func protocolEdges(pkg *packages.Package) []graph.Edge {
+	witnesses := map[string]map[string]bool{} // "api:METHOD /path" -> {register@file}
+	record := func(node, file string) {
+		if witnesses[node] == nil {
+			witnesses[node] = map[string]bool{}
+		}
+		witnesses[node]["register@"+file] = true
+	}
+	for _, file := range pkg.Syntax {
+		fname := pathBase(pkg.Fset.File(file.Pos()).Name())
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			name := sel.Sel.Name
+			arg, ok := concatStringLiterals(call.Args[0])
+			if !ok {
+				return true
+			}
+			switch {
+			// Verb-named router method: r.Get("/tasks", handler).
+			case httpVerbs[strings.ToUpper(name)] && strings.HasPrefix(arg, "/"):
+				record("api:"+strings.ToUpper(name)+" "+arg, fname)
+			// Method-prefixed pattern: m.HandleFunc("POST /tasks", handler).
+			case name == "HandleFunc" || name == "Handle":
+				if m, p, ok := splitMethodPattern(arg); ok {
+					record("api:"+m+" "+p, fname)
+				}
+			}
+			return true
+		})
+	}
+	var edges []graph.Edge
+	for node, wits := range witnesses {
+		var w []string
+		for x := range wits {
+			w = append(w, x)
+		}
+		edges = append(edges, graph.Edge{From: pkg.PkgPath, To: node, Kind: "protocol", Witnesses: w})
+	}
+	return edges
+}
+
+// concatStringLiterals folds a string expression built from literals joined by
+// `+`, treating non-literal operands (e.g. a base-URL variable) as empty. It
+// returns the concatenation and whether at least one string literal was present.
+func concatStringLiterals(e ast.Expr) (string, bool) {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		if x.Kind == token.STRING {
+			if s, err := strconv.Unquote(x.Value); err == nil {
+				return s, true
+			}
+		}
+		return "", false
+	case *ast.ParenExpr:
+		return concatStringLiterals(x.X)
+	case *ast.BinaryExpr:
+		if x.Op == token.ADD {
+			l, lok := concatStringLiterals(x.X)
+			r, rok := concatStringLiterals(x.Y)
+			if lok || rok {
+				return l + r, true
+			}
+		}
+	}
+	return "", false
+}
+
+// splitMethodPattern parses a Go 1.22 "METHOD /path" ServeMux pattern into its
+// method and path, returning ok only when the leading token is an HTTP verb and
+// the remainder is a path.
+func splitMethodPattern(pat string) (method, path string, ok bool) {
+	i := strings.IndexByte(pat, ' ')
+	if i <= 0 {
+		return "", "", false
+	}
+	method = strings.ToUpper(pat[:i])
+	path = strings.TrimSpace(pat[i+1:])
+	if !httpVerbs[method] || !strings.HasPrefix(path, "/") {
+		return "", "", false
+	}
+	return method, path, true
+}
+
+// serviceByPrefix maps a client-library import-path prefix to the runtime
+// service it implies. Importing the library is the mechanically-visible signal
+// that the package depends on that external service — the operational edge a
+// microservice review most wants surfaced.
+var serviceByPrefix = []struct{ prefix, service string }{
+	{"github.com/jackc/pgx", "Postgres"},
+	{"github.com/lib/pq", "Postgres"},
+	{"github.com/bradfitz/gomemcache", "Memcached"},
+	{"github.com/elastic/go-elasticsearch", "Elasticsearch"},
+	{"github.com/olivere/elastic", "Elasticsearch"},
+	{"github.com/redis/go-redis", "Redis"},
+	{"github.com/go-redis/redis", "Redis"},
+	{"github.com/gomodule/redigo", "Redis"},
+	{"github.com/confluentinc/confluent-kafka-go", "Kafka"},
+	{"github.com/segmentio/kafka-go", "Kafka"},
+	{"github.com/IBM/sarama", "Kafka"},
+	{"github.com/Shopify/sarama", "Kafka"},
+	{"github.com/rabbitmq/amqp091-go", "RabbitMQ"},
+	{"github.com/streadway/amqp", "RabbitMQ"},
+	{"github.com/hashicorp/vault", "Vault"},
+	{"go.mongodb.org/mongo-driver", "MongoDB"},
+	{"github.com/aws/aws-sdk-go", "AWS"},
+}
+
+// serviceEdges emits one edge per (package -> "service:NAME") for each backing
+// service the package's imports imply, witnessed by "import@file". The service
+// node is synthetic (external), so a newly-wired backend is a new arrow.
+func serviceEdges(pkg *packages.Package) []graph.Edge {
+	return importClassifiedEdges(pkg, "service", func(path string) (string, bool) {
+		for _, s := range serviceByPrefix {
+			if path == s.prefix || strings.HasPrefix(path, s.prefix+"/") {
+				return "service:" + s.service, true
+			}
+		}
+		return "", false
+	})
+}
+
+// capabilityEdges emits one edge per (package -> "cap:NAME") for each
+// escape-hatch package the box imports. These are deliberately restricted to
+// capabilities that let code reach outside its surface — the channels the
+// boundary-locality theorem assumes away — rather than every stdlib import.
+func capabilityEdges(pkg *packages.Package) []graph.Edge {
+	return importClassifiedEdges(pkg, "capability", func(path string) (string, bool) {
+		switch {
+		case path == "unsafe":
+			return "cap:unsafe", true
+		case path == "reflect":
+			return "cap:reflect", true
+		case path == "plugin":
+			return "cap:plugin", true
+		case path == "os/exec":
+			return "cap:exec", true
+		case path == "syscall" || strings.HasPrefix(path, "golang.org/x/sys"):
+			return "cap:syscall", true
+		case path == "net" || strings.HasPrefix(path, "net/"):
+			return "cap:net", true
+		}
+		return "", false
+	})
+}
+
+// importClassifiedEdges scans a package's imports, and for each import the
+// classify function maps to a synthetic node, emits a typed edge to that node
+// witnessed by the importing files. Shared by the service and capability
+// operational-edge extractors.
+func importClassifiedEdges(pkg *packages.Package, kind string, classify func(path string) (string, bool)) []graph.Edge {
+	witnesses := map[string]map[string]bool{} // node -> {import@file}
+	for _, file := range pkg.Syntax {
+		fname := pathBase(pkg.Fset.File(file.Pos()).Name())
+		for _, imp := range file.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			node, ok := classify(path)
+			if !ok {
+				continue
+			}
+			if witnesses[node] == nil {
+				witnesses[node] = map[string]bool{}
+			}
+			witnesses[node]["import@"+fname] = true
+		}
+	}
+	var edges []graph.Edge
+	for node, wits := range witnesses {
+		var w []string
+		for x := range wits {
+			w = append(w, x)
+		}
+		edges = append(edges, graph.Edge{From: pkg.PkgPath, To: node, Kind: kind, Witnesses: w})
+	}
+	return edges
+}
+
 // testInvariants enumerates the test functions in a package's directory as
 // candidate invariants. Detection is parse-only (fast, no type-checking): each
 // *_test.go file in the directory is parsed, and every top-level Test*/Fuzz*
@@ -321,10 +562,11 @@ func literalArg(call *ast.CallExpr, i int) (string, bool) {
 // the package that declares it (both the in-package and external `_test`
 // variants live in that directory and guard the same box).
 //
-// v0 treats every test as a candidate invariant (an over-approximation). The
-// planned refinement is to bind a test to the specific contract it exercises
-// (interface-level via the surface it references), which both reduces noise and
-// realizes the "interface-level property test across all implementers" model.
+// This pass enumerates the candidate invariants and their Name/File/Hash; the
+// binding of a test to the specific contract it exercises (its Guards and
+// Exercises, interface-level via the types it references) is added afterward by
+// bindInvariants, which realizes the "interface-level contract test across all
+// implementers" model.
 func testInvariants(pkg *packages.Package) []graph.Invariant {
 	if len(pkg.GoFiles) == 0 {
 		return nil
@@ -352,6 +594,159 @@ func testInvariants(pkg *packages.Package) []graph.Invariant {
 			}
 			out = append(out, graph.Invariant{Name: fn.Name.Name, File: name, Hash: hashNode(fset, fn)})
 		}
+	}
+	return out
+}
+
+// bindInvariants type-checks the repository's test files (a second load with
+// Tests:true, which exposes typed test ASTs the structural pass deliberately
+// skips) and binds each guarding test to the contract it exercises: interfaces
+// it references become the test's Guards, concrete types it references become
+// its Exercises. Both are restricted to types the graph already knows (its
+// interfaces and concretes), so the binding uses the SAME identities as the
+// implements edges ("pkgpath.Name"). This is best-effort: a load failure or an
+// unresolved test simply leaves the invariant a bare candidate, never an error,
+// so the structural graph is unaffected.
+func bindInvariants(g *graph.Graph, dir string, ifaceSet, concreteSet map[string]bool) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedModule,
+		Dir:   dir,
+		Tests: true,
+	}
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		return // graceful: leave invariants unbound
+	}
+
+	// basePkgPath -> testName -> {guards, exercises}
+	type binding struct{ guards, exercises map[string]bool }
+	byTest := map[string]map[string]*binding{}
+
+	for _, pkg := range pkgs {
+		base, ok := testBasePath(pkg.PkgPath)
+		if !ok || pkg.TypesInfo == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil || fn.Name == nil || fn.Body == nil || !isTestFuncName(fn.Name.Name) {
+					continue
+				}
+				guards, exercises := referencedContracts(fn, pkg.TypesInfo, ifaceSet, concreteSet)
+				if len(guards) == 0 && len(exercises) == 0 {
+					continue
+				}
+				if byTest[base] == nil {
+					byTest[base] = map[string]*binding{}
+				}
+				b := byTest[base][fn.Name.Name]
+				if b == nil {
+					b = &binding{guards: map[string]bool{}, exercises: map[string]bool{}}
+					byTest[base][fn.Name.Name] = b
+				}
+				for k := range guards {
+					b.guards[k] = true
+				}
+				for k := range exercises {
+					b.exercises[k] = true
+				}
+			}
+		}
+	}
+
+	for pi := range g.Packages {
+		p := &g.Packages[pi]
+		tests := byTest[p.Path]
+		if tests == nil {
+			continue
+		}
+		for ii := range p.Invariants {
+			if b := tests[p.Invariants[ii].Name]; b != nil {
+				p.Invariants[ii].Guards = setKeys(b.guards)
+				p.Invariants[ii].Exercises = setKeys(b.exercises)
+			}
+		}
+	}
+}
+
+// testBasePath maps a package produced under Tests:true back to the base package
+// its tests guard. go/packages returns, for a package with tests, the plain
+// package, an in-package augmented variant (same path), an external "pkg_test"
+// package, and a synthetic "pkg.test" main binary. External tests strip the
+// "_test" suffix; the synthetic main is skipped; everything else is its own base.
+func testBasePath(path string) (string, bool) {
+	switch {
+	case strings.HasSuffix(path, ".test"):
+		return "", false // synthetic test-main binary
+	case strings.HasSuffix(path, "_test"):
+		return strings.TrimSuffix(path, "_test"), true
+	default:
+		return path, true
+	}
+}
+
+// referencedContracts walks a test function and collects the graph-known named
+// types it references, split into interfaces it touches (guards) and concrete
+// types it touches (exercises). References are read from expression types
+// (so `[]store.Store{mem.New()}` yields the interface Store and the concrete
+// Mem) and from type-name uses.
+func referencedContracts(fn *ast.FuncDecl, info *types.Info, ifaceSet, concreteSet map[string]bool) (guards, exercises map[string]bool) {
+	guards = map[string]bool{}
+	exercises = map[string]bool{}
+	record := func(t types.Type) {
+		named := namedOf(t)
+		if named == nil || named.Obj().Pkg() == nil {
+			return
+		}
+		id := named.Obj().Pkg().Path() + "." + named.Obj().Name()
+		if ifaceSet[id] {
+			guards[id] = true
+		}
+		if concreteSet[id] {
+			exercises[id] = true
+		}
+	}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if e, ok := n.(ast.Expr); ok {
+			if tv, ok := info.Types[e]; ok && tv.Type != nil {
+				record(tv.Type)
+			}
+		}
+		if id, ok := n.(*ast.Ident); ok {
+			if tn, ok := info.Uses[id].(*types.TypeName); ok {
+				record(tn.Type())
+			}
+		}
+		return true
+	})
+	return guards, exercises
+}
+
+// namedOf unwraps pointer/slice/array wrappers to the underlying named type
+// (nil for anything that does not bottom out in a named type).
+func namedOf(t types.Type) *types.Named {
+	for {
+		switch x := t.(type) {
+		case *types.Named:
+			return x
+		case *types.Pointer:
+			t = x.Elem()
+		case *types.Slice:
+			t = x.Elem()
+		case *types.Array:
+			t = x.Elem()
+		default:
+			return nil
+		}
+	}
+}
+
+func setKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
 	return out
 }
@@ -488,6 +883,60 @@ func surfaceOf(pkg *packages.Package) []graph.Symbol {
 		}
 	}
 	return out
+}
+
+// serdeTagKeys are the struct-tag keys that mark a field as part of a
+// serialized (wire, DB, or event) representation — i.e. a data contract that
+// crosses a box boundary.
+var serdeTagKeys = []string{"json:", "gob:", "db:", "bson:", "xml:", "yaml:", "protobuf:", "avro:", "mapstructure:"}
+
+// schemaOf returns the serialized fields of a package's exported struct types:
+// the wire/DB schema, as distinct from the public API surface. A field counts
+// when it is exported and carries a recognized serialization tag, so adding or
+// removing a field on a payload/row struct shows up as a schema change even
+// though it is not an API-signature change. This is a separate axis from
+// surfaceOf so it never conflates with the structural boundary verdict.
+func schemaOf(pkg *packages.Package) []graph.Symbol {
+	if pkg.Types == nil {
+		return nil
+	}
+	rel := types.RelativeTo(pkg.Types)
+	var out []graph.Symbol
+	scope := pkg.Types.Scope()
+	for _, name := range scope.Names() {
+		if !ast.IsExported(name) {
+			continue
+		}
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok {
+			continue
+		}
+		st, ok := tn.Type().Underlying().(*types.Struct)
+		if !ok {
+			continue
+		}
+		for i := 0; i < st.NumFields(); i++ {
+			f := st.Field(i)
+			if !f.Exported() || !hasSerdeTag(st.Tag(i)) {
+				continue
+			}
+			out = append(out, graph.Symbol{
+				Kind: "field",
+				Name: name + "." + f.Name(),
+				Sig:  types.TypeString(f.Type(), rel),
+			})
+		}
+	}
+	return out
+}
+
+func hasSerdeTag(tag string) bool {
+	for _, k := range serdeTagKeys {
+		if strings.Contains(tag, k) {
+			return true
+		}
+	}
+	return false
 }
 
 func methodsOf(tn *types.TypeName, typeName string, rel types.Qualifier) []graph.Symbol {

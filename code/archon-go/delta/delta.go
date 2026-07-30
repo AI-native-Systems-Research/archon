@@ -33,6 +33,12 @@ type InvariantChange struct {
 	Added    []string `json:"added,omitempty"`    // new tests (a new promise — additive, safe)
 	Removed  []string `json:"removed,omitempty"`  // deleted tests (a promise dropped — flag)
 	Modified []string `json:"modified,omitempty"` // changed test bodies (a promise altered — flag)
+
+	// GuardedContracts names the interface (contract) nodes that the touched
+	// (modified or removed) tests in this package were bound to, so review can
+	// report which promise was altered — "a promise on scheduler.RoutingPolicy
+	// changed" — not merely which test file moved.
+	GuardedContracts []string `json:"guardedContracts,omitempty"`
 }
 
 // Delta is the package-altitude architectural delta from A to B.
@@ -45,6 +51,11 @@ type Delta struct {
 	EdgesAdded      []graph.Edge    `json:"edgesAdded,omitempty"`
 	EdgesRemoved    []graph.Edge    `json:"edgesRemoved,omitempty"`
 	Surface         []SurfaceChange `json:"surface,omitempty"`
+
+	// SchemaChanges records added/removed serialized (wire/DB) fields per package
+	// — a data-contract change. It is a separate axis from Surface and, like
+	// Invariants, does not by itself flip the structural boundary verdict.
+	SchemaChanges []SurfaceChange `json:"schema,omitempty"`
 
 	// EmptyAtPackageAltitude is true when no internal box, no arrow, and no
 	// public surface changed — i.e. the change is internal at this altitude.
@@ -79,6 +90,16 @@ type ContractChange struct {
 	Interface           string   `json:"interface"`
 	ImplementersAdded   []string `json:"implementersAdded,omitempty"`
 	ImplementersRemoved []string `json:"implementersRemoved,omitempty"`
+
+	// Coverage of the interface in the after-graph, verified against the
+	// contract test(s) bound to it (Invariant.Guards): Covered are implementers
+	// a bound contract test exercises; Uncovered are implementers no bound test
+	// exercises — an evidence gap. ContractTests names the bound tests. When
+	// ContractTests is empty, the interface has no contract test at all: every
+	// implementer is an obligation, not a verified gap.
+	Covered       []string `json:"covered,omitempty"`
+	Uncovered     []string `json:"uncovered,omitempty"`
+	ContractTests []string `json:"contractTests,omitempty"`
 }
 
 // interfaceImplementers maps each interface ("pkgpath.Interface") to the set of
@@ -103,6 +124,54 @@ func interfaceImplementers(g *graph.Graph) map[string]map[string]bool {
 			}
 			out[iface][impl] = true
 		}
+	}
+	return out
+}
+
+// contractCoverage computes, per interface in g, which of its implementers are
+// covered by a bound contract test and which are not. An implementer is covered
+// when some test whose Guards names the interface also Exercises that concrete
+// type — i.e. an interface-level contract test actually drives it. This verifies
+// the coverage obligation instead of merely asserting it: the implementer set is
+// read from the same implements witnesses, so "covered" means the promise is
+// tested for that implementation.
+func contractCoverage(g *graph.Graph) map[string]*ContractChange {
+	impls := interfaceImplementers(g)
+
+	exercisedBy := map[string]map[string]bool{} // iface -> concrete ids a bound test exercises
+	testsFor := map[string]map[string]bool{}    // iface -> bound test names
+	for _, p := range g.Packages {
+		for _, inv := range p.Invariants {
+			for _, iface := range inv.Guards {
+				if exercisedBy[iface] == nil {
+					exercisedBy[iface] = map[string]bool{}
+					testsFor[iface] = map[string]bool{}
+				}
+				for _, ex := range inv.Exercises {
+					exercisedBy[iface][ex] = true
+				}
+				testsFor[iface][inv.Name] = true
+			}
+		}
+	}
+
+	out := map[string]*ContractChange{}
+	for iface, implSet := range impls {
+		cc := &ContractChange{Interface: iface}
+		for impl := range implSet {
+			if exercisedBy[iface][impl] {
+				cc.Covered = append(cc.Covered, impl)
+			} else {
+				cc.Uncovered = append(cc.Uncovered, impl)
+			}
+		}
+		for t := range testsFor[iface] {
+			cc.ContractTests = append(cc.ContractTests, t)
+		}
+		sort.Strings(cc.Covered)
+		sort.Strings(cc.Uncovered)
+		sort.Strings(cc.ContractTests)
+		out[iface] = cc
 	}
 	return out
 }
@@ -208,6 +277,9 @@ func Compute(a, b *graph.Graph) *Delta {
 		if len(added) > 0 || len(removed) > 0 {
 			d.Surface = append(d.Surface, SurfaceChange{Package: path, Added: added, Removed: removed})
 		}
+		if sa, sr := diffSurface(ap.Schema, bp.Schema); len(sa) > 0 || len(sr) > 0 {
+			d.SchemaChanges = append(d.SchemaChanges, SurfaceChange{Package: path, Added: sa, Removed: sr})
+		}
 		if ic := diffInvariants(path, ap.Invariants, bp.Invariants); ic != nil {
 			d.Invariants = append(d.Invariants, *ic)
 		}
@@ -225,6 +297,7 @@ func Compute(a, b *graph.Graph) *Delta {
 	for iface := range ib {
 		seenIface[iface] = true
 	}
+	cov := contractCoverage(b)
 	for iface := range seenIface {
 		var added, removed []string
 		for impl := range ib[iface] {
@@ -237,11 +310,20 @@ func Compute(a, b *graph.Graph) *Delta {
 				removed = append(removed, impl)
 			}
 		}
-		if len(added) > 0 || len(removed) > 0 {
-			sort.Strings(added)
-			sort.Strings(removed)
-			d.Contracts = append(d.Contracts, ContractChange{Interface: iface, ImplementersAdded: added, ImplementersRemoved: removed})
+		if len(added) == 0 && len(removed) == 0 {
+			continue
 		}
+		sort.Strings(added)
+		sort.Strings(removed)
+		cc := ContractChange{Interface: iface, ImplementersAdded: added, ImplementersRemoved: removed}
+		// Attach verified coverage of the interface as it stands after the change,
+		// so a newly-added implementer is reported as covered ✓ or an evidence gap.
+		if c := cov[iface]; c != nil {
+			cc.Covered = c.Covered
+			cc.Uncovered = c.Uncovered
+			cc.ContractTests = c.ContractTests
+		}
+		d.Contracts = append(d.Contracts, cc)
 	}
 
 	d.sortAll()
@@ -295,9 +377,38 @@ func diffInvariants(pkg string, a, b []graph.Invariant) *InvariantChange {
 	if len(ic.Added) == 0 && len(ic.Removed) == 0 && len(ic.Modified) == 0 {
 		return nil
 	}
+	// Report which contracts the touched (modified/removed) tests were bound to:
+	// the promise that changed, not just the test name. Read guards from both
+	// versions so a modified test whose binding shifted is still attributed.
+	touched := map[string]bool{}
+	for _, n := range ic.Modified {
+		touched[n] = true
+	}
+	for _, n := range ic.Removed {
+		touched[n] = true
+	}
+	gc := map[string]bool{}
+	for _, inv := range a {
+		if touched[inv.Name] {
+			for _, g := range inv.Guards {
+				gc[g] = true
+			}
+		}
+	}
+	for _, inv := range b {
+		if touched[inv.Name] {
+			for _, g := range inv.Guards {
+				gc[g] = true
+			}
+		}
+	}
+	for g := range gc {
+		ic.GuardedContracts = append(ic.GuardedContracts, g)
+	}
 	sort.Strings(ic.Added)
 	sort.Strings(ic.Removed)
 	sort.Strings(ic.Modified)
+	sort.Strings(ic.GuardedContracts)
 	return &ic
 }
 
@@ -345,11 +456,16 @@ func (d *Delta) sortAll() {
 	sort.Slice(d.EdgesAdded, func(i, j int) bool { return d.EdgesAdded[i].Key() < d.EdgesAdded[j].Key() })
 	sort.Slice(d.EdgesRemoved, func(i, j int) bool { return d.EdgesRemoved[i].Key() < d.EdgesRemoved[j].Key() })
 	sort.Slice(d.Surface, func(i, j int) bool { return d.Surface[i].Package < d.Surface[j].Package })
+	sort.Slice(d.SchemaChanges, func(i, j int) bool { return d.SchemaChanges[i].Package < d.SchemaChanges[j].Package })
 	sort.Slice(d.Invariants, func(i, j int) bool { return d.Invariants[i].Package < d.Invariants[j].Package })
 	sort.Slice(d.Contracts, func(i, j int) bool { return d.Contracts[i].Interface < d.Contracts[j].Interface })
 	for i := range d.Surface {
 		sort.Slice(d.Surface[i].Added, func(a, b int) bool { return d.Surface[i].Added[a].Key() < d.Surface[i].Added[b].Key() })
 		sort.Slice(d.Surface[i].Removed, func(a, b int) bool { return d.Surface[i].Removed[a].Key() < d.Surface[i].Removed[b].Key() })
+	}
+	for i := range d.SchemaChanges {
+		sort.Slice(d.SchemaChanges[i].Added, func(a, b int) bool { return d.SchemaChanges[i].Added[a].Key() < d.SchemaChanges[i].Added[b].Key() })
+		sort.Slice(d.SchemaChanges[i].Removed, func(a, b int) bool { return d.SchemaChanges[i].Removed[a].Key() < d.SchemaChanges[i].Removed[b].Key() })
 	}
 }
 
@@ -359,6 +475,7 @@ func (d *Delta) Render() string {
 	if d.EmptyAtPackageAltitude {
 		b.WriteString("ARCHITECTURAL DELTA: empty at package altitude\n")
 		b.WriteString("  -> internal change; no package boundary moved; no architecture review required.\n")
+		d.renderSchema(&b)
 		d.renderInvariants(&b)
 		d.renderViolations(&b)
 		d.renderContracts(&b)
@@ -368,10 +485,10 @@ func (d *Delta) Render() string {
 	shorten := moduleShortener(d)
 
 	for _, p := range d.PackagesAdded {
-		fmt.Fprintf(&b, "  + box   %s%s\n", shorten(p.Path), extTag(p.Internal))
+		fmt.Fprintf(&b, "  + box   %s%s\n", shorten(p.Path), nodeKindTag(p.Path, p.Internal))
 	}
 	for _, p := range d.PackagesRemoved {
-		fmt.Fprintf(&b, "  - box   %s%s\n", shorten(p.Path), extTag(p.Internal))
+		fmt.Fprintf(&b, "  - box   %s%s\n", shorten(p.Path), nodeKindTag(p.Path, p.Internal))
 	}
 	for _, e := range d.EdgesAdded {
 		fmt.Fprintf(&b, "  + arrow %s -> %s [%s] (%d witness file(s))\n", shorten(e.From), shorten(e.To), e.Kind, len(e.Witnesses))
@@ -387,28 +504,80 @@ func (d *Delta) Render() string {
 			fmt.Fprintf(&b, "  - surface %s.%s (%s)\n", shorten(sc.Package), s.Name, s.Kind)
 		}
 	}
+	d.renderSchema(&b)
 	d.renderInvariants(&b)
 	d.renderViolations(&b)
 	d.renderContracts(&b)
 	return b.String()
 }
 
-// renderContracts appends interface-membership changes: a new implementer is a
-// coverage obligation for the interface's contract test.
+// renderSchema appends serialized-field (wire/DB schema) changes: a data
+// contract that crosses a boundary gained or lost a field. Reported as its own
+// axis so it reads distinctly from an API-signature change.
+func (d *Delta) renderSchema(b *strings.Builder) {
+	if len(d.SchemaChanges) == 0 {
+		return
+	}
+	b.WriteString("SCHEMA CHANGED — a serialized data contract (wire/DB payload) changed shape\n")
+	for _, sc := range d.SchemaChanges {
+		for _, s := range sc.Added {
+			fmt.Fprintf(b, "  + field %s.%s %s\n", shortRef(sc.Package), s.Name, s.Sig)
+		}
+		for _, s := range sc.Removed {
+			fmt.Fprintf(b, "  - field %s.%s %s\n", shortRef(sc.Package), s.Name, s.Sig)
+		}
+	}
+}
+
+// renderContracts appends verified interface coverage: for each contract whose
+// membership changed, a new implementer is reported as covered ✓ by a bound
+// contract test, or as an evidence gap when no bound test exercises it. This is
+// the mechanized form of the coverage obligation — ARCHON does not just ask for
+// the test, it checks whether one exists and drives the new implementation.
 func (d *Delta) renderContracts(b *strings.Builder) {
 	if len(d.Contracts) == 0 {
 		return
 	}
-	b.WriteString("CONTRACT COVERAGE — a new implementer must be covered by the interface's contract test\n")
+	b.WriteString("CONTRACT COVERAGE — every implementer of a changed contract must be covered by that contract's test\n")
 	for _, c := range d.Contracts {
 		for _, impl := range c.ImplementersAdded {
-			fmt.Fprintf(b, "  + %s now implements %s → cover it in %s's contract test\n",
-				shortRef(impl), shortRef(c.Interface), shortRef(c.Interface))
+			switch {
+			case contains(c.Covered, impl):
+				fmt.Fprintf(b, "  + %s now implements %s — covered by %s ✓\n",
+					shortRef(impl), shortRef(c.Interface), joinRefs(c.ContractTests))
+			case len(c.ContractTests) > 0:
+				fmt.Fprintf(b, "  ! %s now implements %s — NOT covered by %s (evidence gap)\n",
+					shortRef(impl), shortRef(c.Interface), joinRefs(c.ContractTests))
+			default:
+				fmt.Fprintf(b, "  ! %s now implements %s — no contract test guards this interface (evidence gap)\n",
+					shortRef(impl), shortRef(c.Interface))
+			}
 		}
 		for _, impl := range c.ImplementersRemoved {
 			fmt.Fprintf(b, "  - %s no longer implements %s\n", shortRef(impl), shortRef(c.Interface))
 		}
+		// Pre-existing uncovered implementers (not added by this PR) are noted once
+		// so a standing evidence gap on a changed contract stays visible.
+		var standing []string
+		for _, u := range c.Uncovered {
+			if !contains(c.ImplementersAdded, u) {
+				standing = append(standing, u)
+			}
+		}
+		if len(standing) > 0 {
+			fmt.Fprintf(b, "    (also uncovered on %s: %s)\n", shortRef(c.Interface), joinRefs(standing))
+		}
 	}
+}
+
+// joinRefs shortens each "pkgpath.Name" reference (test names pass through) and
+// joins them for a compact one-line listing.
+func joinRefs(xs []string) string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = shortRef(x)
+	}
+	return strings.Join(out, ", ")
 }
 
 // shortRef trims a "pkgpath.Name" reference to "pkg.Name" for readable output.
@@ -443,7 +612,6 @@ func (d *Delta) renderInvariants(b *strings.Builder) {
 	if len(d.Invariants) == 0 {
 		return
 	}
-	shorten := moduleShortener(d)
 	flag := false
 	for _, ic := range d.Invariants {
 		if len(ic.Modified) > 0 || len(ic.Removed) > 0 {
@@ -457,20 +625,36 @@ func (d *Delta) renderInvariants(b *strings.Builder) {
 	}
 	for _, ic := range d.Invariants {
 		for _, n := range ic.Removed {
-			fmt.Fprintf(b, "  - invariant %s.%s (guard removed)\n", shorten(ic.Package), n)
+			fmt.Fprintf(b, "  - invariant %s.%s (guard removed)\n", shortRef(ic.Package), n)
 		}
 		for _, n := range ic.Modified {
-			fmt.Fprintf(b, "  ~ invariant %s.%s (guard changed)\n", shorten(ic.Package), n)
+			fmt.Fprintf(b, "  ~ invariant %s.%s (guard changed)\n", shortRef(ic.Package), n)
 		}
 		for _, n := range ic.Added {
-			fmt.Fprintf(b, "  + invariant %s.%s (new guard)\n", shorten(ic.Package), n)
+			fmt.Fprintf(b, "  + invariant %s.%s (new guard)\n", shortRef(ic.Package), n)
+		}
+		if len(ic.GuardedContracts) > 0 && (len(ic.Modified) > 0 || len(ic.Removed) > 0) {
+			fmt.Fprintf(b, "    → promise on %s changed\n", joinRefs(ic.GuardedContracts))
 		}
 	}
 }
 
-func extTag(internal bool) string {
+// nodeKindTag labels a box in the report by what it is: a synthetic operational
+// node (endpoint / service / capability / config key) reads by its kind, a real
+// third-party package as external, and an internal box carries no tag.
+func nodeKindTag(path string, internal bool) string {
 	if internal {
 		return ""
+	}
+	switch {
+	case strings.HasPrefix(path, "api:"):
+		return " (endpoint)"
+	case strings.HasPrefix(path, "service:"):
+		return " (service)"
+	case strings.HasPrefix(path, "cap:"):
+		return " (capability)"
+	case strings.HasPrefix(path, "env:"), strings.HasPrefix(path, "flag:"):
+		return " (config)"
 	}
 	return " (external)"
 }

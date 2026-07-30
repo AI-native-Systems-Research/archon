@@ -26,6 +26,7 @@ type Package struct {
 	Internal   bool        `json:"internal"`             // true if part of the module under study
 	Files      []string    `json:"files,omitempty"`      // base filenames, sorted
 	Surface    []Symbol    `json:"surface,omitempty"`    // exported entities other packages may depend on
+	Schema     []Symbol    `json:"schema,omitempty"`     // serialized (wire/DB) fields — the data contract that crosses a boundary
 	Invariants []Invariant `json:"invariants,omitempty"` // tests guarding this box (candidate invariants)
 	Allow      []string    `json:"allow,omitempty"`      // structural contract: internal packages this box is permitted to depend on
 }
@@ -39,6 +40,16 @@ type Invariant struct {
 	Name string `json:"name"` // test function name, e.g. TestScheduler_Determinism
 	File string `json:"file"` // base filename it lives in
 	Hash string `json:"hash"` // short digest of the normalized function, to detect modification
+
+	// Guards and Exercises bind the test to the contract it protects, inferred
+	// from the types the test references (via type info). Guards are the
+	// interface (contract) nodes it exercises ("pkgpath.Interface"); Exercises
+	// are the concrete types it touches ("pkgpath.Type"). A test that guards an
+	// interface and exercises that interface's implementers is an interface-level
+	// contract test: every implementer is expected to be covered by it. Both are
+	// empty when binding could not be resolved (a candidate invariant only).
+	Guards    []string `json:"guards,omitempty"`
+	Exercises []string `json:"exercises,omitempty"`
 }
 
 // Key identifies an invariant within its package (by test name).
@@ -56,10 +67,22 @@ type Symbol struct {
 //   - "call"       — From references an exported func/method of To
 //   - "implements" — a concrete type in From satisfies an interface in To
 //   - "config"     — From reads an env var / defines a CLI flag; To is the
-//     config-key node (path "env:KEY" or "flag:NAME")
-// Witnesses records what realizes the arrow (files for imports; callee symbols
-// for calls; "T |= I" pairs for implements; "role@file" for config), so a
-// change that does not touch a witness cannot change the package-level arrow.
+//     config-key node ("env:KEY" / "flag:NAME")
+//   - "service"    — From imports a client library for a runtime service; To is
+//     the service node ("service:Postgres", "service:Kafka", …)
+//   - "capability" — From imports an escape-hatch package (unsafe, reflect,
+//     os/exec, syscall, net, plugin); To is the capability node ("cap:net", …).
+//     A candidate hidden channel for the surface-mediation assumption.
+//   - "protocol"   — From registers an HTTP endpoint; To is the endpoint node
+//     ("api:POST /tasks"). A new/removed route is a boundary change.
+//
+// The last four are "operational" edge kinds (per the paper): the review-
+// relevant boundary is often not a source import. Witnesses records what
+// realizes the arrow (files for imports; callee symbols for calls; "T |= I"
+// pairs for implements; "role@file" for config; "import@file"/"register@file"
+// for service/capability/protocol), so a change that does not touch a witness
+// cannot change the package-level arrow. (The wire/DB *schema* is tracked
+// separately, as Package.Schema, because a field change is witness-invisible.)
 type Edge struct {
 	From      string   `json:"from"`
 	To        string   `json:"to"`
@@ -82,7 +105,12 @@ func (g *Graph) Sort() {
 		p := &g.Packages[pi]
 		sort.Strings(p.Files)
 		sort.Slice(p.Surface, func(i, j int) bool { return p.Surface[i].Key() < p.Surface[j].Key() })
+		sort.Slice(p.Schema, func(i, j int) bool { return p.Schema[i].Key() < p.Schema[j].Key() })
 		sort.Slice(p.Invariants, func(i, j int) bool { return p.Invariants[i].Key() < p.Invariants[j].Key() })
+		for ii := range p.Invariants {
+			sort.Strings(p.Invariants[ii].Guards)
+			sort.Strings(p.Invariants[ii].Exercises)
+		}
 		sort.Strings(p.Allow)
 	}
 	sort.Slice(g.Edges, func(i, j int) bool { return g.Edges[i].Key() < g.Edges[j].Key() })
