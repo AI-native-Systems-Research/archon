@@ -176,6 +176,24 @@ func contractCoverage(g *graph.Graph) map[string]*ContractChange {
 	return out
 }
 
+// Coverage returns per-interface contract coverage for a SINGLE graph
+// (implementers, covered, uncovered, and the bound contract tests), independent
+// of any delta. The `evidence` command uses it to show, per contract, which
+// implementers a bound test exercises. Only interfaces with at least one
+// implementer are returned.
+func Coverage(g *graph.Graph) []ContractChange {
+	m := contractCoverage(g)
+	out := make([]ContractChange, 0, len(m))
+	for _, c := range m {
+		if len(c.Covered)+len(c.Uncovered) == 0 {
+			continue
+		}
+		out = append(out, *c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Interface < out[j].Interface })
+	return out
+}
+
 // Violation is an actual internal dependency that a box's structural contract
 // (its Allow-list) does not permit. Introduced is true when this PR added the
 // offending edge (it is in EdgesAdded), i.e. the review-worthy case.

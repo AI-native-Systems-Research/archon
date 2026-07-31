@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"archon-go/delta"
+	"archon-go/evidence"
 	"archon-go/extract"
 	"archon-go/graph"
 	"archon-go/render"
@@ -39,6 +40,8 @@ func main() {
 		cmdRender(os.Args[2:])
 	case "contract":
 		cmdContract(os.Args[2:])
+	case "evidence":
+		cmdEvidence(os.Args[2:])
 	default:
 		usage()
 	}
@@ -54,6 +57,9 @@ func usage() {
       --allow <file>                            check deps against an allow-list
   archon-go contract <repo|graph.json> [commit] snapshot the allow-list baseline
                                                 (per-box permitted internal deps)
+  archon-go evidence <repo> [commit]            run the contract tests bound to
+                                                each interface; report coverage +
+                                                PASS/FAIL per contract
   archon-go render <repo|graph.json> [commit]   draw the architecture
   archon-go render <repo> <commitA> <commitB>   draw the delta (added=green,
   archon-go render <graphA.json> <graphB.json>    removed=red, unchanged=grey)
@@ -228,6 +234,81 @@ func cmdContract(args []string) {
 		}
 	}
 	printJSON(allow)
+}
+
+// cmdEvidence extracts the graph, then for each interface (contract) reports its
+// implementers (covered ✓ / uncovered = evidence gap) AND runs the contract
+// tests bound to it, reporting PASS/FAIL. Unlike other commands it needs the
+// source on disk to run `go test`, so it manages its own worktree lifetime.
+func cmdEvidence(args []string) {
+	if len(args) < 1 {
+		usage()
+	}
+	dir := args[0]
+	commit := ""
+	if len(args) >= 2 {
+		commit = args[1]
+	}
+	work := dir
+	if commit != "" {
+		tmp, cleanup := checkoutWorktree(dir, commit)
+		defer cleanup()
+		work = tmp
+	}
+	res, err := extract.Extract(work)
+	if err != nil {
+		fatal("extract %s@%s: %v", dir, commit, err)
+	}
+	g := res.Graph
+
+	cov := delta.Coverage(g)
+	results := evidence.Run(g, work)
+	renderEvidence(dir, commit, cov, results)
+}
+
+func renderEvidence(dir, commit string, cov []delta.ContractChange, results map[string]evidence.TestResult) {
+	where := dir
+	if commit != "" {
+		where += "@" + commit
+	}
+	fmt.Printf("CONTRACT EVIDENCE — %s\n", where)
+	if len(cov) == 0 {
+		fmt.Println("  (no interface contracts with implementers found)")
+		return
+	}
+	for _, c := range cov {
+		fmt.Printf("\nContract: %s\n", short(c.Interface))
+		for _, im := range c.Covered {
+			fmt.Printf("  implementer %s — covered by a contract test\n", short(im))
+		}
+		for _, im := range c.Uncovered {
+			fmt.Printf("  implementer %s — NOT covered (evidence gap)\n", short(im))
+		}
+		if len(c.ContractTests) == 0 {
+			fmt.Printf("  evidence: no contract test binds this interface\n")
+			continue
+		}
+		for _, t := range c.ContractTests {
+			status := "not run"
+			if r, ok := results[t]; ok && r.Ran {
+				if r.Passed {
+					status = "PASS"
+				} else {
+					status = "FAIL"
+				}
+			}
+			fmt.Printf("  evidence: %s — CI: %s\n", t, status)
+		}
+	}
+}
+
+// short trims a "pkgpath.Name" identifier to its final segment for readable
+// reports.
+func short(id string) string {
+	if i := strings.LastIndex(id, "/"); i >= 0 {
+		return id[i+1:]
+	}
+	return id
 }
 
 func loadAllow(path string) map[string][]string {
