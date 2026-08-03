@@ -487,6 +487,131 @@ func (d *Delta) sortAll() {
 	}
 }
 
+// syntheticAdded returns the sorted, de-duplicated names of added synthetic
+// nodes of a given prefix (e.g. "service:" -> ["Memcached"], "api:" -> the
+// endpoints), used by the concise Summary.
+func (d *Delta) syntheticAdded(prefix string) []string {
+	seen := map[string]bool{}
+	for _, e := range d.EdgesAdded {
+		if strings.HasPrefix(e.To, prefix) {
+			seen[strings.TrimPrefix(e.To, prefix)] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// touchedGuardedContracts returns the contracts whose guarding test was modified
+// or removed in this change (a promise touched).
+func (d *Delta) touchedGuardedContracts() []string {
+	seen := map[string]bool{}
+	for _, ic := range d.Invariants {
+		if len(ic.Modified) == 0 && len(ic.Removed) == 0 {
+			continue
+		}
+		for _, g := range ic.GuardedContracts {
+			seen[shortRef(g)] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Summary is the concise, triage-oriented report: a FAST-TRACK vs
+// NEEDS-REVIEW verdict plus only the few things a reviewer should look at
+// (services, endpoints, contracts, surface, evidence gaps) — not the full
+// per-edge dump. Motivated by evidence that verbose AI review causes anchor bias
+// and slows delivery: the point is to focus attention, not add comments.
+func (d *Delta) Summary() string {
+	var b strings.Builder
+	touched := d.touchedGuardedContracts()
+
+	if d.EmptyAtPackageAltitude {
+		b.WriteString("ARCHON verdict: FAST-TRACK — empty boundary delta; no architecture review required.\n")
+		if len(touched) > 0 {
+			fmt.Fprintf(&b, "  ⚠ a guarding test changed — promise on %s touched; confirm it's intended.\n", strings.Join(touched, ", "))
+		}
+		return b.String()
+	}
+
+	b.WriteString("ARCHON verdict: NEEDS ARCHITECTURE REVIEW — a boundary moved.\n")
+	line := func(label string, items []string) {
+		if len(items) > 0 {
+			fmt.Fprintf(&b, "  %-14s %s\n", label+":", strings.Join(items, ", "))
+		}
+	}
+
+	var newpkgs []string
+	for _, p := range d.PackagesAdded {
+		if p.Internal {
+			newpkgs = append(newpkgs, shortRef(p.Path))
+		}
+	}
+	sort.Strings(newpkgs)
+	line("new packages", newpkgs)
+	line("services", d.syntheticAdded("service:"))
+	line("endpoints", d.syntheticAdded("api:"))
+	line("config keys", append(d.syntheticAdded("env:"), d.syntheticAdded("flag:")...))
+	line("capabilities", d.syntheticAdded("cap:"))
+
+	var contracts []string
+	gaps := 0
+	for _, c := range d.Contracts {
+		for _, im := range c.ImplementersAdded {
+			tag := ""
+			if !contains(c.Covered, im) {
+				tag = " [UNCOVERED]"
+				gaps++
+			}
+			contracts = append(contracts, shortRef(im)+" ⊨ "+shortRef(c.Interface)+tag)
+		}
+	}
+	sort.Strings(contracts)
+	line("contracts", contracts)
+
+	surf := collectSurface(d.Surface)
+	line("surface +", cap8(surf))
+	line("schema +", cap8(collectSurface(d.SchemaChanges)))
+
+	if n := len(d.ContractViolations); n > 0 {
+		fmt.Fprintf(&b, "  %-14s %d allow-list breach(es)\n", "violations:", n)
+	}
+	if gaps > 0 {
+		fmt.Fprintf(&b, "  %-14s %d new implementer(s) with no contract test\n", "evidence gaps:", gaps)
+	}
+	if len(touched) > 0 {
+		fmt.Fprintf(&b, "  %-14s promise on %s changed\n", "invariant:", strings.Join(touched, ", "))
+	}
+	return b.String()
+}
+
+func collectSurface(scs []SurfaceChange) []string {
+	var out []string
+	for _, sc := range scs {
+		for _, s := range sc.Added {
+			out = append(out, shortRef(sc.Package)+"."+s.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// cap8 truncates a long list to 8 items plus a "(+N more)" marker.
+func cap8(xs []string) []string {
+	if len(xs) <= 8 {
+		return xs
+	}
+	return append(xs[:8:8], fmt.Sprintf("…(+%d more)", len(xs)-8))
+}
+
 // Render produces a compact human-readable review report.
 func (d *Delta) Render() string {
 	var b strings.Builder

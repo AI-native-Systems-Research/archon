@@ -24,6 +24,7 @@ import (
 	"archon-go/evidence"
 	"archon-go/extract"
 	"archon-go/graph"
+	"archon-go/impact"
 	"archon-go/render"
 )
 
@@ -42,6 +43,8 @@ func main() {
 		cmdContract(os.Args[2:])
 	case "evidence":
 		cmdEvidence(os.Args[2:])
+	case "impact":
+		cmdImpact(os.Args[2:])
 	default:
 		usage()
 	}
@@ -54,7 +57,11 @@ func usage() {
   archon-go delta <graphA.json> <graphB.json>   diff two saved graphs
   archon-go delta <repo> <commitA> <commitB>    extract two commits and diff
       --json                                    print machine-readable delta
+      --summary                                 concise triage verdict (fast-track
+                                                vs review) + only the key items
       --allow <file>                            check deps against an allow-list
+  archon-go impact <repo|graph.json> <pkg> [commit]  blast radius: what depends
+                                                on <pkg> (direct + transitive)
   archon-go contract <repo|graph.json> [commit] snapshot the allow-list baseline
                                                 (per-box permitted internal deps)
   archon-go evidence <repo> [commit]            run the contract tests bound to
@@ -150,12 +157,15 @@ func cmdExtract(args []string) {
 
 func cmdDelta(args []string) {
 	jsonOut := false
+	summaryOut := false
 	allowPath := ""
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "--json":
 			jsonOut = true
+		case a == "--summary":
+			summaryOut = true
 		case a == "--allow":
 			if i+1 >= len(args) {
 				usage()
@@ -189,7 +199,62 @@ func cmdDelta(args []string) {
 		printJSON(d)
 		return
 	}
+	if summaryOut {
+		fmt.Print(d.Summary())
+		return
+	}
 	fmt.Print(d.Render())
+}
+
+// cmdImpact reports the blast radius of a package: which internal packages
+// depend on it (directly and transitively). Answers "what breaks if we change
+// X?" — useful for review and for planning a refactor.
+func cmdImpact(args []string) {
+	if len(args) < 2 {
+		usage()
+	}
+	src, target := args[0], args[1]
+	commit := ""
+	if len(args) >= 3 {
+		commit = args[2]
+	}
+	var g *graph.Graph
+	if isJSONFile(src) {
+		g = loadGraph(src)
+	} else {
+		g = extractAt(src, commit)
+	}
+
+	matches := impact.Resolve(g, target)
+	switch {
+	case len(matches) == 0:
+		fatal("no internal package matches %q", target)
+	case len(matches) > 1:
+		fmt.Fprintf(os.Stderr, "ambiguous target %q — matches:\n", target)
+		for _, m := range matches {
+			fmt.Fprintf(os.Stderr, "  %s\n", m)
+		}
+		os.Exit(1)
+	}
+	resolved := matches[0]
+	direct, transitive := impact.Dependents(g, resolved)
+
+	fmt.Printf("BLAST RADIUS of %s\n", resolved)
+	fmt.Printf("  %d direct dependent(s), %d total (transitive)\n", len(direct), len(transitive))
+	if len(transitive) == 0 {
+		fmt.Println("  → nothing depends on it; safe to change in isolation.")
+		return
+	}
+	directSet := map[string]bool{}
+	for _, d := range direct {
+		directSet[d] = true
+		fmt.Printf("  direct:   %s\n", short(d))
+	}
+	for _, t := range transitive {
+		if !directSet[t] {
+			fmt.Printf("  indirect: %s\n", short(t))
+		}
+	}
 }
 
 // cmdContract snapshots the structural-contract baseline: for each internal
