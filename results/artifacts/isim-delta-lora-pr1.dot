@@ -1,0 +1,16 @@
+digraph archon_diff {
+  rankdir=LR;
+  labelloc="t";
+  label="architectural delta — green: added   red: removed   grey: unchanged";
+  fontname="Helvetica"; fontsize=20;
+  nodesep=0.5; ranksep=1.0;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=20, margin="0.18,0.11"];
+  edge [fontname="Helvetica", fontsize=15];
+  "cmd" [fillcolor="#eef3fb", color="#4a6fa5"];
+  "sim" [fillcolor="#eef3fb", color="#4a6fa5"];
+  "lora" [fillcolor="#e6f4ea", color="#1a7f37"];
+  "cmd" -> "sim" [color="#c8c8c8", penwidth=1.0, arrowhead=normal, style=solid];
+  "cmd" -> "lora" [color="#1a7f37", penwidth=2.0, arrowhead=normal, style=dashed];
+  "lora" -> "sim" [color="#1a7f37", penwidth=2.0, arrowhead=onormal, style=dashed, label="implements"];
+  "lora" -> "sim" [color="#1a7f37", penwidth=2.0, arrowhead=normal, style=dashed];
+}

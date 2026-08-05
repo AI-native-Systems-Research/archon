@@ -278,30 +278,37 @@ draws a nice graph.
 - Since A and B differ in **only one thing** (ARCHON's report), any difference in
   what they catch is caused by ARCHON. (Reviewers were AI subagents; 3 commits.)
 
-### 4.3 Concrete walk-through (the Memcached cache commit)
-- **Right answer:** adds a Memcached cache that wraps the search component
-  (implements the same interface), with **no test checking the cache behaves like
-  the real store**.
-- **Reviewer A (diff only):** "new Memcached service, a caching decorator, it
-  implements the search interface." ✅ It understood the *structure*.
-- **Reviewer B (diff + ARCHON):** all of that, **plus** "there's no contract test
-  guaranteeing this new implementation is correct, and the cache could serve stale
-  data."
-- **A missed that; B caught it, because ARCHON's report literally said "no contract
-  test guards this interface."**
+### 4.3 Update: I re-ran this with all transcripts saved, and the honest result is narrower
+I re-ran the experiment and this time saved every input and every review to disk
+(under `results/experiment/`, with a full write-up in
+`results/experiment/COMPARISON.md`). The saved transcripts show a more honest
+picture than an earlier version of this section claimed, so I am correcting it.
 
-### 4.4 Results: 3 commits, one consistent pattern
-| Commit | Diff-only (A) caught | What ARCHON added (B) that A missed |
+The earlier claim was that the diff-only reviewer "missed the evidence gap 3 out
+of 3 times." That is too strong. With transcripts in hand:
+- The **diff-only reviewer was strong** and, on its own, flagged "there are no
+  tests for this new package" on every commit. On the Kafka commit it even noted
+  "interface parity is not enforced between the two broker implementations." It
+  was not blind.
+- **ARCHON's real, repeatable lift is narrower and sharper:** it turned the vague
+  "no tests" into a **precise, certain contract statement** (which interface, how
+  many implementers, guarded or not, a computed fact rather than a guess), and it
+  reliably surfaced the **boundary and config deltas** (for Vault: the removed
+  `DATABASE_URL` key, the new `service:Vault`, the new `cap:net`) that are easy to
+  miss in a large diff.
+
+### 4.4 Results: 3 commits (from the saved re-run)
+| Commit | Diff-only (A) caught on its own | What ARCHON added (B) |
 |---|---|---|
-| Cache-aside | new service, cache decorator, the interface it implements | **untested `TaskSearchRepository`** + cache/store **consistency** risk |
-| Kafka | Kafka service, broker impl, indexer split | **untested `TaskMessageBrokerRepository`** |
-| Vault | Vault service, `Provider` interface, config facade | **untested `Provider`** + a **removed `DATABASE_URL` config key** |
+| Cache-aside | staleness/no-invalidation, "no tests for the package", TTL bug | named the exact contracts with no test (`memcached.Task ⊨ service.TaskSearchRepository`) |
+| Kafka | no tests, silent message loss, no dead-letter, "interface parity not enforced" | named `kafka.Task ⊨ TaskMessageBrokerRepository`, framed as **behavioral drift between the two broker implementations** |
+| Vault | token/TLS security, thread-unsafe cache, "untested error paths" | the `Provider` interface has **3 implementers and no contract test**, plus the **config boundary change** (`DATABASE_URL` removed, `VAULT_*` added) |
 
-**In plain terms:** in all three commits the diff-only reviewer correctly described
-the **structure** (what was built), but only the ARCHON-assisted reviewer also
-flagged that **a new implementation was added with no test guaranteeing it honors
-its contract** (an evidence gap). That catch came from ARCHON, and the diff-only
-reviewer missed it **3 out of 3 times**.
+**In plain terms:** both reviewers catch the missing tests. ARCHON's contribution
+is to make the contract gap **precise and certain**, and to add the
+**boundary/config delta**. It is an **assist, not a rescue**. That is still real,
+repeatable value, and (see §6) it is likely worth more to a human reviewer than to
+an AI one.
 
 ---
 
@@ -316,9 +323,20 @@ enormous, ARCHON's summary is usable and the raw diff isn't.
 
 ## 6. Bottom line
 A good AI reviewer already sees the **structure** of a small, clear change on its
-own, so ARCHON's real, repeatable value is that it points out **the missing test /
-unverified guarantee** (invisible in a diff) and **compresses giant diffs** into a
-few things worth looking at.
+own, so against an AI reviewer ARCHON is an **assist**: it makes the contract gap
+**precise and certain**, surfaces the **boundary/config delta**, and **compresses
+giant diffs** into a few things worth looking at.
+
+**Important nuance for a human audience.** The experiment used AI reviewers, which
+is actually a hard test for ARCHON: an AI reads the entire diff carefully and
+never tires, so ARCHON's biggest levers (compression, a diagram, holding
+cross-file facts, and a fast-track/skip verdict) are wasted on it. Those levers
+target exactly human weaknesses (attention, anchoring on a large diff, not being
+able to hold the whole dependency map in one's head). So the value is plausibly
+**larger for a human reviewer than these AI numbers show**. That is a motivated
+hypothesis, not a measured result: confirming it needs a small **human study**
+(reviewers with vs without ARCHON, measuring time-to-find and issues-caught),
+which is the honest next experiment.
 
 ---
 

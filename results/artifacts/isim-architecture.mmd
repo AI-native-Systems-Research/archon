@@ -1,0 +1,49 @@
+graph LR
+  n0["env:HF_TOKEN"]
+  n1["flag:update-golden"]
+  n2["inference-sim"]
+  n3["cmd"]
+  n4["sim"]
+  n5["cluster"]
+  n6["hash"]
+  n7["testutil"]
+  n8["tokenid"]
+  n9["util"]
+  n10["kv"]
+  n11["latency"]
+  n12["lora"]
+  n13["saturation"]
+  n14["trace"]
+  n15["workload"]
+  n2 --> n3
+  n3 -. config .-> n0
+  n3 --> n4
+  n3 --> n5
+  n3 --> n11
+  n3 -.-> n12
+  n3 --> n13
+  n3 --> n14
+  n3 --> n15
+  n4 --> n6
+  n4 -.-> n8
+  n4 --> n9
+  n5 --> n4
+  n5 -. implements .-> n4
+  n5 --> n10
+  n5 --> n11
+  n5 --> n14
+  n5 -.-> n15
+  n6 -.-> n8
+  n7 -. config .-> n1
+  n10 --> n4
+  n10 -. implements .-> n4
+  n10 --> n6
+  n10 --> n9
+  n11 --> n4
+  n11 -. implements .-> n4
+  n12 -. implements .-> n4
+  n12 -.-> n4
+  n13 -. implements .-> n4
+  n13 -.-> n4
+  n13 --> n15
+  n15 --> n4

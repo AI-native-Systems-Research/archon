@@ -1,0 +1,766 @@
+diff --git a/build/elasticsearch-indexer/Dockerfile b/build/elasticsearch-indexer-kafka/Dockerfile
+similarity index 61%
+rename from build/elasticsearch-indexer/Dockerfile
+rename to build/elasticsearch-indexer-kafka/Dockerfile
+index 06f672a..b6c800e 100644
+--- a/build/elasticsearch-indexer/Dockerfile
++++ b/build/elasticsearch-indexer-kafka/Dockerfile
+@@ -1,13 +1,19 @@
+ FROM golang:1.16.3-alpine3.13 AS builder
+ 
++RUN apk --no-cache add \
++      alpine-sdk \
++      librdkafka-dev \
++      pkgconf && \
++    rm -rf /var/cache/apk/*
++
+ WORKDIR /build/
+ 
+ COPY . .
+ 
+ RUN go mod download
+ 
+-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags "-s -w" \
+-    github.com/MarioCarrion/todo-api/cmd/elasticsearch-indexer
++RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags "-extldflags -static" -tags musl \
++      -o elasticsearch-indexer github.com/MarioCarrion/todo-api/cmd/elasticsearch-indexer-kafka
+ 
+ #-
+ 
+diff --git a/build/elasticsearch-indexer-rabbitmq/Dockerfile b/build/elasticsearch-indexer-rabbitmq/Dockerfile
+new file mode 100644
+index 0000000..5630fb8
+--- /dev/null
++++ b/build/elasticsearch-indexer-rabbitmq/Dockerfile
+@@ -0,0 +1,38 @@
++FROM golang:1.16.3-alpine3.13 AS builder
++
++RUN apk --no-cache add \
++      alpine-sdk \
++      librdkafka-dev \
++      pkgconf && \
++    rm -rf /var/cache/apk/*
++
++WORKDIR /build/
++
++COPY . .
++
++RUN go mod download
++
++RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags "-extldflags -static" -tags musl \
++      -o elasticsearch-indexer github.com/MarioCarrion/todo-api/cmd/elasticsearch-indexer-rabbitmq
++
++#-
++
++FROM alpine:3.13 AS certificates
++
++RUN apk --no-cache add ca-certificates
++
++#-
++
++FROM scratch
++
++WORKDIR /api/
++ENV PATH=/api/bin/:$PATH
++
++COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
++
++COPY --from=builder /build/elasticsearch-indexer ./bin/elasticsearch-indexer
++COPY --from=builder /build/env.example .
++
++EXPOSE 9234
++
++CMD ["elasticsearch-indexer", "-env", "/api/env.example"]
+diff --git a/build/rest-server/Dockerfile b/build/rest-server/Dockerfile
+index 3e28845..cb3aafa 100644
+--- a/build/rest-server/Dockerfile
++++ b/build/rest-server/Dockerfile
+@@ -1,16 +1,22 @@
+ FROM golang:1.16.3-alpine3.13 AS builder
+ 
++RUN apk --no-cache add \
++      alpine-sdk \
++      librdkafka-dev \
++      pkgconf && \
++    rm -rf /var/cache/apk/*
++
+ WORKDIR /build/
+ 
+ COPY . .
+ 
+ RUN go mod download
+ 
+-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags "-s -w" \
+-    github.com/MarioCarrion/todo-api/cmd/rest-server
++RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags "-extldflags -static" -tags musl \
++      github.com/MarioCarrion/todo-api/cmd/rest-server
+ 
+ RUN CGO_ENABLED=0 GOOS=linux go install -a -installsuffix cgo -ldflags "-s -w" -tags 'postgres' \
+-    github.com/golang-migrate/migrate/v4/cmd/migrate@v4.14.1
++      github.com/golang-migrate/migrate/v4/cmd/migrate@v4.14.1
+ 
+ #-
+ 
+diff --git a/cmd/elasticsearch-indexer-kafka/main.go b/cmd/elasticsearch-indexer-kafka/main.go
+new file mode 100644
+index 0000000..2ac367b
+--- /dev/null
++++ b/cmd/elasticsearch-indexer-kafka/main.go
+@@ -0,0 +1,210 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"flag"
++	"fmt"
++	"log"
++	"os"
++	"os/signal"
++	"syscall"
++	"time"
++
++	"github.com/confluentinc/confluent-kafka-go/kafka"
++	"go.uber.org/zap"
++
++	"github.com/MarioCarrion/todo-api/cmd/internal"
++	internaldomain "github.com/MarioCarrion/todo-api/internal"
++	"github.com/MarioCarrion/todo-api/internal/elasticsearch"
++	"github.com/MarioCarrion/todo-api/internal/envvar"
++)
++
++func main() {
++	var env string
++
++	flag.StringVar(&env, "env", "", "Environment Variables filename")
++	flag.Parse()
++
++	errC, err := run(env)
++	if err != nil {
++		log.Fatalf("Couldn't run: %s", err)
++	}
++
++	if err := <-errC; err != nil {
++		log.Fatalf("Error while running: %s", err)
++	}
++}
++
++func run(env string) (<-chan error, error) {
++	logger, err := zap.NewProduction()
++	if err != nil {
++		return nil, fmt.Errorf("zap.NewProduction %w", err)
++	}
++
++	if err := envvar.Load(env); err != nil {
++		return nil, fmt.Errorf("envvar.Load %w", err)
++	}
++
++	vault, err := internal.NewVaultProvider()
++	if err != nil {
++		return nil, fmt.Errorf("internal.NewVaultProvider %w", err)
++	}
++
++	conf := envvar.New(vault)
++
++	//-
++
++	es, err := internal.NewElasticSearch(conf)
++	if err != nil {
++		return nil, fmt.Errorf("internal.NewElasticSearch %w", err)
++	}
++
++	kafka, err := internal.NewKafkaConsumer(conf, "elasticsearch-indexer")
++	if err != nil {
++		return nil, fmt.Errorf("internal.NewKafkaConsumer %w", err)
++	}
++
++	//-
++
++	_, err = internal.NewOTExporter(conf)
++	if err != nil {
++		return nil, fmt.Errorf("newOTExporter %w", err)
++	}
++
++	//-
++
++	srv := &Server{
++		logger: logger,
++		kafka:  kafka,
++		task:   elasticsearch.NewTask(es),
++		doneC:  make(chan struct{}),
++		closeC: make(chan struct{}),
++	}
++
++	errC := make(chan error, 1)
++
++	ctx, stop := signal.NotifyContext(context.Background(),
++		os.Interrupt,
++		syscall.SIGTERM,
++		syscall.SIGQUIT)
++
++	go func() {
++		<-ctx.Done()
++
++		logger.Info("Shutdown signal received")
++
++		ctxTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++
++		defer func() {
++			logger.Sync()
++			kafka.Consumer.Unsubscribe()
++			stop()
++			cancel()
++			close(errC)
++		}()
++
++		if err := srv.Shutdown(ctxTimeout); err != nil {
++			errC <- err
++		}
++
++		logger.Info("Shutdown completed")
++	}()
++
++	go func() {
++		logger.Info("Listening and serving")
++
++		if err := srv.ListenAndServe(); err != nil {
++			errC <- err
++		}
++	}()
++
++	return errC, nil
++}
++
++type Server struct {
++	logger *zap.Logger
++	kafka  *internal.KafkaConsumer
++	task   *elasticsearch.Task
++	doneC  chan struct{}
++	closeC chan struct{}
++}
++
++// ListenAndServe ...
++func (s *Server) ListenAndServe() error {
++	commit := func(msg *kafka.Message) {
++		if _, err := s.kafka.Consumer.CommitMessage(msg); err != nil {
++			s.logger.Error("commit failed", zap.Error(err))
++		}
++	}
++
++	go func() {
++		run := true
++
++		for run {
++			select {
++			case <-s.closeC:
++				run = false
++				break
++			default:
++				msg, ok := s.kafka.Consumer.Poll(150).(*kafka.Message)
++				if !ok {
++					continue
++				}
++
++				var evt struct {
++					Type  string
++					Value internaldomain.Task
++				}
++
++				if err := json.NewDecoder(bytes.NewReader(msg.Value)).Decode(&evt); err != nil {
++					s.logger.Info("Ignoring message, invalid", zap.Error(err))
++					commit(msg)
++					continue
++				}
++
++				ok = false
++
++				switch evt.Type {
++				case "tasks.event.updated", "tasks.event.created":
++					if err := s.task.Index(context.Background(), evt.Value); err == nil {
++						ok = true
++					}
++				case "tasks.event.deleted":
++					if err := s.task.Delete(context.Background(), evt.Value.ID); err == nil {
++						ok = true
++					}
++				}
++
++				if ok {
++					s.logger.Info("Consumed", zap.String("type", evt.Type))
++					commit(msg)
++				}
++			}
++		}
++
++		s.logger.Info("No more messages to consume. Exiting.")
++
++		s.doneC <- struct{}{}
++	}()
++
++	return nil
++}
++
++// Shutdown ...
++func (s *Server) Shutdown(ctx context.Context) error {
++	s.logger.Info("Shutting down server")
++
++	close(s.closeC)
++
++	for {
++		select {
++		case <-ctx.Done():
++			return fmt.Errorf("context.Done: %w", ctx.Err())
++
++		case <-s.doneC:
++			return nil
++		}
++	}
++}
+diff --git a/cmd/elasticsearch-indexer/main.go b/cmd/elasticsearch-indexer-rabbitmq/main.go
+similarity index 100%
+rename from cmd/elasticsearch-indexer/main.go
+rename to cmd/elasticsearch-indexer-rabbitmq/main.go
+diff --git a/cmd/internal/kafka.go b/cmd/internal/kafka.go
+new file mode 100644
+index 0000000..c8039d3
+--- /dev/null
++++ b/cmd/internal/kafka.go
+@@ -0,0 +1,87 @@
++package internal
++
++import (
++	"fmt"
++
++	"github.com/confluentinc/confluent-kafka-go/kafka"
++
++	internaldomain "github.com/MarioCarrion/todo-api/internal"
++	"github.com/MarioCarrion/todo-api/internal/envvar"
++)
++
++type KafkaProducer struct {
++	Producer *kafka.Producer
++	Topic    string
++}
++
++// NewKafkaProducer instantiates the Kafka producer using configuration defined in environment variables.
++func NewKafkaProducer(conf *envvar.Configuration) (*KafkaProducer, error) {
++	host, topic, err := newKafkaConfig(conf)
++	if err != nil {
++		return nil, fmt.Errorf("newKafkaConfig %w", err)
++	}
++
++	config := kafka.ConfigMap{
++		"bootstrap.servers": host,
++	}
++
++	client, err := kafka.NewProducer(&config)
++	if err != nil {
++		return nil, fmt.Errorf("kafka.NewProducer %w", err)
++	}
++
++	return &KafkaProducer{
++		Producer: client,
++		Topic:    topic,
++	}, nil
++}
++
++type KafkaConsumer struct {
++	Consumer *kafka.Consumer
++}
++
++// NewKafkaConsumer instantiates the Kafka consumer using configuration defined in environment variables.
++func NewKafkaConsumer(conf *envvar.Configuration, groupID string) (*KafkaConsumer, error) {
++	host, topic, err := newKafkaConfig(conf)
++	if err != nil {
++		return nil, fmt.Errorf("newKafkaConfig %w", err)
++	}
++
++	config := kafka.ConfigMap{
++		"bootstrap.servers":  host,
++		"group.id":           groupID,
++		"auto.offset.reset":  "earliest",
++		"enable.auto.commit": false,
++	}
++
++	client, err := kafka.NewConsumer(&config)
++	if err != nil {
++		return nil, fmt.Errorf("kafka.NewConsumer %w", err)
++	}
++
++	if err := client.Subscribe(topic, nil); err != nil {
++		return nil, fmt.Errorf("client.Subscribe %w", err)
++	}
++
++	return &KafkaConsumer{
++		Consumer: client,
++	}, nil
++}
++
++func newKafkaConfig(conf *envvar.Configuration) (host, topic string, err error) {
++	host, err = conf.Get("KAFKA_HOST")
++	if err != nil {
++		return "", "", fmt.Errorf("conf.Get KAFKA_HOST %w", err)
++	}
++
++	topic, err = conf.Get("KAFKA_TOPIC")
++	if err != nil {
++		return "", "", fmt.Errorf("conf.Get KAFKA_TOPIC %w", err)
++	}
++
++	if topic == "" {
++		return "", "", internaldomain.NewErrorf(internaldomain.ErrorCodeInvalidArgument, "KAFKA_TOPIC is required")
++	}
++
++	return host, topic, nil
++}
+diff --git a/cmd/rest-server/main.go b/cmd/rest-server/main.go
+index ae9021f..9fc8c3d 100644
+--- a/cmd/rest-server/main.go
++++ b/cmd/rest-server/main.go
+@@ -19,11 +19,12 @@ import (
+ 	"go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux"
+ 	"go.uber.org/zap"
+ 
++	// "github.com/MarioCarrion/todo-api/internal/rabbitmq"
+ 	"github.com/MarioCarrion/todo-api/cmd/internal"
+ 	"github.com/MarioCarrion/todo-api/internal/elasticsearch"
+ 	"github.com/MarioCarrion/todo-api/internal/envvar"
++	"github.com/MarioCarrion/todo-api/internal/kafka"
+ 	"github.com/MarioCarrion/todo-api/internal/postgresql"
+-	"github.com/MarioCarrion/todo-api/internal/rabbitmq"
+ 	"github.com/MarioCarrion/todo-api/internal/rest"
+ 	"github.com/MarioCarrion/todo-api/internal/service"
+ )
+@@ -77,9 +78,14 @@ func run(env, address string) (<-chan error, error) {
+ 		return nil, fmt.Errorf("internal.NewElasticSearch %w", err)
+ 	}
+ 
+-	rmq, err := internal.NewRabbitMQ(conf)
++	// rmq, err := internal.NewRabbitMQ(conf)
++	// if err != nil {
++	// 	return nil, fmt.Errorf("internal.NewRabbitMQ %w", err)
++	// }
++
++	kafka, err := internal.NewKafkaProducer(conf)
+ 	if err != nil {
+-		return nil, fmt.Errorf("internal.NewRabbitMQ %w", err)
++		return nil, fmt.Errorf("internal.NewKafka %w", err)
+ 	}
+ 
+ 	//-
+@@ -102,7 +108,15 @@ func run(env, address string) (<-chan error, error) {
+ 
+ 	//-
+ 
+-	srv, err := newServer(address, db, es, rmq, promExporter, otelmux.Middleware("todo-api-server"), logging)
++	srv, err := newServer(serverConfig{
++		Address:       address,
++		DB:            db,
++		ElasticSearch: es,
++		Kafka:         kafka,
++		Metrics:       promExporter,
++		Middlewares:   []mux.MiddlewareFunc{otelmux.Middleware("todo-api-server"), logging},
++		// RabbitMQ:      rmq,
++	})
+ 	if err != nil {
+ 		return nil, fmt.Errorf("newServer %w", err)
+ 	}
+@@ -124,7 +138,7 @@ func run(env, address string) (<-chan error, error) {
+ 		defer func() {
+ 			logger.Sync()
+ 			db.Close()
+-			rmq.Close()
++			// rmq.Close()
+ 			stop()
+ 			cancel()
+ 			close(errC)
+@@ -152,21 +166,33 @@ func run(env, address string) (<-chan error, error) {
+ 	return errC, nil
+ }
+ 
+-func newServer(address string, db *sql.DB, es *esv7.Client, rmq *internal.RabbitMQ, metrics http.Handler, mws ...mux.MiddlewareFunc) (*http.Server, error) {
++type serverConfig struct {
++	Address       string
++	DB            *sql.DB
++	ElasticSearch *esv7.Client
++	Kafka         *internal.KafkaProducer
++	RabbitMQ      *internal.RabbitMQ
++	Metrics       http.Handler
++	Middlewares   []mux.MiddlewareFunc
++}
++
++func newServer(conf serverConfig) (*http.Server, error) {
+ 	r := mux.NewRouter()
+ 
+-	for _, mw := range mws {
++	for _, mw := range conf.Middlewares {
+ 		r.Use(mw)
+ 	}
+ 
+ 	//-
+ 
+-	repo := postgresql.NewTask(db)
+-	search := elasticsearch.NewTask(es)
+-	msgBroker, err := rabbitmq.NewTask(rmq.Channel)
+-	if err != nil {
+-		return nil, fmt.Errorf("rabbitmq.NewTask %w", err)
+-	}
++	repo := postgresql.NewTask(conf.DB)
++	search := elasticsearch.NewTask(conf.ElasticSearch)
++	// msgBroker, err := rabbitmq.NewTask(conf.RabbitMQ.Channel)
++	// if err != nil {
++	// 	return nil, fmt.Errorf("rabbitmq.NewTask %w", err)
++	// }
++
++	msgBroker := kafka.NewTask(conf.Kafka.Producer, conf.Kafka.Topic)
+ 
+ 	svc := service.NewTask(repo, search, msgBroker)
+ 
+@@ -178,13 +204,13 @@ func newServer(address string, db *sql.DB, es *esv7.Client, rmq *internal.Rabbit
+ 	fsys, _ := fs.Sub(content, "static")
+ 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.FS(fsys))))
+ 
+-	r.Handle("/metrics", metrics)
++	r.Handle("/metrics", conf.Metrics)
+ 
+ 	//-
+ 
+ 	return &http.Server{
+ 		Handler:           r,
+-		Addr:              address,
++		Addr:              conf.Address,
+ 		ReadTimeout:       1 * time.Second,
+ 		ReadHeaderTimeout: 1 * time.Second,
+ 		WriteTimeout:      1 * time.Second,
+diff --git a/docker-compose.yml b/docker-compose.yml
+index aa0142f..6cee916 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -12,7 +12,8 @@ services:
+       ELASTICSEARCH_URL: "http://elasticsearch:9200"
+       JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
+       VAULT_ADDRESS: "http://vault:8300"
+-      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
++      KAFKA_HOST: "kafka"
++      # RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+     # docker-compose run rest-server migrate -path /api/migrations/ -database postgres://user:password@postgres:5432/dbname?sslmode=disable up
+     depends_on:
+       - postgres
+@@ -20,23 +21,10 @@ services:
+       - prometheus
+       - jaeger
+       - elasticsearch
+-      - rabbitmq
+-  elasticsearch-indexer:
+-    build:
+-      context: .
+-      dockerfile: ./build/elasticsearch-indexer/Dockerfile
+-    command: elasticsearch-indexer -env /api/env.example
+-    environment:
+-      JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
+-      VAULT_ADDRESS: "http://vault:8300"
+-      ELASTICSEARCH_URL: "http://elasticsearch:9200"
+-      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+-    depends_on:
+-      - vault
+-      - prometheus
+-      - jaeger
+-      - elasticsearch
+-      - rabbitmq
++      - zookeeper
++      - kafka
++      # - rabbitmq
++
+   prometheus:
+     image: prom/prometheus:v2.25.2
+     ports:
+@@ -73,8 +61,57 @@ services:
+       - "9300:9300"
+     environment:
+       - discovery.type=single-node
+-  rabbitmq:
+-    image: rabbitmq:3.8.14-management-alpine
++  # elasticsearch-indexer-rabbitmq:
++  #   build:
++  #     context: .
++  #     dockerfile: ./build/elasticsearch-indexer-rabbitmq/Dockerfile
++  #   command: elasticsearch-indexer -env /api/env.example
++  #   environment:
++  #     JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
++  #     VAULT_ADDRESS: "http://vault:8300"
++  #     ELASTICSEARCH_URL: "http://elasticsearch:9200"
++  #     RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
++  #   depends_on:
++  #     - vault
++  #     - prometheus
++  #     - jaeger
++  #     - elasticsearch
++  #     - rabbitmq
++  # rabbitmq:
++  #   image: rabbitmq:3.8.14-management-alpine
++  #   ports:
++  #     - "5672:5672"
++  #     - "15672:15672"
++  elasticsearch-indexer-kafka:
++    build:
++      context: .
++      dockerfile: ./build/elasticsearch-indexer-kafka/Dockerfile
++    command: elasticsearch-indexer -env /api/env.example
++    environment:
++      JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
++      VAULT_ADDRESS: "http://vault:8300"
++      ELASTICSEARCH_URL: "http://elasticsearch:9200"
++      KAFKA_HOST: "kafka"
++    depends_on:
++      - vault
++      - prometheus
++      - jaeger
++      - elasticsearch
++      - kafka
++      - zookeeper
++  zookeeper:
++    image: wurstmeister/zookeeper:3.4.6
++    ports:
++      - "2181:2181"
++  kafka:
++    image: wurstmeister/kafka:2.13-2.7.0
+     ports:
+-      - "5672:5672"
+-      - "15672:15672"
++      - "9092:9092"
++    links:
++      - zookeeper
++    environment:
++      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
++      KAFKA_ADVERTISED_HOST_NAME: kafka
++      KAFKA_ADVERTISED_PORT: 9092
++      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
++      KAFKA_CREATE_TOPICS: 'tasks:1:1'
+diff --git a/env.example b/env.example
+index 8bb2aa8..507fcc8 100644
+--- a/env.example
++++ b/env.example
+@@ -17,3 +17,6 @@ JAEGER_ENDPOINT="http://localhost:14268/api/traces"
+ ELASTICSEARCH_URL="http://localhost:9200"
+ 
+ RABBITMQ_URL="amqp://guest:guest@localhost:5672/"
++
++KAFKA_HOST="localhost"
++KAFKA_TOPIC="tasks"
+diff --git a/go.mod b/go.mod
+index 6eca185..bf5b234 100644
+--- a/go.mod
++++ b/go.mod
+@@ -3,6 +3,7 @@ module github.com/MarioCarrion/todo-api
+ go 1.16
+ 
+ require (
++	github.com/confluentinc/confluent-kafka-go v1.7.0
+ 	github.com/deepmap/oapi-codegen v1.5.1
+ 	github.com/elastic/go-elasticsearch/v7 v7.12.0
+ 	github.com/getkin/kin-openapi v0.37.0
+diff --git a/go.sum b/go.sum
+index a0dc30c..d3c283f 100644
+--- a/go.sum
++++ b/go.sum
+@@ -102,6 +102,8 @@ github.com/cockroachdb/apd v1.1.0/go.mod h1:8Sl8LxpKi29FqWXR16WEFZRNSz3SoPzUzeMe
+ github.com/cockroachdb/cockroach-go v0.0.0-20190925194419-606b3d062051/go.mod h1:XGLbWH/ujMcbPbhZq52Nv6UrCghb1yGn//133kEsvDk=
+ github.com/cockroachdb/datadriven v0.0.0-20190809214429-80d97fb3cbaa/go.mod h1:zn76sxSg3SzpJ0PPJaLDCu+Bu0Lg3sKTORVIj19EIF8=
+ github.com/codahale/hdrhistogram v0.0.0-20161010025455-3a0bb77429bd/go.mod h1:sE/e/2PUdi/liOCUjSTXgM1o87ZssimdTWN964YiIeI=
++github.com/confluentinc/confluent-kafka-go v1.7.0 h1:tXh3LWb2Ne0WiU3ng4h5qiGA9XV61rz46w60O+cq8bM=
++github.com/confluentinc/confluent-kafka-go v1.7.0/go.mod h1:u2zNLny2xq+5rWeTQjFHbDzzNuba4P1vo31r9r4uAdg=
+ github.com/containerd/containerd v1.4.0/go.mod h1:bC6axHOhabU15QhwfG7w5PipXdVtMXFTttgp+kVtyUA=
+ github.com/containerd/containerd v1.4.1 h1:pASeJT3R3YyVn+94qEPk0SnU1OQ20Jd/T+SPKy9xehY=
+ github.com/containerd/containerd v1.4.1/go.mod h1:bC6axHOhabU15QhwfG7w5PipXdVtMXFTttgp+kVtyUA=
+diff --git a/internal/kafka/task.go b/internal/kafka/task.go
+new file mode 100644
+index 0000000..761e497
+--- /dev/null
++++ b/internal/kafka/task.go
+@@ -0,0 +1,85 @@
++package kafka
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++
++	"github.com/confluentinc/confluent-kafka-go/kafka"
++	"go.opentelemetry.io/otel/attribute"
++	"go.opentelemetry.io/otel/semconv"
++	"go.opentelemetry.io/otel/trace"
++
++	"github.com/MarioCarrion/todo-api/internal"
++)
++
++// Task represents the repository used for publishing Task records.
++type Task struct {
++	producer  *kafka.Producer
++	topicName string
++}
++
++type event struct {
++	Type  string
++	Value internal.Task
++}
++
++// NewTask instantiates the Task repository.
++func NewTask(producer *kafka.Producer, topicName string) *Task {
++	return &Task{
++		topicName: topicName,
++		producer:  producer,
++	}
++}
++
++// Created publishes a message indicating a task was created.
++func (t *Task) Created(ctx context.Context, task internal.Task) error {
++	return t.publish(ctx, "Task.Created", "tasks.event.created", task)
++}
++
++// Deleted publishes a message indicating a task was deleted.
++func (t *Task) Deleted(ctx context.Context, id string) error {
++	return t.publish(ctx, "Task.Deleted", "tasks.event.deleted", internal.Task{ID: id})
++}
++
++// Updated publishes a message indicating a task was updated.
++func (t *Task) Updated(ctx context.Context, task internal.Task) error {
++	return t.publish(ctx, "Task.Updated", "tasks.event.updated", task)
++}
++
++func (t *Task) publish(ctx context.Context, spanName, msgType string, task internal.Task) error {
++	ctx, span := trace.SpanFromContext(ctx).Tracer().Start(ctx, spanName)
++	defer span.End()
++
++	span.SetAttributes(
++		attribute.KeyValue{
++			Key:   semconv.MessagingSystemKey,
++			Value: attribute.StringValue("kafka"),
++		},
++	)
++
++	//-
++
++	var b bytes.Buffer
++
++	evt := event{
++		Type:  msgType,
++		Value: task,
++	}
++
++	if err := json.NewEncoder(&b).Encode(evt); err != nil {
++		return internal.WrapErrorf(err, internal.ErrorCodeUnknown, "json.Encode")
++	}
++
++	if err := t.producer.Produce(&kafka.Message{
++		TopicPartition: kafka.TopicPartition{
++			Topic:     &t.topicName,
++			Partition: kafka.PartitionAny,
++		},
++		Value: b.Bytes(),
++	}, nil); err != nil {
++		return internal.WrapErrorf(err, internal.ErrorCodeUnknown, "product.Producer")
++	}
++
++	return nil
++}
