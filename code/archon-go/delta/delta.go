@@ -100,31 +100,46 @@ type ContractChange struct {
 	Covered       []string `json:"covered,omitempty"`
 	Uncovered     []string `json:"uncovered,omitempty"`
 	ContractTests []string `json:"contractTests,omitempty"`
+
+	// TestsNameConcretes is true when a bound contract test exercises at least
+	// one implementer of THIS interface by name (equivalently, len(Covered) > 0).
+	// It separates a PROVEN gap from an UNPROVABLE one: if a test names some
+	// implementers (say Mem, File) but not this one (Redis), the gap is real. If
+	// no implementer is named — the test drives them all through a factory that
+	// returns the interface — an uncovered implementer cannot be confirmed either
+	// way, so it is reported softly rather than as a definite gap.
+	TestsNameConcretes bool `json:"testsNameConcretes,omitempty"`
 }
 
 // interfaceImplementers maps each interface ("pkgpath.Interface") to the set of
 // concrete types ("pkgpath.Type") that implement it, read from the implements
 // edges' witnesses ("T |= I"). The interface lives in the edge's To package;
-// the implementing type lives in the From package.
+// the implementing type lives in the From package. Same-package satisfaction
+// (Graph.LocalImplements) is included too, so a package's own interface and its
+// in-package implementers are covered even though they are not an arrow.
 func interfaceImplementers(g *graph.Graph) map[string]map[string]bool {
 	out := map[string]map[string]bool{}
-	for _, e := range g.Edges {
-		if e.Kind != "implements" {
-			continue
-		}
-		for _, w := range e.Witnesses {
-			parts := strings.SplitN(w, " |= ", 2)
-			if len(parts) != 2 {
+	collect := func(edges []graph.Edge) {
+		for _, e := range edges {
+			if e.Kind != "implements" {
 				continue
 			}
-			iface := e.To + "." + parts[1]
-			impl := e.From + "." + parts[0]
-			if out[iface] == nil {
-				out[iface] = map[string]bool{}
+			for _, w := range e.Witnesses {
+				parts := strings.SplitN(w, " |= ", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				iface := e.To + "." + parts[1]
+				impl := e.From + "." + parts[0]
+				if out[iface] == nil {
+					out[iface] = map[string]bool{}
+				}
+				out[iface][impl] = true
 			}
-			out[iface][impl] = true
 		}
 	}
+	collect(g.Edges)
+	collect(g.LocalImplements)
 	return out
 }
 
@@ -165,6 +180,13 @@ func contractCoverage(g *graph.Graph) map[string]*ContractChange {
 				cc.Uncovered = append(cc.Uncovered, impl)
 			}
 		}
+		// A gap is PROVEN only when a bound test exercises at least one
+		// implementer of THIS interface by name (so we know the test reaches
+		// implementers, and a missing one is a real hole). If no implementer is
+		// named — the test drives them all through a factory returning the
+		// interface — an uncovered implementer cannot be attributed and is
+		// reported softly, not as a definite gap.
+		cc.TestsNameConcretes = len(cc.Covered) > 0
 		for t := range testsFor[iface] {
 			cc.ContractTests = append(cc.ContractTests, t)
 		}
@@ -340,6 +362,7 @@ func Compute(a, b *graph.Graph) *Delta {
 			cc.Covered = c.Covered
 			cc.Uncovered = c.Uncovered
 			cc.ContractTests = c.ContractTests
+			cc.TestsNameConcretes = c.TestsNameConcretes
 		}
 		d.Contracts = append(d.Contracts, cc)
 	}
@@ -688,8 +711,11 @@ func (d *Delta) renderContracts(b *strings.Builder) {
 			case contains(c.Covered, impl):
 				fmt.Fprintf(b, "  + %s now implements %s — covered by %s ✓\n",
 					shortRef(impl), shortRef(c.Interface), joinRefs(c.ContractTests))
-			case len(c.ContractTests) > 0:
+			case len(c.ContractTests) > 0 && c.TestsNameConcretes:
 				fmt.Fprintf(b, "  ! %s now implements %s — NOT covered by %s (evidence gap)\n",
+					shortRef(impl), shortRef(c.Interface), joinRefs(c.ContractTests))
+			case len(c.ContractTests) > 0:
+				fmt.Fprintf(b, "  ? %s now implements %s — %s exercises this contract via a factory, so coverage of this implementer is unconfirmed\n",
 					shortRef(impl), shortRef(c.Interface), joinRefs(c.ContractTests))
 			default:
 				fmt.Fprintf(b, "  ! %s now implements %s — no contract test guards this interface (evidence gap)\n",

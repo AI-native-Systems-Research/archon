@@ -139,7 +139,12 @@ func Extract(dir string) (*Result, error) {
 	// Implements edges: a concrete type in one package satisfying an exported
 	// interface in another. This is invisible to imports (Go interfaces are
 	// structural) and is exactly the "architecture as contract" relation.
-	g.Edges = append(g.Edges, implementsEdges(concretes, ifaces)...)
+	// Cross-package satisfaction is an architectural arrow (in Edges);
+	// same-package satisfaction is kept in LocalImplements for contract
+	// coverage only (see Graph.LocalImplements).
+	cross, local := implementsEdges(concretes, ifaces)
+	g.Edges = append(g.Edges, cross...)
+	g.LocalImplements = local
 
 	// Bind guarding tests to the contracts they exercise (interfaces they touch
 	// as Guards, concrete types as Exercises), so the delta can verify that every
@@ -695,7 +700,20 @@ func testBasePath(path string) (string, bool) {
 func referencedContracts(fn *ast.FuncDecl, info *types.Info, ifaceSet, concreteSet map[string]bool) (guards, exercises map[string]bool) {
 	guards = map[string]bool{}
 	exercises = map[string]bool{}
-	record := func(t types.Type) {
+	var record func(t types.Type)
+	record = func(t types.Type) {
+		if t == nil {
+			return
+		}
+		// A factory returning (Iface, error) yields a tuple: record each
+		// component, so a test that only calls `NewX(...)` (whose result type
+		// is the interface) still binds to that interface.
+		if tup, ok := t.(*types.Tuple); ok {
+			for i := 0; i < tup.Len(); i++ {
+				record(tup.At(i).Type())
+			}
+			return
+		}
 		named := namedOf(t)
 		if named == nil || named.Obj().Pkg() == nil {
 			return
@@ -710,13 +728,24 @@ func referencedContracts(fn *ast.FuncDecl, info *types.Info, ifaceSet, concreteS
 	}
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if e, ok := n.(ast.Expr); ok {
-			if tv, ok := info.Types[e]; ok && tv.Type != nil {
+			if tv, ok := info.Types[e]; ok {
 				record(tv.Type)
 			}
 		}
 		if id, ok := n.(*ast.Ident); ok {
+			// A named type used by name (e.g. in a composite literal or cast).
 			if tn, ok := info.Uses[id].(*types.TypeName); ok {
 				record(tn.Type())
+			}
+			// A variable's declared type: `m := factory()` where factory returns
+			// an interface makes `m` interface-typed, so the interface is bound
+			// even though its name never appears literally. Covers both the
+			// declaring ident (Defs) and later uses (Uses).
+			if v, ok := info.Defs[id].(*types.Var); ok {
+				record(v.Type())
+			}
+			if v, ok := info.Uses[id].(*types.Var); ok {
+				record(v.Type())
 			}
 		}
 		return true
@@ -816,40 +845,47 @@ func typeDefs(pkg *packages.Package) (ifaces []ifaceDef, concretes []concreteDef
 }
 
 // implementsEdges emits one edge per (package of a concrete type -> package of
-// an interface it satisfies), aggregating the "T |= I" pairs as witnesses. Only
-// cross-package satisfaction is reported (a type satisfying its own package's
-// interface is not an architectural boundary).
-func implementsEdges(concretes []concreteDef, ifaces []ifaceDef) []graph.Edge {
-	witnesses := map[string]map[string]bool{} // "from\x00to" -> set of "T |= I"
+// an interface it satisfies), aggregating the "T |= I" pairs as witnesses. It
+// returns two sets: `cross` is cross-package satisfaction (an architectural
+// arrow, a real box-to-box seam), and `local` is same-package satisfaction (a
+// package's own interface implemented by a type in that same package). Local
+// satisfaction is not a boundary crossing, so it is kept out of the arrows and
+// used only for contract coverage.
+func implementsEdges(concretes []concreteDef, ifaces []ifaceDef) (cross, local []graph.Edge) {
+	crossW := map[string]map[string]bool{} // "from\x00to" -> set of "T |= I"
+	localW := map[string]map[string]bool{}
 	for _, c := range concretes {
 		ptr := types.NewPointer(c.typ)
 		for _, i := range ifaces {
-			if c.pkgPath == i.pkgPath {
-				continue
-			}
 			if !types.Implements(c.typ, i.iface) && !types.Implements(ptr, i.iface) {
 				continue
 			}
-			key := c.pkgPath + "\x00" + i.pkgPath
-			if witnesses[key] == nil {
-				witnesses[key] = map[string]bool{}
+			w := crossW
+			if c.pkgPath == i.pkgPath {
+				w = localW
 			}
-			witnesses[key][c.name+" |= "+i.name] = true
+			key := c.pkgPath + "\x00" + i.pkgPath
+			if w[key] == nil {
+				w[key] = map[string]bool{}
+			}
+			w[key][c.name+" |= "+i.name] = true
 		}
 	}
-
-	var edges []graph.Edge
-	for key, pairs := range witnesses {
-		fromTo := strings.SplitN(key, "\x00", 2)
-		var w []string
-		for p := range pairs {
-			w = append(w, p)
+	build := func(witnesses map[string]map[string]bool) []graph.Edge {
+		var edges []graph.Edge
+		for key, pairs := range witnesses {
+			fromTo := strings.SplitN(key, "\x00", 2)
+			var w []string
+			for p := range pairs {
+				w = append(w, p)
+			}
+			edges = append(edges, graph.Edge{
+				From: fromTo[0], To: fromTo[1], Kind: "implements", Witnesses: w,
+			})
 		}
-		edges = append(edges, graph.Edge{
-			From: fromTo[0], To: fromTo[1], Kind: "implements", Witnesses: w,
-		})
+		return edges
 	}
-	return edges
+	return build(crossW), build(localW)
 }
 
 func isInternalPath(path, modulePath string) bool {

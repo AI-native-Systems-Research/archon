@@ -347,7 +347,14 @@ func renderEvidence(dir, commit string, cov []delta.ContractChange, results map[
 			fmt.Printf("  implementer %s — covered by a contract test\n", short(im))
 		}
 		for _, im := range c.Uncovered {
-			fmt.Printf("  implementer %s — NOT covered (evidence gap)\n", short(im))
+			switch {
+			case len(c.ContractTests) == 0:
+				fmt.Printf("  implementer %s — NOT covered (evidence gap: no contract test binds this interface)\n", short(im))
+			case c.TestsNameConcretes:
+				fmt.Printf("  implementer %s — NOT covered (evidence gap: the contract test names other implementers, not this one)\n", short(im))
+			default:
+				fmt.Printf("  implementer %s — unconfirmed (a contract test exists but drives implementers via a factory, so this one cannot be attributed)\n", short(im))
+			}
 		}
 		if len(c.ContractTests) == 0 {
 			fmt.Printf("  evidence: no contract test binds this interface\n")

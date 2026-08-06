@@ -17,6 +17,16 @@ type Graph struct {
 	Commit   string    `json:"commit,omitempty"`
 	Packages []Package `json:"packages"`
 	Edges    []Edge    `json:"edges"`
+
+	// LocalImplements records interface satisfaction within a single package
+	// (the concrete type and the interface it satisfies live in the same
+	// package). These are deliberately NOT in Edges: no package boundary is
+	// crossed, so they are not architectural arrows and must not affect the
+	// boundary/empty/DAG/blast-radius logic. Contract coverage reads them so
+	// that a package's own interface and its in-package implementers (a very
+	// common Go idiom: an interface plus its default implementation) are still
+	// tracked and can be checked for a contract test.
+	LocalImplements []Edge `json:"localImplements,omitempty"`
 }
 
 // Package is a box: one Go package.
@@ -116,6 +126,10 @@ func (g *Graph) Sort() {
 	sort.Slice(g.Edges, func(i, j int) bool { return g.Edges[i].Key() < g.Edges[j].Key() })
 	for ei := range g.Edges {
 		sort.Strings(g.Edges[ei].Witnesses)
+	}
+	sort.Slice(g.LocalImplements, func(i, j int) bool { return g.LocalImplements[i].Key() < g.LocalImplements[j].Key() })
+	for ei := range g.LocalImplements {
+		sort.Strings(g.LocalImplements[ei].Witnesses)
 	}
 }
 
