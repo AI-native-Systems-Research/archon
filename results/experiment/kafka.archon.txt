@@ -1,0 +1,101 @@
+ARCHITECTURAL DELTA: boundary changed — review required
+  + box   cmd/elasticsearch-indexer-kafka
+  + box   cmd/elasticsearch-indexer-rabbitmq
+  + box   internal/kafka
+  + box   github.com/confluentinc/confluent-kafka-go/kafka (external)
+  + box   service:Kafka (service)
+  - box   cmd/elasticsearch-indexer
+  + arrow cmd/elasticsearch-indexer-kafka -> cmd/internal [call] (4 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> internal/elasticsearch [call] (3 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> internal/envvar [call] (2 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> cap:syscall [capability] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> flag:env [config] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> bytes [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> context [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> encoding/json [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> flag [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> fmt [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> cmd/internal [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> internal [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> internal/elasticsearch [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> internal/envvar [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> github.com/confluentinc/confluent-kafka-go/kafka [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> go.uber.org/zap [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> log [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> os [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> os/signal [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> syscall [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> time [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-kafka -> service:Kafka [service] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> cmd/internal [call] (5 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> internal [call] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> internal/elasticsearch [call] (3 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> internal/envvar [call] (2 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> cap:syscall [capability] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> flag:env [config] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> bytes [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> context [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> encoding/gob [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> flag [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> fmt [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> cmd/internal [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> internal [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> internal/elasticsearch [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> internal/envvar [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> github.com/streadway/amqp [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> go.uber.org/zap [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> log [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> os [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> os/signal [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> syscall [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> time [import] (1 witness file(s))
+  + arrow cmd/elasticsearch-indexer-rabbitmq -> service:RabbitMQ [service] (1 witness file(s))
+  + arrow cmd/internal -> internal [call] (1 witness file(s))
+  + arrow cmd/internal -> internal [import] (1 witness file(s))
+  + arrow cmd/internal -> github.com/confluentinc/confluent-kafka-go/kafka [import] (1 witness file(s))
+  + arrow cmd/internal -> service:Kafka [service] (1 witness file(s))
+  + arrow cmd/rest-server -> internal/kafka [call] (1 witness file(s))
+  + arrow cmd/rest-server -> internal/kafka [import] (1 witness file(s))
+  + arrow internal/kafka -> internal [call] (1 witness file(s))
+  + arrow internal/kafka -> internal/service [implements] (1 witness file(s))
+  + arrow internal/kafka -> bytes [import] (1 witness file(s))
+  + arrow internal/kafka -> context [import] (1 witness file(s))
+  + arrow internal/kafka -> encoding/json [import] (1 witness file(s))
+  + arrow internal/kafka -> internal [import] (1 witness file(s))
+  + arrow internal/kafka -> github.com/confluentinc/confluent-kafka-go/kafka [import] (1 witness file(s))
+  + arrow internal/kafka -> go.opentelemetry.io/otel/attribute [import] (1 witness file(s))
+  + arrow internal/kafka -> go.opentelemetry.io/otel/semconv [import] (1 witness file(s))
+  + arrow internal/kafka -> go.opentelemetry.io/otel/trace [import] (1 witness file(s))
+  + arrow internal/kafka -> service:Kafka [service] (1 witness file(s))
+  - arrow cmd/elasticsearch-indexer -> cmd/internal [call]
+  - arrow cmd/elasticsearch-indexer -> internal [call]
+  - arrow cmd/elasticsearch-indexer -> internal/elasticsearch [call]
+  - arrow cmd/elasticsearch-indexer -> internal/envvar [call]
+  - arrow cmd/elasticsearch-indexer -> cap:syscall [capability]
+  - arrow cmd/elasticsearch-indexer -> flag:env [config]
+  - arrow cmd/elasticsearch-indexer -> bytes [import]
+  - arrow cmd/elasticsearch-indexer -> context [import]
+  - arrow cmd/elasticsearch-indexer -> encoding/gob [import]
+  - arrow cmd/elasticsearch-indexer -> flag [import]
+  - arrow cmd/elasticsearch-indexer -> fmt [import]
+  - arrow cmd/elasticsearch-indexer -> cmd/internal [import]
+  - arrow cmd/elasticsearch-indexer -> internal [import]
+  - arrow cmd/elasticsearch-indexer -> internal/elasticsearch [import]
+  - arrow cmd/elasticsearch-indexer -> internal/envvar [import]
+  - arrow cmd/elasticsearch-indexer -> github.com/streadway/amqp [import]
+  - arrow cmd/elasticsearch-indexer -> go.uber.org/zap [import]
+  - arrow cmd/elasticsearch-indexer -> log [import]
+  - arrow cmd/elasticsearch-indexer -> os [import]
+  - arrow cmd/elasticsearch-indexer -> os/signal [import]
+  - arrow cmd/elasticsearch-indexer -> syscall [import]
+  - arrow cmd/elasticsearch-indexer -> time [import]
+  - arrow cmd/elasticsearch-indexer -> service:RabbitMQ [service]
+  - arrow cmd/rest-server -> internal/rabbitmq [call]
+  - arrow cmd/rest-server -> internal/rabbitmq [import]
+  + surface cmd/internal.NewKafkaConsumer (func)
+  + surface cmd/internal.NewKafkaProducer (func)
+  + surface cmd/internal.KafkaConsumer (type)
+  + surface cmd/internal.KafkaProducer (type)
+CONTRACT COVERAGE — every implementer of a changed contract must be covered by that contract's test
+  ! kafka.Task now implements service.TaskMessageBrokerRepository — no contract test guards this interface (evidence gap)
+    (also uncovered on service.TaskMessageBrokerRepository: rabbitmq.Task)

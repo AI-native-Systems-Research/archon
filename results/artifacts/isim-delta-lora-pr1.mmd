@@ -1,0 +1,17 @@
+graph LR
+  n0["cmd"]
+  n1["sim"]
+  n2["lora"]
+  n0 --> n1
+  linkStyle 0 stroke:#c8c8c8,stroke-width:2px
+  n0 -.-> n2
+  linkStyle 1 stroke:#1a7f37,stroke-width:2px
+  n2 -. implements .-> n1
+  linkStyle 2 stroke:#1a7f37,stroke-width:2px
+  n2 -.-> n1
+  linkStyle 3 stroke:#1a7f37,stroke-width:2px
+  classDef added fill:#e6f4ea,stroke:#1a7f37;
+  classDef removed fill:#fce8e6,stroke:#cf222e;
+  classDef unchanged fill:#eef3fb,stroke:#4a6fa5;
+  class n2 added
+  class n0,n1 unchanged

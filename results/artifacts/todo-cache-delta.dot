@@ -1,0 +1,23 @@
+digraph archon_diff {
+  rankdir=LR;
+  labelloc="t";
+  label="architectural delta — green: added   red: removed   grey: unchanged";
+  fontname="Helvetica"; fontsize=20;
+  nodesep=0.5; ranksep=1.0;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=20, margin="0.18,0.11"];
+  edge [fontname="Helvetica", fontsize=15];
+  "rest-server" [fillcolor="#eef3fb", color="#4a6fa5"];
+  "internal" [fillcolor="#eef3fb", color="#4a6fa5"];
+  "elasticsearch" [fillcolor="#eef3fb", color="#4a6fa5"];
+  "memcached" [fillcolor="#e6f4ea", color="#1a7f37"];
+  "service" [fillcolor="#eef3fb", color="#4a6fa5"];
+  "rest-server" -> "elasticsearch" [color="#c8c8c8", penwidth=1.0, arrowhead=normal, style=solid];
+  "rest-server" -> "memcached" [color="#1a7f37", penwidth=2.0, arrowhead=normal, style=solid];
+  "rest-server" -> "service" [color="#c8c8c8", penwidth=1.0, arrowhead=normal, style=solid];
+  "elasticsearch" -> "internal" [color="#c8c8c8", penwidth=1.0, arrowhead=normal, style=solid];
+  "elasticsearch" -> "memcached" [color="#1a7f37", penwidth=2.0, arrowhead=onormal, style=dashed, label="implements"];
+  "elasticsearch" -> "service" [color="#c8c8c8", penwidth=1.0, arrowhead=onormal, style=dashed];
+  "memcached" -> "internal" [color="#1a7f37", penwidth=2.0, arrowhead=normal, style=solid];
+  "memcached" -> "service" [color="#1a7f37", penwidth=2.0, arrowhead=onormal, style=dashed, label="implements"];
+  "service" -> "internal" [color="#c8c8c8", penwidth=1.0, arrowhead=normal, style=solid];
+}

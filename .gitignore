@@ -17,8 +17,12 @@
 probe*.tex
 probe*.pdf
 
-# Generated PDF; remove this line if you want PDFs versioned.
-*.pdf
+# Generated PDF in paper-draft (but not rel-work PDFs which should be versioned)
+/paper-draft/*.pdf
+
+# Bulky/redundant LaTeX template files
+/paper-draft/acmart.zip
+/paper-draft/acmart/
 
 # OS/editor noise
 .DS_Store

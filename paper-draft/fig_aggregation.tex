@@ -1,0 +1,48 @@
+%% Figure: arrow aggregation across two altitudes -- real vLLM example.
+%% Column-width layout (fits ~241pt). executor depends on core/sched.
+\begin{tikzpicture}[
+  pkg/.style    = {rounded corners=2.5pt, draw=slate, line width=0.6pt, fill=mist, inner sep=4pt},
+  leafn/.style  = {rounded corners=2pt, draw=steel, line width=0.55pt, fill=steelwash,
+                   inner sep=1.5pt, align=center, font=\sffamily\fontsize{6.6}{7.6}\selectfont\ttfamily,
+                   minimum width=19mm, minimum height=4.4mm},
+  depagg/.style = {->, draw=ink, line width=1.2pt},
+  fine/.style   = {->, draw=steel, line width=0.6pt},
+  lbl/.style    = {font=\sffamily\scriptsize, text=slate},
+  lblb/.style   = {font=\sffamily\footnotesize, text=ink},
+]
+
+%% ============ coarse (human) altitude ============
+\node[lbl, anchor=west] at (-0.05,1.62) {\itshape package altitude \textcolor{slate}{\,(human review)}};
+\node[pkg, minimum width=18mm, minimum height=7mm] (Pexec) at (0.95,0.95) {};
+\node[lblb] at (Pexec.center) {\textbf{\texttt{executor}}};
+\node[pkg, minimum width=18mm, minimum height=7mm] (Pcore) at (5.05,0.95) {};
+\node[lblb] at (Pcore.center) {\textbf{\texttt{core/sched}}};
+\draw[depagg] (Pexec.east) -- node[lbl, above, text=ink, yshift=-0.3mm] {1 arrow} (Pcore.west);
+
+%% ============ projection brace ============
+\draw[decorate, decoration={brace, amplitude=3pt, mirror}, slate, line width=0.5pt]
+   (0.0,0.35) -- (6.0,0.35);
+\node[lbl] at (3.0,-0.05) {\itshape projects to / aggregates from};
+
+%% ============ fine (agent) altitude ============
+\node[lbl, anchor=west] at (-0.05,-0.55) {\itshape leaf altitude \textcolor{slate}{\,(agent evolution)}};
+\begin{scope}[yshift=-0.2cm]
+  \node[pkg, minimum width=27mm, minimum height=21mm] (Ecl) at (0.95,-2.0) {};
+  \node[lblb] at (Ecl.north) [yshift=-2.4mm] {\textbf{\texttt{executor}}};
+  \node[leafn] (exec)   at (0.95,-1.55) {execute\_model()};
+  \node[leafn] (sample) at (0.95,-2.15) {sample\_tokens()};
+  \node[leafn] (uniproc)at (0.95,-2.78) {UniProcExecutor};
+
+  \node[pkg, minimum width=27mm, minimum height=21mm] (Ccl) at (5.05,-2.0) {};
+  \node[lblb] at (Ccl.north) [yshift=-2.4mm] {\textbf{\texttt{core/sched}}};
+  \node[leafn] (sout)   at (5.05,-1.55) {SchedulerOutput};
+  \node[leafn] (gout)   at (5.05,-2.15) {GrammarOutput};
+  \node[leafn] (sched)  at (5.05,-2.78) {Scheduler};
+
+  %% two parallel, non-crossing edges
+  \draw[fine] (exec.east)   -- (sout.west);
+  \draw[fine] (sample.east) -- (gout.west);
+\end{scope}
+\node[lbl] at (3.0,-4.78) {2 type-driven imports $\;\longmapsto\;$ 1 arrow};
+
+\end{tikzpicture}
