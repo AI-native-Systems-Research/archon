@@ -1,0 +1,7 @@
+# compiled binary (build with: go build -o archon-go .)
+/archon-go
+archon
+# scratch render outputs
+*.dot
+/tmp/
+__pycache__/

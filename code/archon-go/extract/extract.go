@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"archon-go/graph"
+	"github.com/AI-native-Systems-Research/archon/graph"
 
 	"golang.org/x/tools/go/packages"
 )

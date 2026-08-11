@@ -20,12 +20,14 @@ import (
 	"sort"
 	"strings"
 
-	"archon-go/delta"
-	"archon-go/evidence"
-	"archon-go/extract"
-	"archon-go/graph"
-	"archon-go/impact"
-	"archon-go/render"
+	"github.com/AI-native-Systems-Research/archon/delta"
+	"github.com/AI-native-Systems-Research/archon/evidence"
+	"github.com/AI-native-Systems-Research/archon/extract"
+	"github.com/AI-native-Systems-Research/archon/graph"
+	"github.com/AI-native-Systems-Research/archon/health"
+	"github.com/AI-native-Systems-Research/archon/impact"
+	"github.com/AI-native-Systems-Research/archon/reflexion"
+	"github.com/AI-native-Systems-Research/archon/render"
 )
 
 func main() {
@@ -45,8 +47,139 @@ func main() {
 		cmdEvidence(os.Args[2:])
 	case "impact":
 		cmdImpact(os.Args[2:])
+	case "health":
+		cmdHealth(os.Args[2:])
+	case "reflexion":
+		cmdReflexion(os.Args[2:])
 	default:
 		usage()
+	}
+}
+
+// cmdReflexion compares a declared intended layering against the recovered graph
+// and reports divergences (upward, layer-violating dependencies). The violation
+// count is the reflexion distance; comparing it across commits answers "did this
+// PR move toward the target architecture?".
+func cmdReflexion(args []string) {
+	jsonOut := false
+	var pos []string
+	for _, a := range args {
+		if a == "--json" {
+			jsonOut = true
+		} else {
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: archon-go reflexion <repo|graph.json> <layers.json> [commit] [--json]")
+		os.Exit(2)
+	}
+	var g *graph.Graph
+	if isJSONFile(pos[0]) {
+		g = loadGraph(pos[0])
+	} else {
+		commit := ""
+		if len(pos) >= 3 {
+			commit = pos[2]
+		}
+		g = extractAt(pos[0], commit)
+	}
+	var spec reflexion.Spec
+	data, err := os.ReadFile(pos[1])
+	if err != nil {
+		fatal("read layers %s: %v", pos[1], err)
+	}
+	if err := json.Unmarshal(data, &spec); err != nil {
+		fatal("parse layers %s: %v", pos[1], err)
+	}
+	rep := reflexion.Analyze(g, spec)
+	if jsonOut {
+		printJSON(rep)
+		return
+	}
+	total := rep.DownEdges + rep.UpEdges
+	fmt.Printf("REFLEXION MODEL — declared layering vs actual code\n")
+	fmt.Printf("  layers (top→bottom): %s\n", strings.Join(spec.Layers, " → "))
+	fmt.Printf("  convergent (downward) deps: %d\n", rep.DownEdges)
+	fmt.Printf("  DIVERGENT (upward, layering violations): %d", rep.UpEdges)
+	if total > 0 {
+		fmt.Printf("  (%d%% of cross-layer deps)", rep.UpEdges*100/total)
+	}
+	fmt.Println()
+	for _, v := range rep.Violations {
+		fmt.Printf("    ! %s depends on higher layer %s  ×%d edge(s)\n", v.From, v.To, v.Count)
+	}
+	if len(rep.Unmapped) > 0 {
+		fmt.Printf("  unmapped components (no layer assigned): %s\n", strings.Join(rep.Unmapped, ", "))
+	}
+	if rep.UpEdges == 0 {
+		fmt.Println("  → code conforms to the declared layering.")
+	}
+}
+
+// cmdHealth reports architecture-health metrics: coupling (fan-in/out,
+// instability), dependency cycles, blast-radius hotspots, and god-module
+// candidates — the "understand the current design" view for a refactor.
+func cmdHealth(args []string) {
+	jsonOut := false
+	var pos []string
+	for _, a := range args {
+		if a == "--json" {
+			jsonOut = true
+		} else {
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) < 1 {
+		usage()
+	}
+	var g *graph.Graph
+	if isJSONFile(pos[0]) {
+		g = loadGraph(pos[0])
+	} else {
+		commit := ""
+		if len(pos) >= 2 {
+			commit = pos[1]
+		}
+		g = extractAt(pos[0], commit)
+	}
+	rep := health.Analyze(g)
+	if jsonOut {
+		printJSON(rep)
+		return
+	}
+	fmt.Printf("ARCHITECTURE HEALTH\n")
+	if len(rep.Cycles) == 0 {
+		fmt.Println("  cycles: none — internal dependency graph is an acyclic DAG (healthy)")
+	} else {
+		fmt.Printf("  cycles: %d dependency cycle(s) found:\n", len(rep.Cycles))
+		for _, c := range rep.Cycles {
+			refs := make([]string, len(c))
+			for i, x := range c {
+				refs[i] = short(x)
+			}
+			fmt.Printf("    ! %s\n", strings.Join(refs, " <-> "))
+		}
+	}
+	if len(rep.GodModules) > 0 {
+		refs := make([]string, len(rep.GodModules))
+		for i, x := range rep.GodModules {
+			refs[i] = short(x)
+		}
+		fmt.Printf("  god-modules (high fan-in + large surface): %s\n", strings.Join(refs, ", "))
+	}
+	fmt.Printf("  coupling (top by blast radius):\n")
+	fmt.Printf("    %-28s %6s %7s %6s %8s %6s\n", "package", "fanIn", "fanOut", "surf", "instab", "blast")
+	n := len(rep.Packages)
+	if n > 12 {
+		n = 12
+	}
+	for _, m := range rep.Packages[:n] {
+		flag := ""
+		if m.God {
+			flag = "  <god>"
+		}
+		fmt.Printf("    %-28s %6d %7d %6d %8.2f %6d%s\n", short(m.Path), m.FanIn, m.FanOut, m.Surface, m.Instability, m.BlastRadius, flag)
 	}
 }
 
@@ -66,7 +199,11 @@ func usage() {
                                                 (per-box permitted internal deps)
   archon-go evidence <repo> [commit]            run the contract tests bound to
                                                 each interface; report coverage +
-                                                PASS/FAIL per contract
+                                                PASS/FAIL per contract  (--json)
+  archon-go health <repo|graph.json> [commit]   coupling, cycles, god-modules,
+                                                blast-radius hotspots  (--json)
+  archon-go reflexion <repo|graph.json> <layers.json> [commit]  declared layering
+                                                vs actual code; report violations (--json)
   archon-go render <repo|graph.json> [commit]   draw the architecture
   archon-go render <repo> <commitA> <commitB>   draw the delta (added=green,
   archon-go render <graphA.json> <graphB.json>    removed=red, unchanged=grey)
@@ -210,13 +347,22 @@ func cmdDelta(args []string) {
 // depend on it (directly and transitively). Answers "what breaks if we change
 // X?" — useful for review and for planning a refactor.
 func cmdImpact(args []string) {
-	if len(args) < 2 {
+	jsonOut := false
+	var pos []string
+	for _, a := range args {
+		if a == "--json" {
+			jsonOut = true
+		} else {
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) < 2 {
 		usage()
 	}
-	src, target := args[0], args[1]
+	src, target := pos[0], pos[1]
 	commit := ""
-	if len(args) >= 3 {
-		commit = args[2]
+	if len(pos) >= 3 {
+		commit = pos[2]
 	}
 	var g *graph.Graph
 	if isJSONFile(src) {
@@ -238,6 +384,17 @@ func cmdImpact(args []string) {
 	}
 	resolved := matches[0]
 	direct, transitive := impact.Dependents(g, resolved)
+
+	if jsonOut {
+		printJSON(map[string]any{
+			"target":           resolved,
+			"directDependents": direct,
+			"totalTransitive":  len(transitive),
+			"transitive":       transitive,
+			"directCount":      len(direct),
+		})
+		return
+	}
 
 	fmt.Printf("BLAST RADIUS of %s\n", resolved)
 	fmt.Printf("  %d direct dependent(s), %d total (transitive)\n", len(direct), len(transitive))
@@ -306,13 +463,22 @@ func cmdContract(args []string) {
 // tests bound to it, reporting PASS/FAIL. Unlike other commands it needs the
 // source on disk to run `go test`, so it manages its own worktree lifetime.
 func cmdEvidence(args []string) {
-	if len(args) < 1 {
+	jsonOut := false
+	var pos []string
+	for _, a := range args {
+		if a == "--json" {
+			jsonOut = true
+		} else {
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) < 1 {
 		usage()
 	}
-	dir := args[0]
+	dir := pos[0]
 	commit := ""
-	if len(args) >= 2 {
-		commit = args[1]
+	if len(pos) >= 2 {
+		commit = pos[1]
 	}
 	work := dir
 	if commit != "" {
@@ -328,6 +494,32 @@ func cmdEvidence(args []string) {
 
 	cov := delta.Coverage(g)
 	results := evidence.Run(g, work)
+	if jsonOut {
+		type contractJSON struct {
+			Interface     string   `json:"interface"`
+			Covered       []string `json:"covered,omitempty"`
+			Uncovered     []string `json:"uncovered,omitempty"`
+			ContractTests []string `json:"contractTests,omitempty"`
+			GapKind       string   `json:"gapKind,omitempty"` // none | no-test | proven | unconfirmed
+		}
+		out := []contractJSON{}
+		for _, c := range cov {
+			gap := "none"
+			if len(c.Uncovered) > 0 {
+				switch {
+				case len(c.ContractTests) == 0:
+					gap = "no-test"
+				case c.TestsNameConcretes:
+					gap = "proven"
+				default:
+					gap = "unconfirmed"
+				}
+			}
+			out = append(out, contractJSON{c.Interface, c.Covered, c.Uncovered, c.ContractTests, gap})
+		}
+		printJSON(out)
+		return
+	}
 	renderEvidence(dir, commit, cov, results)
 }
 
