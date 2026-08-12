@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"archon-go/graph"
+	"github.com/AI-native-Systems-Research/archon/graph"
 )
 
 // isConfigNode reports whether a package path is a synthetic config-key node

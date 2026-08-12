@@ -27,3 +27,16 @@ probe*.pdf
 # OS/editor noise
 .DS_Store
 *~
+
+# Go tool: compiled binaries (build with: go build -o archon-go .)
+/archon-go
+/archon
+# scratch dirs
+/tmp/
+__pycache__/
+# analysis cache + generated write-ups (kept local)
+/harness/graphs/
+/harness/out/
+# third-party clones used only as test subjects (never commit)
+/blis/
+/todo-api/

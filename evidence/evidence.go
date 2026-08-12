@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"archon-go/graph"
+	"github.com/AI-native-Systems-Research/archon/graph"
 )
 
 // TestResult is the CI outcome of one guarding (contract) test.
