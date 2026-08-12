@@ -40,3 +40,4 @@ __pycache__/
 # third-party clones used only as test subjects (never commit)
 /blis/
 /todo-api/
+consumes
