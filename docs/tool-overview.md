@@ -49,7 +49,8 @@ Deliberately deferred (documented so we don't pretend they're solved):
 ### Build
 
 ```sh
-cd archon-go && go build -o archon-go .
+git clone https://github.com/AI-native-Systems-Research/archon.git && cd archon
+go build -o archon-go .
 ```
 
 ### Use

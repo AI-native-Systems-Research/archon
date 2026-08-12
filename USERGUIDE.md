@@ -21,7 +21,8 @@ examples run against a real repo, `inference-sim`; swap in your own path.
 ## 2. Build it once
 
 ```sh
-cd code/archon-go
+git clone https://github.com/AI-native-Systems-Research/archon.git
+cd archon
 go build -o archon-go .
 ```
 
@@ -301,7 +302,7 @@ python3 reviewer/component_delta.py delta.json components.json "inference-sim 42
 ## 6. A complete first session, start to finish
 
 ```sh
-cd code/archon-go
+git clone https://github.com/AI-native-Systems-Research/archon.git && cd archon
 go build -o archon-go .
 R=/path/to/your/repo
 
