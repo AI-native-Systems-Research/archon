@@ -111,7 +111,7 @@ inline in a PR comment is [`level2_components.mmd`](examples/pr1546/level2_compo
 
 ```sh
 # consumes is working-tree based, so snapshot each commit (checkout, run, restore)
-go build -o consumes ./consumes_tool
+go build -o consumes ./cmd/consumes
 git -C $R checkout $BASE && ./consumes $R ./... --json > A.consumes.json
 git -C $R checkout $HEAD && ./consumes $R ./... --json > B.consumes.json
 git -C $R checkout -                       # restore your branch

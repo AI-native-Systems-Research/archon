@@ -20,14 +20,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/AI-native-Systems-Research/archon/delta"
-	"github.com/AI-native-Systems-Research/archon/evidence"
-	"github.com/AI-native-Systems-Research/archon/extract"
-	"github.com/AI-native-Systems-Research/archon/graph"
-	"github.com/AI-native-Systems-Research/archon/health"
-	"github.com/AI-native-Systems-Research/archon/impact"
-	"github.com/AI-native-Systems-Research/archon/reflexion"
-	"github.com/AI-native-Systems-Research/archon/render"
+	"github.com/AI-native-Systems-Research/archon/internal/delta"
+	"github.com/AI-native-Systems-Research/archon/internal/evidence"
+	"github.com/AI-native-Systems-Research/archon/internal/extract"
+	"github.com/AI-native-Systems-Research/archon/internal/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/health"
+	"github.com/AI-native-Systems-Research/archon/internal/impact"
+	"github.com/AI-native-Systems-Research/archon/internal/reflexion"
+	"github.com/AI-native-Systems-Research/archon/internal/render"
 )
 
 func main() {

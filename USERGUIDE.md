@@ -373,7 +373,7 @@ python3 reviewer/witness_delta.py A.json B.json --label-a base --label-b "#1546"
 # --- contract delta: interfaces, implementers, and stranded-smell flips ---
 # `consumes` is working-tree based, so snapshot each commit (checkout, run,
 # restore). This is the check the wrapper's --level 3 automates.
-go build -o consumes ./consumes_tool          # once
+go build -o consumes ./cmd/consumes          # once
 git -C $R checkout 70e9ba8 && ./consumes $R ./... --json > conA.json
 git -C $R checkout 5e28e00b && ./consumes $R ./... --json > conB.json
 git -C $R checkout -            # restore your branch
