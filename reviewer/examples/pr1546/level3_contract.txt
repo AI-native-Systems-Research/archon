@@ -1,0 +1,15 @@
+# Contract delta (interface altitude)
+#   A: base   module github.com/inference-sim/inference-sim
+#   B: #1546   module github.com/inference-sim/inference-sim
+
+VERDICT: 1 contract(s) stopped being stranded: sim.BatchClassifier; 0 added, 1 removed, 1 modified
+
+sim.BatchClassifier   REMOVED   was 1 impl   smell: STRANDED -> (absent)
+    - impl:  sim/saturation.Bank   (was in sim/saturation)
+    - used by: sim   (own package)
+    ~ method set changed
+    ok this PR cleared the stranded-contract smell.
+
+sim/workload.BacklogClassifier   MODIFIED   impl 2 -> 2
+    - used by: sim/saturation   (cross-package)
+

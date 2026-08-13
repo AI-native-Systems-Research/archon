@@ -282,22 +282,131 @@ fail on any *new* dependency that is not on the list:
 
 ---
 
-## 5. Reviewer helper scripts (optional)
+## 5. Reviewer views — one command, three levels
 
-Two standalone Python scripts in `reviewer/` turn an extracted graph into a
-higher-altitude "component" picture for a PR comment. They need no extra setup
-beyond Python 3.
+For a PR, the fastest path is the wrapper `reviewer/review.py`. Give it the repo
+and the two commits and pick an altitude with `--level`; it runs `archon-go` /
+`consumes` and the right renderers for you and drops the text + PNGs in one
+folder. It adds no analysis and calls no model — it only sequences tools that are
+already deterministic, so the same repo + commits reproduce the same bytes.
 
 ```sh
-# stable component map (subsystem boxes), as a picture
+R=/path/to/inference-sim
+
+# escalating altitude — pick one; each is self-contained
+python3 reviewer/review.py $R 70e9ba8 5e28e00b --level 1 --label-a base --label-b "#1546"
+python3 reviewer/review.py $R 70e9ba8 5e28e00b --level 2 --label-a base --label-b "#1546"
+python3 reviewer/review.py $R 70e9ba8 5e28e00b --level 3 --label-a base --label-b "#1546"
+```
+
+(`70e9ba8` / `5e28e00b` are PR #1546's merge-base and head.) Artifacts land in
+`./archon_review_<A>_<B>/` — text on stdout and saved as `.txt`, plus a `.png` per
+view when Graphviz is present.
+
+| level | question it answers | views it produces |
+|---|---|---|
+| **1** SUMMARY   | *what changed?* — packages / exported symbols / schemas / edges / invariants, with a triage verdict | `surface_delta` |
+| **2** STRUCTURE | *where did it land?* — the system as auto-derived component boxes, PR painted on top | `component_view` + `component_delta` |
+| **3** CONTRACTS | *did the decoupling actually happen?* — per-edge witnesses (full vs **partial** decoupling) + interface-contract delta + stranded-smell flips | `witness_delta` + `contract_delta` |
+
+All views share one four-color scheme: **green** = added, **red** = removed,
+**blue** = modified, **grey** = unchanged.
+
+**Worked example — PR #1546**, all three levels, with the figures and a walkthrough
+of what each shows, is checked in at [`reviewer/examples/pr1546/`](reviewer/examples/pr1546/).
+Its short version: the PR meant to decouple `sim/saturation` from both `sim` and
+`sim/workload`. Level 3 shows one decoupling landed **fully** (`saturation ⊨ sim`
+REMOVED) and the other only **partially** (`saturation → workload` WEAKENED — the
+interface call was cut but two config calls still cross the boundary) — a
+distinction the level-1/2 present/absent edge cannot show.
+
+Useful flags: `--reuse` re-renders from JSON already in the outdir with **no**
+binary calls and no repo access (fully offline); `--skip-contract` gives level 3's
+witness view without the `consumes` checkout; `--depth N` sets level-2 granularity;
+`--from/--to PKG` (level 3 witness) and `--interface SUBSTR` (level 3 contract)
+focus on one dependency or interface; `--outdir DIR` picks the output folder.
+
+> **Note on level 3.** The contract half uses `consumes`, which is working-tree
+> based, so the wrapper **checks each commit out and restores HEAD afterward**.
+> Don't run level 3 against a repo another job is using; use `--skip-contract` (no
+> checkout) or `--reuse` (offline) if that matters.
+
+### 5.1 The pieces individually
+
+If you want to run one renderer by hand, each is a standalone script in
+`reviewer/` that reads a different `archon-go` output and calls no model:
+
+| script | reads | altitude it answers |
+|---|---|---|
+| `component_view.py`  | one `extract` JSON            | subsystem boxes: "what is the system" |
+| `component_delta.py` | `delta` JSON + components + `--graph` | one PR painted on those boxes |
+| `surface_delta.py`   | one `delta` JSON              | PR summary: symbols/schema/invariants added/removed |
+| `witness_delta.py`   | two `extract` JSONs (A, B)    | per-edge *reasons*: full vs **partial** decoupling |
+| `contract_view.py` / `contract_delta.py` | two `consumes` JSONs | interface implementers/consumers and their delta |
+
+```sh
+# --- component map (subsystem boxes), as a picture ---
 ./archon-go extract $R > graph.json
 python3 reviewer/component_view.py graph.json --format dot | dot -Tpng -o components.png
 
-# one PR's change painted on those boxes
+# --- one PR's change painted on those boxes ---
 ./archon-go delta $R 428982c 3340de7 --json > delta.json
 python3 reviewer/component_view.py graph.json --emit-components > components.json
 python3 reviewer/component_delta.py delta.json components.json "inference-sim 428982c..3340de7" --graph graph.json | dot -Tpng -o pr.png
+
+# --- PR summary (symbols / schema / invariants), good for a PR comment ---
+python3 reviewer/surface_delta.py delta.json --label-a base --label-b HEAD
+
+# --- witness delta: WHY each package edge survived, weakened, or died ---
+# Needs a snapshot at each commit. This is the view that distinguishes a full
+# decoupling (edge and all its reasons removed) from a partial one (edge kept,
+# some reasons removed, others persist). The commits below are PR #1546's
+# base and head, so this reproduces the output shown next.
+./archon-go extract $R 70e9ba8 > A.json
+./archon-go extract $R 5e28e00b > B.json
+# focus on one package's outgoing dependencies (both of #1546's decouplings):
+python3 reviewer/witness_delta.py A.json B.json --label-a base --label-b "#1546" --from saturation
+# the figure (drop --from to see the whole changed graph):
+python3 reviewer/witness_delta.py A.json B.json --label-a base --label-b "#1546" \
+    --format dot | dot -Tpng -o witness.png
+
+# --- contract delta: interfaces, implementers, and stranded-smell flips ---
+# `consumes` is working-tree based, so snapshot each commit (checkout, run,
+# restore). This is the check the wrapper's --level 3 automates.
+go build -o consumes ./consumes_tool          # once
+git -C $R checkout 70e9ba8 && ./consumes $R ./... --json > conA.json
+git -C $R checkout 5e28e00b && ./consumes $R ./... --json > conB.json
+git -C $R checkout -            # restore your branch
+python3 reviewer/contract_delta.py conA.json conB.json --label-a base --label-b "#1546" --format text
+python3 reviewer/contract_delta.py conA.json conB.json --interface BatchClassifier \
+    --format dot | dot -Tpng -o contract.png
 ```
+
+**What `witness_delta.py` prints** on PR #1546 (each changed edge, with the exact
+symbols/files that witness it):
+
+```
+# Witness delta (why each package edge survived / weakened / died)
+#   A: base   -> B: #1546
+
+VERDICT: 1 edge(s) fully decoupled; 1 edge(s) PARTIALLY decoupled (weakened)
+
+sim/saturation --implements--> sim   REMOVED
+    - type: Bank |= BatchClassifier
+    ok FULL decoupling: edge and all its reasons removed.
+
+sim/saturation --call--> sim/workload   WEAKENED   (3 -> 2 symbols)
+    - symbol: NewBacklogClassifier
+    = still coupled via: DefaultBacklogDriftConfig, NewBacklogDriftConfig
+    !! PARTIAL decoupling: edge remains; some reasons removed, others persist.
+```
+
+Read it as: the first edge is **fully** decoupled (gone); the second is only
+**partially** decoupled — the edge remains because two config calls
+(`DefaultBacklogDriftConfig`, `NewBacklogDriftConfig`) still cross the boundary,
+even though the interface call (`NewBacklogClassifier`) was removed. Useful
+filters: `--from PKG` / `--to PKG` to focus one dependency,
+`--kind call|import|implements`, `--all` to include unchanged edges.
 
 ## 6. A complete first session, start to finish
 

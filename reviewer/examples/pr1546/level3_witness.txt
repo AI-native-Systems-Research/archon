@@ -1,0 +1,22 @@
+# Witness delta (why each package edge survived / weakened / died)
+#   A: base   -> B: #1546
+
+VERDICT: 1 edge(s) fully decoupled; 1 edge(s) PARTIALLY decoupled (weakened); 1 churned; 1 strengthened, 0 new
+
+sim/saturation --implements--> sim   REMOVED
+    - type: Bank |= BatchClassifier
+    ok FULL decoupling: edge and all its reasons removed.
+
+sim/saturation --call--> sim/workload   WEAKENED   (3 -> 2 symbols)
+    - symbol: NewBacklogClassifier
+    = still coupled via: DefaultBacklogDriftConfig, NewBacklogDriftConfig
+    !! PARTIAL decoupling: edge remains; some reasons removed, others persist.
+
+cmd --call--> sim/saturation   CHURNED   (10 -> 12 symbols)
+    - symbol: Bank.Classify
+    + symbol: Bank.Run
+    + symbol: InMemoryCollector.Records
+    + symbol: ReduceAll
+
+cmd --import--> sim/saturation   STRENGTHENED   (1 -> 2 files)
+    + file: observe_cmd.go

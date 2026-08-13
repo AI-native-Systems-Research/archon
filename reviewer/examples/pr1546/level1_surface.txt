@@ -1,0 +1,85 @@
+# Surface delta (PR summary altitude)
+#   A: base   -> B: #1546
+
+VERDICT: surface changed (removal/modification present) -- review needed
+         +3/-3 surface symbols; +13/-4/~45 invariants; +0/-1 edges; +1/-0 schema fields
+         packages touched: sim, sim/saturation
+
+- edge     sim/saturation --implements--> sim
+
+cmd   +0/-0 surface, +4/-2/~8 invariants
+    + test    TestResolveSaturation_FinalWindowErrors
+    + test    TestResolveSaturation_FinalWindowResolutionOrder
+    + test    TestSaturationStdout_FinalLabelShape
+    + test    TestSaturationTracer_RunNoReportStillReturnsFinal
+    - test    TestSaturationBC8_StdoutByteIdenticalWithoutAndWithDetectors
+    - test    TestSaturationTracer_TraceNoOpWhenNoReport
+    ~ test    TestResolveSaturation_ConfigOrReportWithoutDetectors
+    ~ test    TestSaturationTracer_AllEqualsExplicitList
+    ~ test    TestSaturationTracer_BankWritesAllDetectors
+    ~ test    TestSaturationTracer_DecoupledFromGlobals
+    ~ test    TestSaturationTracer_SingleWritesTrace
+    ~ test    TestSaturationTracer_SubsetMatchesRecordsUnderAll
+    ~ test    TestSaturationTracer_ZeroRequestsWritesEmptyTrace
+    ~ test    TestSaveResults_MetricsPrintedToStdout
+
+sim   +0/-1 surface, +0/-0/~26 invariants
+    - type    BatchClassifier
+    ~ test    TestBuildOutput_AdapterEventCountsSurface
+    ~ test    TestBuildOutput_AdapterKeysSorted
+    ~ test    TestBuildOutput_NoAdapters_OmitsBlock
+    ~ test    TestBuildOutput_PerAdapterMetrics
+    ~ test    TestColdLoadGate_INV8_NoDeadlockUnderCapacityPressure
+    ~ test    TestColdLoadGate_LoadsSerializePerInstance
+    ~ test    TestColdLoadGate_SameAdapterCoalesces
+    ~ test    TestColdLoadGate_WarmIncursNoLoadLatency
+    ~ test    TestNewSimulator_AdaptersWithoutCapacity
+    ~ test    TestResidentAdapterSet_ActiveRun_Deterministic
+    ~ test    TestResidentAdapterSet_CapacityBoundAcrossRun
+    ~ test    TestResidentAdapterSet_InertWhenNoLoRA
+    ~ test    TestResidentAdapterSet_MixedBaseAndAdapterTraffic
+    ~ test    TestResidentAdapterSet_PreemptionDoesNotDoubleCountLoad
+    ~ test    TestSaveResults_AlwaysEmitsHeader_ZeroCompletions
+    ~ test    TestSaveResults_ConservationFields
+    ~ test    TestSaveResults_DroppedUnservable_InJSON
+    ~ test    TestSaveResults_IncludesIncompleteRequests
+    ~ test    TestSaveResults_InstanceID_Default
+    ~ test    TestSaveResults_InstanceID_Empty
+    ~ test    TestSaveResults_InstanceID_InJSON
+    ~ test    TestSaveResults_LengthCappedRequests_InJSON
+    ~ test    TestSaveResults_NoWallClockFields
+    ~ test    TestSaveResults_PerRequestITL_InMilliseconds
+    ~ test    TestSaveResults_ZeroRuntime_NoInfinity
+    ~ test    TestSimulator_Determinism_ByteIdenticalJSON
+
+sim/cluster   +0/-0 surface, +0/-0/~1 invariants
+    ~ test    TestInstanceSimulator_EvictRequest_ReleasesAdapterPin
+
+sim/saturation   +4/-2 surface, +9/-2/~10 invariants
+    + func    ReduceAll   func(records []TraceRecord, windowUs int64) map[string]Level
+    + func    ReduceOne   func(records []TraceRecord, windowUs int64) Level
+    + method  Bank.Run   func(requests []github.com/inference-sim/inference-sim/sim.RequestMetrics) error
+    - func    NewBacklogDriftDetectorWithClassifier   func(classifier github.com/inference-sim/inference-sim/sim/workload.BacklogClassifier) Detector
+    - method  Bank.Classify   func(requests []github.com/inference-sim/inference-sim/sim.RequestMetrics, _ int) interface{}
+    + schema  CombinedReport.Final   map[string]Level
+    + test    TestBank_RunActuallyReplaysEvents
+    + test    TestBank_RunProducesNonEmptyTrace
+    + test    TestReduceAll_EmptyInputEmptyMap
+    + test    TestReduceAll_GroupsByDetector
+    + test    TestReduceAll_PerGroupWindowing
+    + test    TestReduceAll_SingleDetectorStillMap
+    + test    TestReduceOne_Contracts
+    + test    TestReduceOne_ExactWindowBoundaryInclusive
+    + test    TestWriteCombinedReport_FinalBlock
+    - test    TestBank_ClassifyActuallyReplaysEvents
+    - test    TestBank_SatisfiesBatchClassifierContract
+    ~ test    TestBank_AllEqualsExplicitList
+    ~ test    TestBank_Deterministic
+    ~ test    TestBank_SubsetMatchesRecordsUnderAll
+    ~ test    TestBank_ZeroRequestsEmptyTrace
+    ~ test    TestE2E_ExtractorParity_ByteIdenticalTrace
+    ~ test    TestE2E_ReplayComposite_WritesTrace
+    ~ test    TestE2E_ReplayEmptyInput_WritesEmptyTrace
+    ~ test    TestMetricsOutput_SaturationField
+    ~ test    TestWriteCombinedReport_ByteIdentical
+    ~ test    TestWriteCombinedReport_EmptyInput_WritesEmptyTrace
