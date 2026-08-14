@@ -2,6 +2,7 @@ package review
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
@@ -36,6 +37,94 @@ func contractMarkdown(contracts []delta.ContractChange) string {
 			test,
 		)
 	}
+	return b.String()
+}
+
+// contractDOT renders the interface-contract delta as Graphviz DOT (for the
+// optional contract.png). Each interface is a node; each implementer points at
+// it with an "implements" edge. Added implementers are green, removed are red
+// (dashed), and an uncovered implementer (an evidence gap) is outlined red.
+// Node ids are deterministic: i<n> for interfaces, m<n> for implementers, by
+// sorted order.
+func contractDOT(contracts []delta.ContractChange) string {
+	// Collect implementer nodes with a stable status per node.
+	type implState struct{ added, removed, uncovered bool }
+	impls := map[string]*implState{}
+	touch := func(id string) *implState {
+		if impls[id] == nil {
+			impls[id] = &implState{}
+		}
+		return impls[id]
+	}
+
+	ifaceNames := make([]string, 0, len(contracts))
+	for _, c := range contracts {
+		ifaceNames = append(ifaceNames, c.Interface)
+		for _, im := range c.ImplementersAdded {
+			touch(im).added = true
+		}
+		for _, im := range c.ImplementersRemoved {
+			touch(im).removed = true
+		}
+		for _, im := range c.Uncovered {
+			touch(im).uncovered = true
+		}
+	}
+	sort.Strings(ifaceNames)
+
+	ifaceID := map[string]string{}
+	for i, name := range ifaceNames {
+		ifaceID[name] = fmt.Sprintf("i%d", i)
+	}
+	implNames := make([]string, 0, len(impls))
+	for id := range impls {
+		implNames = append(implNames, id)
+	}
+	sort.Strings(implNames)
+	implID := map[string]string{}
+	for i, name := range implNames {
+		implID[name] = fmt.Sprintf("m%d", i)
+	}
+
+	var b strings.Builder
+	b.WriteString("digraph contract {\n")
+	b.WriteString("  rankdir=LR;\n")
+	b.WriteString("  node [fontname=\"Helvetica\"];\n")
+	// Interface nodes.
+	for _, name := range ifaceNames {
+		fmt.Fprintf(&b, "  %s [label=%q, shape=box, style=\"rounded,filled\", fillcolor=%q, color=%q];\n",
+			ifaceID[name], shortID(name), colFill, colUnchanged)
+	}
+	// Implementer nodes.
+	for _, name := range implNames {
+		st := impls[name]
+		stroke := colUnchanged
+		style := "filled"
+		switch {
+		case st.added:
+			stroke = colAdded
+		case st.removed:
+			stroke = colRemoved
+			style = "filled,dashed"
+		}
+		if st.uncovered {
+			stroke = colRemoved // an evidence gap is flagged red
+		}
+		fmt.Fprintf(&b, "  %s [label=%q, shape=ellipse, style=%q, fillcolor=\"#ffffff\", color=%q];\n",
+			implID[name], shortID(name), style, stroke)
+	}
+	// implements edges.
+	for _, c := range contracts {
+		for _, im := range c.ImplementersAdded {
+			fmt.Fprintf(&b, "  %s -> %s [label=\"implements\", color=%q, fontsize=9];\n",
+				implID[im], ifaceID[c.Interface], colAdded)
+		}
+		for _, im := range c.ImplementersRemoved {
+			fmt.Fprintf(&b, "  %s -> %s [label=\"implements\", color=%q, style=dashed, fontsize=9];\n",
+				implID[im], ifaceID[c.Interface], colRemoved)
+		}
+	}
+	b.WriteString("}\n")
 	return b.String()
 }
 

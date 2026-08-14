@@ -228,11 +228,22 @@ func WriteBundle(res *Result, outdir string, opts Options) error {
 		if err := write("contract.md", contractMarkdown(res.Contracts)); err != nil {
 			return err
 		}
+		// Only emit a contract graph when there is a membership change to draw.
+		haveContractGraph := len(res.Contracts) > 0
+		if haveContractGraph {
+			if err := write("contract.dot", contractDOT(res.Contracts)); err != nil {
+				return err
+			}
+		}
 		if !opts.NoPNG && dotAvailable() {
-			for _, c := range []struct{ dot, png string }{
+			pngJobs := []struct{ dot, png string }{
 				{"component.dot", "component.png"},
 				{"witness.dot", "witness.png"},
-			} {
+			}
+			if haveContractGraph {
+				pngJobs = append(pngJobs, struct{ dot, png string }{"contract.dot", "contract.png"})
+			}
+			for _, c := range pngJobs {
 				if err := renderPNG(filepath.Join(outdir, c.dot), filepath.Join(outdir, c.png)); err == nil {
 					artifacts = append(artifacts, c.png)
 				}

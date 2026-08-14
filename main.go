@@ -214,9 +214,10 @@ func usage() {
       --external                                include external packages
       --full                                    draw the whole graph, not just
                                                 the changed neighborhood
-  archon-go pr-review <repo> <base> <head>      CI review bundle: writes
+  archon-go pr-review [repo] <base> <head>      CI review bundle: writes
                                                 review.md + review.json (+ graph
                                                 artifacts) with a tiered verdict
+                                                (repo defaults to current dir)
       --out DIR                                 bundle directory (default .archon)
       --allow <file>                            enable BLOCK on off-baseline deps
       --depth N                                 component grouping depth (default 2)
@@ -400,11 +401,18 @@ func cmdPRReview(args []string) {
 			pos = append(pos, a)
 		}
 	}
-	if len(pos) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review <repo> <base> <head> [--out DIR] [--allow FILE] [--depth N] [--label-a S] [--label-b S] [--no-png]")
+	// Accept both `pr-review <base> <head>` (repo defaults to the current
+	// directory — the natural CI form, where the checkout IS the working dir)
+	// and `pr-review <repo> <base> <head>`.
+	switch len(pos) {
+	case 2:
+		opts.Repo, opts.Base, opts.Head = ".", pos[0], pos[1]
+	case 3:
+		opts.Repo, opts.Base, opts.Head = pos[0], pos[1], pos[2]
+	default:
+		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--depth N] [--label-a S] [--label-b S] [--no-png]")
 		os.Exit(2)
 	}
-	opts.Repo, opts.Base, opts.Head = pos[0], pos[1], pos[2]
 
 	gA := extractAt(opts.Repo, opts.Base)
 	gB := extractAt(opts.Repo, opts.Head)
