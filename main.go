@@ -28,6 +28,7 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/impact"
 	"github.com/AI-native-Systems-Research/archon/internal/reflexion"
 	"github.com/AI-native-Systems-Research/archon/internal/render"
+	"github.com/AI-native-Systems-Research/archon/internal/review"
 )
 
 func main() {
@@ -51,6 +52,8 @@ func main() {
 		cmdHealth(os.Args[2:])
 	case "reflexion":
 		cmdReflexion(os.Args[2:])
+	case "pr-review":
+		cmdPRReview(os.Args[2:])
 	default:
 		usage()
 	}
@@ -211,6 +214,14 @@ func usage() {
       --external                                include external packages
       --full                                    draw the whole graph, not just
                                                 the changed neighborhood
+  archon-go pr-review <repo> <base> <head>      CI review bundle: writes
+                                                review.md + review.json (+ graph
+                                                artifacts) with a tiered verdict
+      --out DIR                                 bundle directory (default .archon)
+      --allow <file>                            enable BLOCK on off-baseline deps
+      --depth N                                 component grouping depth (default 2)
+      --label-a / --label-b S                   human labels for base/head
+      --no-png                                  skip Graphviz PNG rendering
 `)
 	os.Exit(2)
 }
@@ -341,6 +352,87 @@ func cmdDelta(args []string) {
 		return
 	}
 	fmt.Print(d.Render())
+}
+
+// cmdPRReview builds a CI-friendly review bundle for a PR: one command that
+// extracts the base and head commits (via ephemeral worktrees — the working
+// tree is never disturbed), computes the architectural delta, and writes
+// review.md + review.json + optional graph artifacts into --out (default
+// .archon). It is report-only: the process always exits 0, and the verdict
+// (including BLOCK) is carried in review.json for the caller's CI to act on.
+func cmdPRReview(args []string) {
+	opts := review.Options{Depth: 2, Out: ".archon"}
+	allowPath := ""
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		next := func() string {
+			if i+1 >= len(args) {
+				usage()
+			}
+			i++
+			return args[i]
+		}
+		switch {
+		case a == "--out":
+			opts.Out = next()
+		case strings.HasPrefix(a, "--out="):
+			opts.Out = strings.TrimPrefix(a, "--out=")
+		case a == "--allow":
+			allowPath = next()
+		case strings.HasPrefix(a, "--allow="):
+			allowPath = strings.TrimPrefix(a, "--allow=")
+		case a == "--depth":
+			opts.Depth = atoiOr(next(), 2)
+		case strings.HasPrefix(a, "--depth="):
+			opts.Depth = atoiOr(strings.TrimPrefix(a, "--depth="), 2)
+		case a == "--label-a":
+			opts.LabelA = next()
+		case strings.HasPrefix(a, "--label-a="):
+			opts.LabelA = strings.TrimPrefix(a, "--label-a=")
+		case a == "--label-b":
+			opts.LabelB = next()
+		case strings.HasPrefix(a, "--label-b="):
+			opts.LabelB = strings.TrimPrefix(a, "--label-b=")
+		case a == "--no-png":
+			opts.NoPNG = true
+		default:
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review <repo> <base> <head> [--out DIR] [--allow FILE] [--depth N] [--label-a S] [--label-b S] [--no-png]")
+		os.Exit(2)
+	}
+	opts.Repo, opts.Base, opts.Head = pos[0], pos[1], pos[2]
+
+	gA := extractAt(opts.Repo, opts.Base)
+	gB := extractAt(opts.Repo, opts.Head)
+	d := delta.Compute(gA, gB)
+	if allowPath != "" {
+		d.CheckContract(gB, loadAllow(allowPath))
+	}
+
+	res := review.Build(gA, gB, d, opts)
+	if err := review.WriteBundle(res, opts.Out, opts); err != nil {
+		fatal("write bundle: %v", err)
+	}
+	// Report-only: a one-line verdict to stderr, exit 0 regardless.
+	fmt.Fprintf(os.Stderr, "archon pr-review: %s — bundle written to %s\n", res.Verdict, opts.Out)
+}
+
+func atoiOr(s string, def int) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return def
+		}
+		n = n*10 + int(c-'0')
+	}
+	if s == "" {
+		return def
+	}
+	return n
 }
 
 // cmdImpact reports the blast radius of a package: which internal packages

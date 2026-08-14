@@ -18,6 +18,7 @@ R=/path/to/your/repo
 ./archon-go health $R                                   # is it healthy?
 ./archon-go render $R --full --format=dot | dot -Tpng -o arch.png   # draw it
 ./archon-go delta  $R HEAD~1 HEAD --summary             # what did the last commit change?
+./archon-go pr-review $R <base> <head> --out .archon    # CI review bundle (review.md + json)
 ```
 
 The full walkthrough — every command, with example output — is in
@@ -28,7 +29,7 @@ see the reviewer wrapper: [`reviewer/review.py`](reviewer/review.py) and
 ## Repository layout
 
 - **`main.go`** — the `archon-go` CLI (subcommands: `extract`, `delta`, `render`,
-  `contract`, `evidence`, `impact`, `health`, `reflexion`).
+  `contract`, `evidence`, `impact`, `health`, `reflexion`, `pr-review`).
 - **`internal/`** — the analysis libraries (`extract`, `graph`, `delta`,
   `evidence`, `impact`, `health`, `reflexion`, `render`).
 - **`cmd/`** — auxiliary CLI tools (`consumes`, `callgraph`, `eventflow`), each

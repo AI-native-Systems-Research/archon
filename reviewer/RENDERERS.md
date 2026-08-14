@@ -174,21 +174,34 @@ python3 reviewer/review.py $R <base> <head> --level 3     # CONTRACTS (witness +
 
 ## 5. What CI should call
 
-When deciding what CI should call, don't think "which one function?" — CI should
-call the **wrapper**. `review.py --level 3` runs the whole chain (surface →
-components → witness + contract) in one deterministic command, and a CI runner is
-a clean, ephemeral checkout, so the level-3 `consumes` checkout is free of the
-"don't disturb a live repo" caveat.
+**CI should call `archon-go pr-review`** — the single Go subcommand that bundles
+the whole story. It needs nothing but the one binary (no Python) and no
+working-tree checkout: each commit is read through an ephemeral git worktree, and
+the interface-contract delta is derived from the delta itself, not from
+`consumes`.
 
-A CI view on a PR would then:
+```yaml
+# in a GitHub Action step (the CI glue itself is the mentor's job):
+- run: |
+    ./archon-go pr-review "$REPO" "$BASE" "$HEAD" --out .archon --allow allow.json
+    cat .archon/review.md >> "$GITHUB_STEP_SUMMARY"   # Mermaid renders inline
+- uses: actions/upload-artifact@v4
+  with: { name: archon-review, path: .archon/ }
+```
 
-1. run `review.py <merge-base> <head> --level 3`,
-2. post a comment = the `delta --summary` verdict + the component **Mermaid**
-   (renders inline) + the witness/contract **text** blocks,
-3. upload the level-1/2/3 **PNGs** as run artifacts,
-4. fail the check if `delta --allow allow.json` reports a new off-baseline
-   dependency.
+`pr-review` writes a **bundle** (`review.md` + `review.json` + `component`/
+`witness` graphs + `contract.md`) and is **report-only**: it always exits 0, and
+the tiered verdict — `FAST_TRACK` / `REVIEW_INVARIANTS` / `REVIEW_ARCHITECTURE` /
+`BLOCK` — is carried in `review.json` for the CI to act on (e.g. fail the check on
+`"verdict":"BLOCK"`). `review.md` is written for `>> $GITHUB_STEP_SUMMARY` or a PR
+comment: it leads with the verdict and, only when the change is architectural,
+embeds the component **Mermaid** (renders inline on GitHub) plus the
+witness/contract/violation **tables**. The `.png` files are for
+`upload-artifact` (GitHub does not render local PNGs inline). See the full
+walkthrough of the command and its flags in
+[`USERGUIDE.md`](../USERGUIDE.md) (§4, `pr-review`).
 
-The renderers for all of this already exist; the only new work is the CI glue
-(auto base/head detection, the comment poster, and a fail signal — `delta`
-currently detects an allow-list violation but still exits `0`).
+`pr-review` is the faithful Go port of the level-3 chain below; the
+`reviewer/review.py --level N` **wrapper remains the interactive, human path**
+(three altitudes, per-view PNGs, `--reuse`/`--from`/`--interface` focus flags).
+Use the wrapper when exploring a PR by hand; use `pr-review` in CI.
