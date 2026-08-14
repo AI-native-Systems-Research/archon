@@ -22,9 +22,10 @@ type Component struct {
 
 // ComponentEdge is an aggregated arrow between two components.
 type ComponentEdge struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-	Kind string `json:"kind"` // "dep" (import/call) or "contract" (implements)
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Kind   string `json:"kind"`   // "dep" (import/call) or "contract" (implements)
+	Change string `json:"change"` // "" (unchanged), "added", "removed"
 }
 
 // ComponentView is the component map (from the head graph) with the PR painted
@@ -52,19 +53,22 @@ func compKey(relPath string, depth int) string {
 	return strings.Join(segs, "/")
 }
 
-// buildComponents derives the component boxes from gB's internal packages,
-// aggregates internal edges to the component altitude, flags cycles, and paints
-// the delta.
-func buildComponents(gB *graph.Graph, d *delta.Delta, depth int) ComponentView {
+// buildComponents derives the component boxes from both graphs' internal
+// packages, aggregates internal edges to the component altitude, flags cycles,
+// and paints the delta — including coloring edges as added/removed.
+func buildComponents(gA, gB *graph.Graph, d *delta.Delta, depth int) ComponentView {
 	module := gB.Module
+	if module == "" {
+		module = gA.Module
+	}
 	cv := ComponentView{Module: module, Depth: depth}
 
-	// pkgComp maps an internal package path -> its component name (from gB).
+	// pkgComp maps an internal package path -> its component name (union of both).
 	pkgComp := map[string]string{}
 	members := map[string]map[string]bool{}
-	for _, p := range gB.Packages {
+	addPkg := func(p graph.Package) {
 		if !p.Internal {
-			continue
+			return
 		}
 		r := rel(module, p.Path)
 		c := compKey(r, depth)
@@ -74,11 +78,19 @@ func buildComponents(gB *graph.Graph, d *delta.Delta, depth int) ComponentView {
 		}
 		members[c][r] = true
 	}
+	for _, p := range gA.Packages {
+		addPkg(p)
+	}
+	for _, p := range gB.Packages {
+		addPkg(p)
+	}
 
-	// Aggregate internal dep/contract edges to component altitude, dropping
-	// self-loops and deduplicating (component,component,kind).
-	edgeSet := map[string]ComponentEdge{}
-	for _, e := range gB.Edges {
+	// Collect component-altitude edges from both graphs.
+	type compEdgeKey struct{ from, to, kind string }
+	edgesInA := map[compEdgeKey]bool{}
+	edgesInB := map[compEdgeKey]bool{}
+
+	classifyEdge := func(e graph.Edge) (compEdgeKey, bool) {
 		var kind string
 		switch e.Kind {
 		case "import", "call":
@@ -86,14 +98,45 @@ func buildComponents(gB *graph.Graph, d *delta.Delta, depth int) ComponentView {
 		case "implements":
 			kind = "contract"
 		default:
-			continue // config/service/capability/protocol -> external, out of scope
+			return compEdgeKey{}, false
 		}
 		cf, okF := pkgComp[e.From]
 		ct, okT := pkgComp[e.To]
 		if !okF || !okT || cf == ct {
-			continue
+			return compEdgeKey{}, false
 		}
-		ce := ComponentEdge{From: cf, To: ct, Kind: kind}
+		return compEdgeKey{cf, ct, kind}, true
+	}
+
+	for _, e := range gA.Edges {
+		if k, ok := classifyEdge(e); ok {
+			edgesInA[k] = true
+		}
+	}
+	for _, e := range gB.Edges {
+		if k, ok := classifyEdge(e); ok {
+			edgesInB[k] = true
+		}
+	}
+
+	// Merge: classify each edge as added/removed/unchanged.
+	allEdgeKeys := map[compEdgeKey]bool{}
+	for k := range edgesInA {
+		allEdgeKeys[k] = true
+	}
+	for k := range edgesInB {
+		allEdgeKeys[k] = true
+	}
+	edgeSet := map[string]ComponentEdge{}
+	for k := range allEdgeKeys {
+		change := ""
+		switch {
+		case edgesInB[k] && !edgesInA[k]:
+			change = "added"
+		case edgesInA[k] && !edgesInB[k]:
+			change = "removed"
+		}
+		ce := ComponentEdge{From: k.from, To: k.to, Kind: k.kind, Change: change}
 		edgeSet[ce.From+"\x00"+ce.Kind+"\x00"+ce.To] = ce
 	}
 
@@ -302,16 +345,35 @@ func componentMermaid(cv ComponentView) string {
 		}
 		fmt.Fprintf(&b, "  %s[\"%s\"]\n", id[c.Name], mermaidEscape(label))
 	}
+	type edgeStyle struct {
+		color  string
+		dashed bool
+	}
+	var edgeStyles []edgeStyle
 	for _, e := range cv.Edges {
 		from, okF := id[e.From]
 		to, okT := id[e.To]
 		if !okF || !okT {
 			continue
 		}
-		if e.Kind == "contract" {
+		st := edgeStyle{color: colUnchanged}
+		switch e.Change {
+		case "added":
+			st = edgeStyle{color: colAdded}
+		case "removed":
+			st = edgeStyle{color: colRemoved, dashed: true}
+		}
+		if e.Kind == "contract" || st.dashed {
 			fmt.Fprintf(&b, "  %s -. implements .-> %s\n", from, to)
 		} else {
 			fmt.Fprintf(&b, "  %s --> %s\n", from, to)
+		}
+		edgeStyles = append(edgeStyles, st)
+	}
+	// linkStyle for edge colors.
+	for i, s := range edgeStyles {
+		if s.color != colUnchanged {
+			fmt.Fprintf(&b, "  linkStyle %d stroke:%s,stroke-width:2px;\n", i, s.color)
 		}
 	}
 	// Class definitions (colors) + assignments.
@@ -364,10 +426,18 @@ func componentDOT(cv ComponentView) string {
 		if !okF || !okT {
 			continue
 		}
+		eColor := colUnchanged
+		eStyle := "solid"
+		switch e.Change {
+		case "added":
+			eColor = colAdded
+		case "removed":
+			eColor, eStyle = colRemoved, "dashed"
+		}
 		if e.Kind == "contract" {
-			fmt.Fprintf(&b, "  %s -> %s [style=dashed, label=\"implements\", color=%q, fontsize=9];\n", from, to, colUnchanged)
+			fmt.Fprintf(&b, "  %s -> %s [style=dashed, label=\"implements\", color=%q, fontcolor=%q, fontsize=9, penwidth=2];\n", from, to, eColor, eColor)
 		} else {
-			fmt.Fprintf(&b, "  %s -> %s [color=%q];\n", from, to, colUnchanged)
+			fmt.Fprintf(&b, "  %s -> %s [color=%q, style=%s, penwidth=2];\n", from, to, eColor, eStyle)
 		}
 	}
 	b.WriteString("}\n")
