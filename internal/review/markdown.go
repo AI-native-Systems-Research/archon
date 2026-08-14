@@ -10,27 +10,35 @@ import (
 
 // renderMarkdown builds review.md — the primary human interface, designed for
 // `cat review.md >> $GITHUB_STEP_SUMMARY` or a PR comment. It leads with the
-// verdict and, for architectural changes, embeds a GitHub-renderable Mermaid
-// diagram plus the witness/contract/violation tables. Fast-track PRs stop at the
-// one-line note.
+// verdict. A NO_CHANGE PR stops at the one-line note (plus a short pointer if a
+// guarded promise was touched). An ARCHITECTURAL_CHANGE PR embeds all three
+// views inline as GitHub-renderable Mermaid, each with its detail table.
 func renderMarkdown(res *Result) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "## ARCHON PR review — `%s` → `%s`\n\n", res.LabelA, res.LabelB)
 	b.WriteString("_Deterministic · no LLM · package-altitude architecture._\n\n")
 
-	// Verdict badge line.
+	// Verdict line.
 	fmt.Fprintf(&b, "**Verdict: `%s`**\n\n%s\n\n", res.Verdict, res.Summary)
 
-	if res.Verdict == FastTrack {
+	if res.Verdict == NoChange {
+		// The boundary didn't move. If a guarded promise still changed, point at
+		// it in one line — the full detail lives in review.json — but the verdict
+		// stays "no architectural change".
+		if n := res.Counts.Invariants + res.Counts.SchemaChanged; n > 0 {
+			fmt.Fprintf(&b, "_Note: %d guarded promise(s) (invariant / schema) also changed within the existing boundary — see `review.json`._\n\n", n)
+		}
 		writeFooter(&b, res)
 		return b.String()
 	}
 
-	// Counts line — a quick tally for any non-fast-track PR.
+	// Counts line — a quick tally.
 	writeCounts(&b, res)
 
-	if res.Verdict == Block && len(res.Violations) > 0 {
+	// An allow-list violation is still surfaced when present (it implies an added
+	// edge, so we are already in the architectural-change branch).
+	if len(res.Violations) > 0 {
 		b.WriteString("\n### ⛔ Allow-list violations\n\n")
 		b.WriteString("| From | → | To | Kind | Introduced by this PR |\n")
 		b.WriteString("|---|---|---|---|---|\n")
@@ -45,35 +53,49 @@ func renderMarkdown(res *Result) string {
 		b.WriteString("\n")
 	}
 
-	// Architectural views (component + witness + contract) for boundary moves.
-	if res.Verdict == ReviewArchitecture || res.Verdict == Block {
-		b.WriteString("### Component view\n\n")
-		b.WriteString("_Green = boundary moved · blue-dashed = surface/schema/invariant only · grey = unchanged. ⟲ marks a dependency cycle._\n\n")
-		b.WriteString("```mermaid\n")
-		b.WriteString(res.Components.Mermaid)
-		if !strings.HasSuffix(res.Components.Mermaid, "\n") {
-			b.WriteString("\n")
-		}
-		b.WriteString("```\n\n")
+	// The three views, each embedded inline as Mermaid.
+	b.WriteString("### Component view\n\n")
+	b.WriteString("_Green = boundary moved · blue-dashed = surface/schema/invariant only · grey = unchanged. ⟲ marks a dependency cycle._\n\n")
+	writeMermaid(&b, res.Components.Mermaid)
 
-		b.WriteString("### Witness delta — full vs partial decoupling\n\n")
-		if v := witnessVerdict(res.Witnesses); v != "" {
-			fmt.Fprintf(&b, "**%s**\n\n", v)
-		}
-		writeWitnessTable(&b, res.Witnesses)
-
-		b.WriteString("\n### Interface-contract delta\n\n")
-		b.WriteString(contractMarkdown(res.Contracts))
-		b.WriteString("\n")
+	b.WriteString("### Witness delta — full vs partial decoupling\n\n")
+	if v := witnessVerdict(res.Witnesses); v != "" {
+		fmt.Fprintf(&b, "**%s**\n\n", v)
 	}
+	if m := witnessMermaid(res.Witnesses); m != "" {
+		b.WriteString("_Red dashed = connection fully removed · red solid = weakened (still coupled) · green = added/strengthened · blue = churned._\n\n")
+		writeMermaid(&b, m)
+	}
+	writeWitnessTable(&b, res.Witnesses)
 
-	// Invariant / schema / surface detail (all tiers above fast-track show these).
+	b.WriteString("\n### Interface-contract delta\n\n")
+	if m := contractMermaid(res.Contracts); m != "" {
+		b.WriteString("_Green = implementer added · red dashed = implementer removed._\n\n")
+		writeMermaid(&b, m)
+	}
+	b.WriteString(contractMarkdown(res.Contracts))
+	b.WriteString("\n")
+
+	// Invariant / schema / surface detail.
 	writeInvariantTable(&b, res.Invariants)
 	writeSchemaTable(&b, res.Schema_)
 	writeSurfaceTable(&b, res.Surface)
 
 	writeFooter(&b, res)
 	return b.String()
+}
+
+// writeMermaid emits a fenced ```mermaid block, ensuring a trailing newline.
+func writeMermaid(b *strings.Builder, src string) {
+	if strings.TrimSpace(src) == "" {
+		return
+	}
+	b.WriteString("```mermaid\n")
+	b.WriteString(src)
+	if !strings.HasSuffix(src, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("```\n\n")
 }
 
 func writeCounts(b *strings.Builder, res *Result) {
@@ -135,13 +157,20 @@ func cellCode(items []string, noun string, total int) string {
 	}
 	quoted := make([]string, len(items))
 	for i, it := range items {
-		quoted[i] = "`" + it + "`"
+		quoted[i] = "`" + tableCell(it) + "`"
 	}
 	s := strings.Join(quoted, ", ")
 	if total > len(items) {
 		s += fmt.Sprintf(" _(+%d more %s)_", total-len(items), noun)
 	}
 	return s
+}
+
+// tableCell escapes a literal "|" so it does not break a GitHub Markdown table
+// (a raw pipe ends the cell even inside a code span). Witness strings like
+// "Bank |= BatchClassifier" would otherwise mangle the row.
+func tableCell(s string) string {
+	return strings.ReplaceAll(s, "|", "\\|")
 }
 
 func capList(xs []string, n int) []string {

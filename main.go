@@ -214,15 +214,17 @@ func usage() {
       --external                                include external packages
       --full                                    draw the whole graph, not just
                                                 the changed neighborhood
-  archon-go pr-review [repo] <base> <head>      CI review bundle: writes
-                                                review.md + review.json (+ graph
-                                                artifacts) with a tiered verdict
-                                                (repo defaults to current dir)
+  archon-go pr-review [repo] <base> <head>      CI review bundle: writes a
+                                                self-contained review.md +
+                                                review.json with a binary verdict
+                                                (NO_CHANGE / ARCHITECTURAL_CHANGE);
+                                                repo defaults to current dir
       --out DIR                                 bundle directory (default .archon)
-      --allow <file>                            enable BLOCK on off-baseline deps
+      --allow <file>                            record off-baseline deps as violations
       --depth N                                 component grouping depth (default 2)
       --label-a / --label-b S                   human labels for base/head
-      --no-png                                  skip Graphviz PNG rendering
+      --emit-artifacts                          also write .dot/.mmd/.md (+ PNGs
+                                                if Graphviz is installed)
 `)
 	os.Exit(2)
 }
@@ -358,9 +360,9 @@ func cmdDelta(args []string) {
 // cmdPRReview builds a CI-friendly review bundle for a PR: one command that
 // extracts the base and head commits (via ephemeral worktrees — the working
 // tree is never disturbed), computes the architectural delta, and writes
-// review.md + review.json + optional graph artifacts into --out (default
-// .archon). It is report-only: the process always exits 0, and the verdict
-// (including BLOCK) is carried in review.json for the caller's CI to act on.
+// a self-contained review.md + review.json into --out (default .archon). It is
+// report-only: the process always exits 0, and the binary verdict (NO_CHANGE or
+// ARCHITECTURAL_CHANGE) is carried in review.json for the caller's CI to act on.
 func cmdPRReview(args []string) {
 	opts := review.Options{Depth: 2, Out: ".archon"}
 	allowPath := ""
@@ -395,8 +397,8 @@ func cmdPRReview(args []string) {
 			opts.LabelB = next()
 		case strings.HasPrefix(a, "--label-b="):
 			opts.LabelB = strings.TrimPrefix(a, "--label-b=")
-		case a == "--no-png":
-			opts.NoPNG = true
+		case a == "--emit-artifacts":
+			opts.EmitArtifacts = true
 		default:
 			pos = append(pos, a)
 		}
@@ -410,7 +412,7 @@ func cmdPRReview(args []string) {
 	case 3:
 		opts.Repo, opts.Base, opts.Head = pos[0], pos[1], pos[2]
 	default:
-		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--depth N] [--label-a S] [--label-b S] [--no-png]")
+		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
 		os.Exit(2)
 	}
 

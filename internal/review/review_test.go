@@ -40,19 +40,19 @@ func baseGraph() *graph.Graph {
 	return g
 }
 
-func TestVerdictFastTrack(t *testing.T) {
+func TestVerdictNoChange(t *testing.T) {
 	g := baseGraph()
 	d := delta.Compute(g, g) // no change
 	res := Build(g, g, d, Options{})
-	if res.Verdict != FastTrack {
-		t.Fatalf("want FAST_TRACK, got %s", res.Verdict)
+	if res.Verdict != NoChange {
+		t.Fatalf("want NO_CHANGE, got %s", res.Verdict)
 	}
 	if !strings.Contains(res.Summary, "fast-track") {
 		t.Errorf("summary %q missing fast-track", res.Summary)
 	}
 }
 
-func TestVerdictReviewArchitecture(t *testing.T) {
+func TestVerdictArchitecturalChange(t *testing.T) {
 	a := baseGraph()
 	// head removes the implements edge (a fully decoupled from b at that seam).
 	b := &graph.Graph{
@@ -66,8 +66,8 @@ func TestVerdictReviewArchitecture(t *testing.T) {
 	b.Sort()
 	d := delta.Compute(a, b)
 	res := Build(a, b, d, Options{})
-	if res.Verdict != ReviewArchitecture {
-		t.Fatalf("want REVIEW_ARCHITECTURE, got %s (empty=%v)", res.Verdict, res.EmptyAtPackageAltitude)
+	if res.Verdict != ArchitecturalChange {
+		t.Fatalf("want ARCHITECTURAL_CHANGE, got %s (empty=%v)", res.Verdict, res.EmptyAtPackageAltitude)
 	}
 
 	// Witness: implements edge REMOVED (full), call edge WEAKENED (partial).
@@ -91,7 +91,10 @@ func TestVerdictReviewArchitecture(t *testing.T) {
 	}
 }
 
-func TestVerdictReviewInvariants(t *testing.T) {
+// An invariant-only change (the package boundary did not move) is NO_CHANGE
+// under the binary verdict — the guarded-promise detail still rides along in
+// review.json, but it does not trip an architecture review.
+func TestVerdictInvariantOnlyIsNoChange(t *testing.T) {
 	a := baseGraph()
 	// Same boundary, but head adds a guarding test (invariant) to package a.
 	b := baseGraph()
@@ -105,12 +108,20 @@ func TestVerdictReviewInvariants(t *testing.T) {
 	b.Sort()
 	d := delta.Compute(a, b)
 	res := Build(a, b, d, Options{})
-	if res.Verdict != ReviewInvariants {
-		t.Fatalf("want REVIEW_INVARIANTS, got %s", res.Verdict)
+	if res.Verdict != NoChange {
+		t.Fatalf("want NO_CHANGE (invariant-only, empty boundary), got %s", res.Verdict)
+	}
+	// The note in review.md should still point at the touched promise.
+	md := renderMarkdown(res)
+	if !strings.Contains(md, "guarded promise") {
+		t.Errorf("review.md should note the touched guarded promise:\n%s", md)
 	}
 }
 
-func TestVerdictBlock(t *testing.T) {
+// An added dependency moves the boundary -> ARCHITECTURAL_CHANGE. When an
+// allow-list is supplied, the off-baseline edge is still recorded as a violation
+// (surfaced in the report), but there is no separate BLOCK verdict.
+func TestVerdictViolationRecorded(t *testing.T) {
 	a := baseGraph()
 	// head adds a new dependency a -> c that the allow-list forbids.
 	b := &graph.Graph{
@@ -130,8 +141,8 @@ func TestVerdictBlock(t *testing.T) {
 	}
 	d.CheckContract(b, allow)
 	res := Build(a, b, d, Options{})
-	if res.Verdict != Block {
-		t.Fatalf("want BLOCK, got %s", res.Verdict)
+	if res.Verdict != ArchitecturalChange {
+		t.Fatalf("want ARCHITECTURAL_CHANGE, got %s", res.Verdict)
 	}
 	if res.Counts.Violations == 0 {
 		t.Errorf("expected a violation recorded")
