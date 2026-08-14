@@ -194,7 +194,7 @@ func TestComponentCycleDetection(t *testing.T) {
 	}
 	g.Sort()
 	d := delta.Compute(g, g)
-	cv := buildComponents(g, d, 2)
+	cv := buildComponents(g, g, d, 2)
 	for _, c := range cv.Components {
 		if !c.InCycle {
 			t.Errorf("component %s should be flagged in-cycle", c.Name)

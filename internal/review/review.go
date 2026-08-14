@@ -155,7 +155,7 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 		Violations:             d.ContractViolations,
 	}
 
-	res.Components = buildComponents(gB, d, depth)
+	res.Components = buildComponents(gA, gB, d, depth)
 	res.Witnesses = buildWitnesses(gA, gB)
 
 	res.Counts = Counts{

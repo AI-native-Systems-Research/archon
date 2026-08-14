@@ -55,7 +55,7 @@ func renderMarkdown(res *Result) string {
 
 	// The three views, each embedded inline as Mermaid.
 	b.WriteString("### Component view\n\n")
-	b.WriteString("_Green = boundary moved · blue-dashed = surface/schema/invariant only · grey = unchanged. ⟲ marks a dependency cycle._\n\n")
+	b.WriteString("_Nodes: green = boundary moved · blue-dashed = surface/schema/invariant only · grey = unchanged. Edges: green = added · red-dashed = removed · grey = unchanged. ⟲ = dependency cycle._\n\n")
 	writeMermaid(&b, res.Components.Mermaid)
 
 	b.WriteString("### Witness delta — full vs partial decoupling\n\n")
