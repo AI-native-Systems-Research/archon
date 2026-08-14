@@ -291,49 +291,46 @@ computes the delta, and writes a **review bundle** into `--out` (default
 ./archon-go pr-review $R <base> <head> --out .archon
 ```
 
-It is **report-only**: it always exits 0. The verdict — including `BLOCK` — is
-carried in `review.json` so your CI decides whether to fail the check.
+It is **report-only**: it always exits 0. The verdict is carried in `review.json`
+so your CI decides whether to fail the check.
 
-**What you'll get** in the bundle:
+**What you'll get** — a self-contained bundle, just two files by default:
 
 ```
 .archon/
 ├── review.md      # primary: paste into a PR comment / >> $GITHUB_STEP_SUMMARY
-├── review.json    # machine-readable result (schema: archon.pr-review/v1)
-├── component.mmd  # component diagram (Mermaid, also embedded in review.md)
-├── component.dot  # + component.png if Graphviz is installed
-├── witness.dot    # + witness.png if Graphviz is installed
-└── contract.md    # interface-contract delta table
+└── review.json    # machine-readable result (schema: archon.pr-review/v1)
 ```
 
 `review.md` leads with the **verdict**, then — only when the change is
-architectural — embeds a GitHub-renderable **Mermaid** component diagram and the
-witness / contract / (violation) tables. A CI job does just:
+architectural — embeds all three views (component, witness, contract) as
+GitHub-renderable **Mermaid**, each followed by its detail table. No separate
+image files are needed: the diagrams live inline. A CI job does just:
 
 ```sh
 ./archon-go pr-review $R "$BASE" "$HEAD" --out .archon
 cat .archon/review.md >> "$GITHUB_STEP_SUMMARY"   # renders the Mermaid inline
 ```
 
-**The verdict is tiered** (least to most review needed):
+**The verdict is binary:**
 
 | verdict | meaning |
 |---|---|
-| `FAST_TRACK` | internal-only at the package altitude — `review.md` is a one-line note, no graphs |
-| `REVIEW_INVARIANTS` | boundary empty, but a guarded promise (invariant or wire/DB schema) changed |
-| `REVIEW_ARCHITECTURE` | a package boundary moved — full component + witness + contract views |
-| `BLOCK` | the PR introduced a dependency the box's allow-list forbids (needs `--allow`) |
+| `NO_CHANGE` | no package boundary moved — `review.md` is a one-line fast-track note (plus a pointer if a guarded promise / schema changed within the existing boundary) |
+| `ARCHITECTURAL_CHANGE` | a package boundary moved — full component + witness + contract views, all embedded as Mermaid |
 
-**Flags:** `--out DIR` (default `.archon`), `--allow FILE` (enables `BLOCK`
-detection against an allow-list baseline from `archon-go contract`), `--depth N`
-(component grouping granularity, default 2), `--label-a/-b S` (human labels for
-base/head), `--no-png` (skip Graphviz).
+**Flags:** `--out DIR` (default `.archon`), `--allow FILE` (records off-baseline
+dependencies as violations, against a baseline from `archon-go contract`),
+`--depth N` (component grouping granularity, default 2), `--label-a/-b S` (human
+labels for base/head), `--emit-artifacts` (also write the `.mmd`/`.dot`/`.md`
+sources and PNGs — off by default, since everything is already embedded in
+`review.md`).
 
 **What you'll see — a boundary-moving PR** (inference-sim #1546, which decoupled
 `sim/saturation`):
 
 ```
-archon pr-review: REVIEW_ARCHITECTURE — bundle written to .archon
+archon pr-review: ARCHITECTURAL_CHANGE — bundle written to .archon
 ```
 
 and `review.md`'s witness table distinguishes the full decoupling from the

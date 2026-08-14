@@ -128,6 +128,97 @@ func contractDOT(contracts []delta.ContractChange) string {
 	return b.String()
 }
 
+// contractMermaid renders the interface-contract delta as a GitHub-renderable
+// Mermaid graph, so review.md carries the picture inline (no PNG needed). Each
+// interface is a box; each changed implementer points at it with an "implements"
+// edge — green solid for an added implementer, red dashed for a removed one.
+// Node ids: i<n> for interfaces, m<n> for implementers, by sorted order. Edge
+// colors are applied via linkStyle by declaration index.
+func contractMermaid(contracts []delta.ContractChange) string {
+	if len(contracts) == 0 {
+		return ""
+	}
+	// Only draw interfaces whose membership actually changed.
+	ifaceNames := make([]string, 0, len(contracts))
+	implSet := map[string]bool{}
+	for _, c := range contracts {
+		if len(c.ImplementersAdded) == 0 && len(c.ImplementersRemoved) == 0 {
+			continue
+		}
+		ifaceNames = append(ifaceNames, c.Interface)
+		for _, im := range c.ImplementersAdded {
+			implSet[im] = true
+		}
+		for _, im := range c.ImplementersRemoved {
+			implSet[im] = true
+		}
+	}
+	if len(ifaceNames) == 0 {
+		return ""
+	}
+	sort.Strings(ifaceNames)
+	ifaceID := map[string]string{}
+	for i, name := range ifaceNames {
+		ifaceID[name] = fmt.Sprintf("i%d", i)
+	}
+	implNames := make([]string, 0, len(implSet))
+	for id := range implSet {
+		implNames = append(implNames, id)
+	}
+	sort.Strings(implNames)
+	implID := map[string]string{}
+	for i, name := range implNames {
+		implID[name] = fmt.Sprintf("m%d", i)
+	}
+
+	var b strings.Builder
+	b.WriteString("graph LR\n")
+	for _, name := range ifaceNames {
+		fmt.Fprintf(&b, "  %s[\"%s\"]\n", ifaceID[name], mermaidEscape(shortID(name)))
+	}
+	for _, name := range implNames {
+		fmt.Fprintf(&b, "  %s(\"%s\")\n", implID[name], mermaidEscape(shortID(name)))
+	}
+	// Edges in a deterministic order: by interface (sorted), added then removed.
+	type style struct {
+		color  string
+		dashed bool
+	}
+	var styles []style
+	for _, name := range ifaceNames {
+		var c delta.ContractChange
+		for _, cc := range contracts {
+			if cc.Interface == name {
+				c = cc
+				break
+			}
+		}
+		added := sortedCopy(c.ImplementersAdded)
+		removed := sortedCopy(c.ImplementersRemoved)
+		for _, im := range added {
+			fmt.Fprintf(&b, "  %s -->|implements| %s\n", implID[im], ifaceID[name])
+			styles = append(styles, style{color: colAdded})
+		}
+		for _, im := range removed {
+			fmt.Fprintf(&b, "  %s -. implements .-> %s\n", implID[im], ifaceID[name])
+			styles = append(styles, style{color: colRemoved, dashed: true})
+		}
+	}
+	for i, s := range styles {
+		fmt.Fprintf(&b, "  linkStyle %d stroke:%s,stroke-width:2px;\n", i, s.color)
+	}
+	return b.String()
+}
+
+// sortedCopy returns a sorted copy of ids (without mutating the input), so the
+// edge order in contractMermaid is deterministic.
+func sortedCopy(ids []string) []string {
+	out := make([]string, len(ids))
+	copy(out, ids)
+	sort.Strings(out)
+	return out
+}
+
 // shortID trims a "pkgpath.Symbol" identifier to "pkgtail.Symbol" (the segment
 // after the last "/"), for readable tables.
 func shortID(id string) string {

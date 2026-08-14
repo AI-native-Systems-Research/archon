@@ -183,22 +183,21 @@ the interface-contract delta is derived from the delta itself, not from
 ```yaml
 # in a GitHub Action step (the CI glue itself is the mentor's job):
 - run: |
-    ./archon-go pr-review "$REPO" "$BASE" "$HEAD" --out .archon --allow allow.json
+    ./archon-go pr-review "$REPO" "$BASE" "$HEAD" --out .archon
     cat .archon/review.md >> "$GITHUB_STEP_SUMMARY"   # Mermaid renders inline
-- uses: actions/upload-artifact@v4
-  with: { name: archon-review, path: .archon/ }
 ```
 
-`pr-review` writes a **bundle** (`review.md` + `review.json` + `component`/
-`witness` graphs + `contract.md`) and is **report-only**: it always exits 0, and
-the tiered verdict — `FAST_TRACK` / `REVIEW_INVARIANTS` / `REVIEW_ARCHITECTURE` /
-`BLOCK` — is carried in `review.json` for the CI to act on (e.g. fail the check on
-`"verdict":"BLOCK"`). `review.md` is written for `>> $GITHUB_STEP_SUMMARY` or a PR
-comment: it leads with the verdict and, only when the change is architectural,
-embeds the component **Mermaid** (renders inline on GitHub) plus the
-witness/contract/violation **tables**. The `.png` files are for
-`upload-artifact` (GitHub does not render local PNGs inline). See the full
-walkthrough of the command and its flags in
+`pr-review` writes a **self-contained bundle** — just `review.md` + `review.json`
+by default — and is **report-only**: it always exits 0, and the binary verdict —
+`NO_CHANGE` / `ARCHITECTURAL_CHANGE` — is carried in `review.json` for the CI to
+act on (e.g. require a human review when `"verdict":"ARCHITECTURAL_CHANGE"`).
+`review.md` is written for `>> $GITHUB_STEP_SUMMARY` or a PR comment: it leads
+with the verdict and, only when the change is architectural, **embeds all three
+views (component + witness + contract) inline as Mermaid** (renders on GitHub),
+each with its detail table. No separate image files are needed — `--emit-artifacts`
+adds the `.dot`/`.mmd`/`.md` sources and PNGs only if you want them (GitHub does
+not render local PNGs inline, so they are a download convenience, not the visual).
+See the full walkthrough of the command and its flags in
 [`USERGUIDE.md`](../USERGUIDE.md) (§4, `pr-review`).
 
 `pr-review` is the faithful Go port of the level-3 chain below; the

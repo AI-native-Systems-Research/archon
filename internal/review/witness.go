@@ -240,3 +240,64 @@ func witnessDOT(rows []WitnessRow, labelA, labelB string) string {
 	b.WriteString("}\n")
 	return b.String()
 }
+
+// witnessMermaid renders the witness delta as a GitHub-renderable Mermaid graph,
+// so review.md is self-contained without a PNG. Node ids are p0,p1,... by sorted
+// package name. REMOVED connections are drawn as red dashed arrows; WEAKENED as
+// red solid; added/strengthened green; churned blue. Edge colors are applied via
+// linkStyle by declaration index (Mermaid's per-edge styling hook).
+func witnessMermaid(rows []WitnessRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	pkgs := map[string]bool{}
+	for _, r := range rows {
+		pkgs[r.From] = true
+		pkgs[r.To] = true
+	}
+	names := make([]string, 0, len(pkgs))
+	for p := range pkgs {
+		names = append(names, p)
+	}
+	sort.Strings(names)
+	id := map[string]string{}
+	for i, p := range names {
+		id[p] = fmt.Sprintf("p%d", i)
+	}
+
+	var b strings.Builder
+	b.WriteString("graph LR\n")
+	for _, p := range names {
+		fmt.Fprintf(&b, "  %s[\"%s\"]\n", id[p], mermaidEscape(p))
+	}
+	// Edges, tracking each one's color/dash for a matching linkStyle line.
+	type style struct {
+		color  string
+		dashed bool
+	}
+	var styles []style
+	for _, r := range rows {
+		label := mermaidEscape(r.Kind + " " + r.Status)
+		st := style{color: colUnchanged}
+		switch r.Status {
+		case wsRemoved:
+			st = style{color: colRemoved, dashed: true}
+		case wsWeakened:
+			st = style{color: colRemoved}
+		case wsAdded, wsStrengthened:
+			st = style{color: colAdded}
+		case wsChurned:
+			st = style{color: colModified}
+		}
+		if st.dashed {
+			fmt.Fprintf(&b, "  %s -. \"%s\" .-> %s\n", id[r.From], label, id[r.To])
+		} else {
+			fmt.Fprintf(&b, "  %s -->|\"%s\"| %s\n", id[r.From], label, id[r.To])
+		}
+		styles = append(styles, st)
+	}
+	for i, s := range styles {
+		fmt.Fprintf(&b, "  linkStyle %d stroke:%s,stroke-width:2px;\n", i, s.color)
+	}
+	return b.String()
+}
