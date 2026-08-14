@@ -416,19 +416,24 @@ func cmdPRReview(args []string) {
 		os.Exit(2)
 	}
 
+	fmt.Fprintf(os.Stderr, "[1/5] extracting base graph (%s)...\n", opts.Base)
 	gA := extractAt(opts.Repo, opts.Base)
+	fmt.Fprintf(os.Stderr, "[2/5] extracting head graph (%s)...\n", opts.Head)
 	gB := extractAt(opts.Repo, opts.Head)
+	fmt.Fprintf(os.Stderr, "[3/5] computing delta...\n")
 	d := delta.Compute(gA, gB)
 	if allowPath != "" {
+		fmt.Fprintf(os.Stderr, "      checking contract against %s\n", allowPath)
 		d.CheckContract(gB, loadAllow(allowPath))
 	}
 
+	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
 	res := review.Build(gA, gB, d, opts)
+	fmt.Fprintf(os.Stderr, "[5/5] writing bundle to %s...\n", opts.Out)
 	if err := review.WriteBundle(res, opts.Out, opts); err != nil {
 		fatal("write bundle: %v", err)
 	}
-	// Report-only: a one-line verdict to stderr, exit 0 regardless.
-	fmt.Fprintf(os.Stderr, "archon pr-review: %s — bundle written to %s\n", res.Verdict, opts.Out)
+	fmt.Fprintf(os.Stderr, "done: %s\n", res.Verdict)
 }
 
 func atoiOr(s string, def int) int {
