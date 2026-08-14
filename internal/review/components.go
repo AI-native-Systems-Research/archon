@@ -115,7 +115,7 @@ func buildComponents(gA, gB *graph.Graph, d *delta.Delta, depth int) ComponentVi
 		}
 	}
 
-	// Merge: classify each edge as added/removed/unchanged.
+	// Classify each edge as added/removed/unchanged.
 	allEdgeKeys := map[compEdgeKey]bool{}
 	for k := range edgesInA {
 		allEdgeKeys[k] = true
@@ -123,7 +123,10 @@ func buildComponents(gA, gB *graph.Graph, d *delta.Delta, depth int) ComponentVi
 	for k := range edgesInB {
 		allEdgeKeys[k] = true
 	}
-	edgeSet := map[string]ComponentEdge{}
+	type classifiedEdge struct {
+		from, to, kind, change string
+	}
+	var classified []classifiedEdge
 	for k := range allEdgeKeys {
 		change := ""
 		switch {
@@ -132,8 +135,45 @@ func buildComponents(gA, gB *graph.Graph, d *delta.Delta, depth int) ComponentVi
 		case edgesInA[k] && !edgesInB[k]:
 			change = "removed"
 		}
-		ce := ComponentEdge{From: k.from, To: k.to, Kind: k.kind, Change: change}
-		edgeSet[ce.From+"\x00"+ce.Kind+"\x00"+ce.To] = ce
+		classified = append(classified, classifiedEdge{k.from, k.to, k.kind, change})
+	}
+	sort.Slice(classified, func(i, j int) bool {
+		a, b := classified[i], classified[j]
+		if a.from != b.from {
+			return a.from < b.from
+		}
+		if a.to != b.to {
+			return a.to < b.to
+		}
+		if a.change != b.change {
+			return a.change < b.change
+		}
+		return a.kind < b.kind
+	})
+
+	// Aggregate edges with same (from, to, change) into one arrow with combined label.
+	type aggKey struct{ from, to, change string }
+	type aggVal struct {
+		kinds []string
+	}
+	aggOrder := []aggKey{}
+	agg := map[aggKey]*aggVal{}
+	for _, ce := range classified {
+		k := aggKey{ce.from, ce.to, ce.change}
+		if agg[k] == nil {
+			agg[k] = &aggVal{}
+			aggOrder = append(aggOrder, k)
+		}
+		agg[k].kinds = append(agg[k].kinds, ce.kind)
+	}
+
+	edgeSet := map[string]ComponentEdge{}
+	for _, k := range aggOrder {
+		v := agg[k]
+		sort.Strings(v.kinds)
+		label := strings.Join(v.kinds, ", ")
+		ce := ComponentEdge{From: k.from, To: k.to, Kind: label, Change: k.change}
+		edgeSet[ce.From+"\x00"+ce.Change+"\x00"+ce.To] = ce
 	}
 
 	// Cycles: Tarjan SCC over the component graph (both edge kinds count).
@@ -379,7 +419,7 @@ func componentMermaid(cv ComponentView) string {
 			st = edgeStyle{color: colRemoved, dashed: true}
 			label += " REMOVED"
 		}
-		if st.dashed {
+		if st.dashed || strings.Contains(e.Kind, "implements") {
 			fmt.Fprintf(&b, "  %s -. \"%s\" .-> %s\n", from, mermaidEscape(label), to)
 		} else {
 			fmt.Fprintf(&b, "  %s -->|\"%s\"| %s\n", from, mermaidEscape(label), to)
@@ -454,6 +494,9 @@ func componentDOT(cv ComponentView) string {
 		case "removed":
 			eColor, eStyle = colRemoved, "dashed"
 			label += " REMOVED"
+		}
+		if strings.Contains(e.Kind, "implements") {
+			eStyle = "dashed"
 		}
 		fmt.Fprintf(&b, "  %s -> %s [label=%q, color=%q, fontcolor=%q, style=%s, penwidth=2, fontsize=9];\n",
 			from, to, label, eColor, eColor, eStyle)
