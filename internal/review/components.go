@@ -91,12 +91,8 @@ func buildComponents(gA, gB *graph.Graph, d *delta.Delta, depth int) ComponentVi
 	edgesInB := map[compEdgeKey]bool{}
 
 	classifyEdge := func(e graph.Edge) (compEdgeKey, bool) {
-		var kind string
 		switch e.Kind {
-		case "import", "call":
-			kind = "dep"
-		case "implements":
-			kind = "contract"
+		case "import", "call", "implements":
 		default:
 			return compEdgeKey{}, false
 		}
@@ -105,7 +101,7 @@ func buildComponents(gA, gB *graph.Graph, d *delta.Delta, depth int) ComponentVi
 		if !okF || !okT || cf == ct {
 			return compEdgeKey{}, false
 		}
-		return compEdgeKey{cf, ct, kind}, true
+		return compEdgeKey{cf, ct, e.Kind}, true
 	}
 
 	for _, e := range gA.Edges {
@@ -329,54 +325,75 @@ func detectCycles(members map[string]map[string]bool, edgeSet map[string]Compone
 }
 
 // componentMermaid renders the component view as GitHub-renderable Mermaid.
-// Node ids are n0,n1,... assigned by sorted component name so the output is
-// deterministic. Painting uses the four-color scheme via classDef.
+// Each component is a subgraph containing its member packages as rounded nodes.
+// Edges are labeled with their kind and colored by change status.
 func componentMermaid(cv ComponentView) string {
-	id := map[string]string{}
-	for i, c := range cv.Components {
-		id[c.Name] = fmt.Sprintf("n%d", i)
-	}
 	var b strings.Builder
-	b.WriteString("graph LR\n")
-	for _, c := range cv.Components {
+	b.WriteString("graph TB\n")
+
+	// Each component as a subgraph with rounded member nodes.
+	compID := map[string]string{}
+	for i, c := range cv.Components {
+		sgID := fmt.Sprintf("sg%d", i)
+		compID[c.Name] = sgID
 		label := c.Name
 		if c.InCycle {
-			label += " ⟲" // in a dependency cycle
+			label += " ⟲"
 		}
-		fmt.Fprintf(&b, "  %s[\"%s\"]\n", id[c.Name], mermaidEscape(label))
+		fmt.Fprintf(&b, "  subgraph %s [\"%s\"]\n", sgID, mermaidEscape(label))
+		for j, m := range c.Members {
+			memberID := fmt.Sprintf("m%dx%d", i, j)
+			short := m
+			if idx := strings.LastIndex(m, "/"); idx >= 0 {
+				short = m[idx+1:]
+			}
+			if short == "" {
+				short = "root"
+			}
+			fmt.Fprintf(&b, "    %s(\"%s\")\n", memberID, mermaidEscape(short))
+		}
+		b.WriteString("  end\n")
 	}
+	b.WriteString("\n")
+
+	// Edges between components with kind labels.
 	type edgeStyle struct {
 		color  string
 		dashed bool
 	}
 	var edgeStyles []edgeStyle
 	for _, e := range cv.Edges {
-		from, okF := id[e.From]
-		to, okT := id[e.To]
+		from, okF := compID[e.From]
+		to, okT := compID[e.To]
 		if !okF || !okT {
 			continue
 		}
 		st := edgeStyle{color: colUnchanged}
+		label := e.Kind
 		switch e.Change {
 		case "added":
 			st = edgeStyle{color: colAdded}
+			label += " ADDED"
 		case "removed":
 			st = edgeStyle{color: colRemoved, dashed: true}
+			label += " REMOVED"
 		}
-		if e.Kind == "contract" || st.dashed {
-			fmt.Fprintf(&b, "  %s -. implements .-> %s\n", from, to)
+		if st.dashed {
+			fmt.Fprintf(&b, "  %s -. \"%s\" .-> %s\n", from, mermaidEscape(label), to)
 		} else {
-			fmt.Fprintf(&b, "  %s --> %s\n", from, to)
+			fmt.Fprintf(&b, "  %s -->|\"%s\"| %s\n", from, mermaidEscape(label), to)
 		}
 		edgeStyles = append(edgeStyles, st)
 	}
+
 	// linkStyle for edge colors.
 	for i, s := range edgeStyles {
 		if s.color != colUnchanged {
 			fmt.Fprintf(&b, "  linkStyle %d stroke:%s,stroke-width:2px;\n", i, s.color)
 		}
 	}
-	// Class definitions (colors) + assignments.
+
+	// Class definitions for subgraph styling.
 	fmt.Fprintf(&b, "  classDef boundary fill:%s,stroke:%s,stroke-width:2px;\n", colFill, colAdded)
 	fmt.Fprintf(&b, "  classDef minor fill:%s,stroke:%s,stroke-width:1px,stroke-dasharray:4 3;\n", colFill, colModified)
 	fmt.Fprintf(&b, "  classDef unchanged fill:%s,stroke:%s;\n", colFill, colUnchanged)
@@ -388,7 +405,7 @@ func componentMermaid(cv ComponentView) string {
 		case "minor":
 			class = "minor"
 		}
-		fmt.Fprintf(&b, "  class %s %s;\n", id[c.Name], class)
+		fmt.Fprintf(&b, "  class %s %s;\n", compID[c.Name], class)
 	}
 	return b.String()
 }
@@ -401,7 +418,7 @@ func componentDOT(cv ComponentView) string {
 	}
 	var b strings.Builder
 	b.WriteString("digraph components {\n")
-	b.WriteString("  rankdir=LR;\n")
+	b.WriteString("  rankdir=TB;\n")
 	b.WriteString("  node [shape=box, style=\"rounded,filled\", fontname=\"Helvetica\"];\n")
 	for _, c := range cv.Components {
 		stroke := colUnchanged
@@ -428,17 +445,17 @@ func componentDOT(cv ComponentView) string {
 		}
 		eColor := colUnchanged
 		eStyle := "solid"
+		label := e.Kind
 		switch e.Change {
 		case "added":
 			eColor = colAdded
+			label += " ADDED"
 		case "removed":
 			eColor, eStyle = colRemoved, "dashed"
+			label += " REMOVED"
 		}
-		if e.Kind == "contract" {
-			fmt.Fprintf(&b, "  %s -> %s [style=dashed, label=\"implements\", color=%q, fontcolor=%q, fontsize=9, penwidth=2];\n", from, to, eColor, eColor)
-		} else {
-			fmt.Fprintf(&b, "  %s -> %s [color=%q, style=%s, penwidth=2];\n", from, to, eColor, eStyle)
-		}
+		fmt.Fprintf(&b, "  %s -> %s [label=%q, color=%q, fontcolor=%q, style=%s, penwidth=2, fontsize=9];\n",
+			from, to, label, eColor, eColor, eStyle)
 	}
 	b.WriteString("}\n")
 	return b.String()
