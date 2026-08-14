@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/AI-native-Systems-Research/archon/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/graph"
 )
 
 // PackageRef names a package that appeared or disappeared.

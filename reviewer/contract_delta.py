@@ -25,7 +25,7 @@ output.
 
 Usage:
   # build the consumes tool once (from the repo root):
-  go build -o consumes ./consumes_tool
+  go build -o consumes ./cmd/consumes
 
   # snapshot each commit (checkout, run, restore -- consumes is working-tree based):
   ./consumes <repo> ./... --json > A.json   # e.g. the PR's merge-base

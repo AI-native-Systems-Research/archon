@@ -17,12 +17,12 @@
 probe*.tex
 probe*.pdf
 
-# Generated PDF in paper-draft (but not rel-work PDFs which should be versioned)
-/paper-draft/*.pdf
+# Generated PDF in the paper (but not related-work PDFs which should be versioned)
+/docs/paper/*.pdf
 
 # Bulky/redundant LaTeX template files
-/paper-draft/acmart.zip
-/paper-draft/acmart/
+/docs/paper/acmart.zip
+/docs/paper/acmart/
 
 # OS/editor noise
 .DS_Store

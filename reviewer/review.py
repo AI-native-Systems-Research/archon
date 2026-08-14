@@ -197,7 +197,7 @@ def main():
         write_json_from([args.archon, "extract", args.repo, args.commit_b], b_ext, args.reuse)
         if not args.skip_contract:
             if not args.reuse and not os.path.exists(args.consumes):
-                sys.exit("consumes binary not found at %s (build `go build -o consumes ./consumes_tool`, "
+                sys.exit("consumes binary not found at %s (build `go build -o consumes ./cmd/consumes`, "
                          "or pass --consumes / --skip-contract)" % args.consumes)
             consumes_at(args.consumes, args.repo, args.commit_a, a_con, args.reuse)
             consumes_at(args.consumes, args.repo, args.commit_b, b_con, args.reuse)

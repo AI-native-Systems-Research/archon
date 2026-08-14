@@ -8,8 +8,8 @@ package health
 import (
 	"sort"
 
-	"github.com/AI-native-Systems-Research/archon/graph"
-	"github.com/AI-native-Systems-Research/archon/impact"
+	"github.com/AI-native-Systems-Research/archon/internal/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/impact"
 )
 
 // PkgMetrics holds per-package coupling metrics.

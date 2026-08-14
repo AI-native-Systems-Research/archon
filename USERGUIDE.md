@@ -280,6 +280,76 @@ fail on any *new* dependency that is not on the list:
 }
 ```
 
+### pr-review — the CI one-shot (a review bundle)
+
+This is the command CI calls. Give it the repo and the two commits; it extracts
+both (through an ephemeral git worktree, so your working tree is never touched),
+computes the delta, and writes a **review bundle** into `--out` (default
+`.archon/`):
+
+```sh
+./archon-go pr-review $R <base> <head> --out .archon
+```
+
+It is **report-only**: it always exits 0. The verdict — including `BLOCK` — is
+carried in `review.json` so your CI decides whether to fail the check.
+
+**What you'll get** in the bundle:
+
+```
+.archon/
+├── review.md      # primary: paste into a PR comment / >> $GITHUB_STEP_SUMMARY
+├── review.json    # machine-readable result (schema: archon.pr-review/v1)
+├── component.mmd  # component diagram (Mermaid, also embedded in review.md)
+├── component.dot  # + component.png if Graphviz is installed
+├── witness.dot    # + witness.png if Graphviz is installed
+└── contract.md    # interface-contract delta table
+```
+
+`review.md` leads with the **verdict**, then — only when the change is
+architectural — embeds a GitHub-renderable **Mermaid** component diagram and the
+witness / contract / (violation) tables. A CI job does just:
+
+```sh
+./archon-go pr-review $R "$BASE" "$HEAD" --out .archon
+cat .archon/review.md >> "$GITHUB_STEP_SUMMARY"   # renders the Mermaid inline
+```
+
+**The verdict is tiered** (least to most review needed):
+
+| verdict | meaning |
+|---|---|
+| `FAST_TRACK` | internal-only at the package altitude — `review.md` is a one-line note, no graphs |
+| `REVIEW_INVARIANTS` | boundary empty, but a guarded promise (invariant or wire/DB schema) changed |
+| `REVIEW_ARCHITECTURE` | a package boundary moved — full component + witness + contract views |
+| `BLOCK` | the PR introduced a dependency the box's allow-list forbids (needs `--allow`) |
+
+**Flags:** `--out DIR` (default `.archon`), `--allow FILE` (enables `BLOCK`
+detection against an allow-list baseline from `archon-go contract`), `--depth N`
+(component grouping granularity, default 2), `--label-a/-b S` (human labels for
+base/head), `--no-png` (skip Graphviz).
+
+**What you'll see — a boundary-moving PR** (inference-sim #1546, which decoupled
+`sim/saturation`):
+
+```
+archon pr-review: REVIEW_ARCHITECTURE — bundle written to .archon
+```
+
+and `review.md`'s witness table distinguishes the full decoupling from the
+partial one:
+
+```
+| Edge                            | Kind       | Status                        | Removed                | Still coupled via                              |
+| sim/saturation → sim            | implements | REMOVED (full decoupling)     | Bank |= BatchClassifier | —                                              |
+| sim/saturation → sim/workload   | call       | WEAKENED (partial)            | NewBacklogClassifier    | DefaultBacklogDriftConfig, NewBacklogDriftConfig |
+```
+
+This is the same information as `reviewer/review.py --level 3`, produced by the
+single Go binary with no Python and no checkout — which is what makes it a clean
+fit for a CI runner. The Python wrapper remains the interactive human path (see
+§5).
+
 ---
 
 ## 5. Reviewer views — one command, three levels
@@ -373,7 +443,7 @@ python3 reviewer/witness_delta.py A.json B.json --label-a base --label-b "#1546"
 # --- contract delta: interfaces, implementers, and stranded-smell flips ---
 # `consumes` is working-tree based, so snapshot each commit (checkout, run,
 # restore). This is the check the wrapper's --level 3 automates.
-go build -o consumes ./consumes_tool          # once
+go build -o consumes ./cmd/consumes          # once
 git -C $R checkout 70e9ba8 && ./consumes $R ./... --json > conA.json
 git -C $R checkout 5e28e00b && ./consumes $R ./... --json > conB.json
 git -C $R checkout -            # restore your branch

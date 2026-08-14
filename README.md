@@ -1,21 +1,52 @@
-# RepoEvolve / ARCHON
+# ARCHON
 
-This repository contains an FSE paper draft and tooling for **ARCHON**, a substrate for treating software architecture as a checked, versioned contract for code review and agentic software evolution.
+ARCHON reads a Go codebase and shows you its architecture: which packages depend
+on which, which interfaces are implemented, what a pull request changed at the
+boundary level, and whether the contract tests actually cover those boundaries.
+It is fully deterministic — same input, same output, byte for byte — and uses no
+LLM. It treats software architecture as a checked, versioned contract for code
+review and agentic software evolution.
 
-## Repository Layout
-
-- **code/** - The ARCHON tool, fixtures, and evaluation harness
-- **paper-draft/** - LaTeX paper source (main.tex, refs.bib, figures), ACM template files, and slides (Archon.pptx)
-- **rel-work/** - Categorized related-work PDFs organized into thematic subfolders; README.md lists all papers with links and one-line descriptions; synthesis/ contains our analysis write-ups
-- **notes/** - Project planning and design documents
-
-## Building the Paper
+## Quick start
 
 ```sh
-cd paper-draft
-latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex
+git clone https://github.com/AI-native-Systems-Research/archon.git
+cd archon
+go build -o archon-go .
+
+R=/path/to/your/repo
+./archon-go health $R                                   # is it healthy?
+./archon-go render $R --full --format=dot | dot -Tpng -o arch.png   # draw it
+./archon-go delta  $R HEAD~1 HEAD --summary             # what did the last commit change?
+./archon-go pr-review $R <base> <head> --out .archon    # CI review bundle (review.md + json)
 ```
 
-## Current Framing
+The full walkthrough — every command, with example output — is in
+[`USERGUIDE.md`](USERGUIDE.md). For a PR review at three altitudes in one command,
+see the reviewer wrapper: [`reviewer/review.py`](reviewer/review.py) and
+[`reviewer/RENDERERS.md`](reviewer/RENDERERS.md).
 
-ARCHON is intended for both greenfield and brownfield repositories. In greenfield projects, the intended architecture graph can be written alongside the initial implementation. In brownfield projects, ARCHON starts by snapshotting the actual graph, then uses reviewed graph deltas and ratcheting policies to make architecture visible and incrementally repair it.
+## Repository layout
+
+- **`main.go`** — the `archon-go` CLI (subcommands: `extract`, `delta`, `render`,
+  `contract`, `evidence`, `impact`, `health`, `reflexion`, `pr-review`).
+- **`internal/`** — the analysis libraries (`extract`, `graph`, `delta`,
+  `evidence`, `impact`, `health`, `reflexion`, `render`).
+- **`cmd/`** — auxiliary CLI tools (`consumes`, `callgraph`, `eventflow`), each
+  built separately, e.g. `go build -o consumes ./cmd/consumes`.
+- **`reviewer/`** — deterministic, no-LLM Python views for PR review
+  (`review.py` wrapper + the per-view scripts) and a worked example under
+  `reviewer/examples/`.
+- **`scripts/`** — helper scripts.
+- **`fixtures/`** — test fixtures.
+- **`results/`** — the evaluation harness and experiment artifacts.
+- **`docs/`** — prose: the paper (`docs/paper`), related work
+  (`docs/related-work`), design notes (`docs/notes`), and write-ups.
+
+## Framing
+
+ARCHON is intended for both greenfield and brownfield repositories. In greenfield
+projects, the intended architecture graph can be written alongside the initial
+implementation. In brownfield projects, ARCHON starts by snapshotting the actual
+graph, then uses reviewed graph deltas and ratcheting policies to make
+architecture visible and incrementally repair it.

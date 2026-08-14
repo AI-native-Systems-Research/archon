@@ -24,7 +24,7 @@ output.
 
 Usage:
   # build the consumes tool once (from the repo root):
-  go build -o consumes ./consumes_tool
+  go build -o consumes ./cmd/consumes
   ./consumes <module-dir> ./... --json > consumes.json
 
   # text verdict (good for a PR comment):

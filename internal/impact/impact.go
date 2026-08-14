@@ -7,7 +7,7 @@ package impact
 import (
 	"sort"
 
-	"github.com/AI-native-Systems-Research/archon/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/graph"
 )
 
 // Dependents returns the internal packages that depend on target: `direct` are
