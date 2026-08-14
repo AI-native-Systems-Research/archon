@@ -341,6 +341,7 @@ func componentMermaid(cv ComponentView) string {
 			label += " ⟲"
 		}
 		fmt.Fprintf(&b, "  subgraph %s [\"%s\"]\n", sgID, mermaidEscape(label))
+		b.WriteString("    direction LR\n")
 		for j, m := range c.Members {
 			memberID := fmt.Sprintf("m%dx%d", i, j)
 			short := m
