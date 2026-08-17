@@ -1,6 +1,7 @@
 package review
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -29,6 +30,7 @@ func renderMarkdown(res *Result) string {
 		if n := res.Counts.Invariants + res.Counts.SchemaChanged; n > 0 {
 			fmt.Fprintf(&b, "_Note: %d guarded promise(s) (invariant / schema) also changed within the existing boundary — see `review.json`._\n\n", n)
 		}
+		writeCollapsibleJSON(&b, res)
 		writeFooter(&b, res)
 		return b.String()
 	}
@@ -81,6 +83,7 @@ func renderMarkdown(res *Result) string {
 	writeSchemaTable(&b, res.Schema_)
 	writeSurfaceTable(&b, res.Surface)
 
+	writeCollapsibleJSON(&b, res)
 	writeFooter(&b, res)
 	return b.String()
 }
@@ -236,6 +239,17 @@ func symbolList(syms []graph.Symbol) string {
 		names[i] = s.Name
 	}
 	return "`" + strings.Join(names, "`, `") + "`"
+}
+
+func writeCollapsibleJSON(b *strings.Builder, res *Result) {
+	data, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return
+	}
+	b.WriteString("<details>\n<summary><code>review.json</code></summary>\n\n")
+	b.WriteString("```json\n")
+	b.WriteString(string(data))
+	b.WriteString("\n```\n\n</details>\n\n")
 }
 
 func writeFooter(b *strings.Builder, res *Result) {
