@@ -11,8 +11,17 @@ type RatchetResult struct {
 
 // Ratchet computes plan distance before and after a change and reports whether
 // the distance did not increase. ok=true means the PR moved toward (or held)
-// the plan; ok=false means it moved away.
+// the plan; ok=false means it moved away. Panics if plan is nil.
 func Ratchet(p, base, head *graph.Graph) RatchetResult {
+	if p == nil {
+		panic("plan: Ratchet called with nil plan graph")
+	}
+	if base == nil {
+		base = &graph.Graph{}
+	}
+	if head == nil {
+		head = &graph.Graph{}
+	}
 	before := Dist(p, base)
 	after := Dist(p, head)
 	return RatchetResult{

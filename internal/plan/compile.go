@@ -160,8 +160,14 @@ func (p *parser) parseAllowEntry(l string, pkg *graph.Package) {
 	switch kind {
 	case "import":
 		pkg.Allow = append(pkg.Allow, target)
-	case "metric", "config", "service", "capability", "protocol":
-		pkg.Allow = append(pkg.Allow, target)
+	case "metric", "config":
+		p.g.Edges = append(p.g.Edges, graph.Edge{From: pkg.Path, To: target, Kind: "config"})
+	case "service":
+		p.g.Edges = append(p.g.Edges, graph.Edge{From: pkg.Path, To: target, Kind: "service"})
+	case "capability":
+		p.g.Edges = append(p.g.Edges, graph.Edge{From: pkg.Path, To: target, Kind: "capability"})
+	case "protocol":
+		p.g.Edges = append(p.g.Edges, graph.Edge{From: pkg.Path, To: target, Kind: "protocol"})
 	default:
 		p.diags = append(p.diags, Diagnostic{Line: p.pos + 1, Message: fmt.Sprintf("unknown allow kind: %q", kind)})
 	}
