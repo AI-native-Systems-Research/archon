@@ -140,10 +140,15 @@ arrow github.com/inference-sim/sim/kv/transfer -> github.com/inference-sim/sim :
 #### Step 2: Compile and commit
 
 ```sh
-archon-go plan compile kv-offload.archon > kv-offload.plan.json
+archon-go plan compile --stats kv-offload.archon > kv-offload.plan.json
 ```
 
-Output is standard graph JSON (same format `extract` produces):
+Stats output (stderr):
+```
+5 clauses: 0 checked, 5 evidenced, 0 attested:external, 0 attested:design
+```
+
+The compiled JSON is standard graph format (same as `extract` output):
 ```json
 {
   "packages": [
@@ -155,6 +160,32 @@ Output is standard graph JSON (same format `extract` produces):
   "edges": [...]
 }
 ```
+
+Visualize the plan as a Mermaid diagram:
+```sh
+archon-go plan render kv-offload.plan.json
+```
+
+```mermaid
+graph LR
+  n0["sim"]
+  n1["cluster"]
+  n2["hash"]
+  n3(["tierchain"])
+  n4(["transfer"])
+
+  n1 --> n3
+  n3 --> n0
+  n3 --> n2
+  n4 --> n0
+
+  classDef hole fill:#ffeccc,stroke:#b45309,stroke-width:3px,stroke-dasharray:6 3,color:#3b2200
+  class n3,n4 hole
+  classDef box fill:#dbe7f8,stroke:#3b5f8f,color:#0d1b2e
+  class n0,n1,n2 box
+```
+
+_Holes (tierchain, transfer) are stadium-shaped with dashed borders. Existing boxes are solid._
 
 Commit `kv-offload.plan.json` to your repo.
 
@@ -238,6 +269,46 @@ Four block types — see [docs/plan-syntax.md](docs/plan-syntax.md) for the full
 | C4 | Disallowed arrow — dependency exists but plan forbids it |
 
 `dist = 0` means the code fully realizes the plan.
+
+---
+
+## Plan utilities
+
+Beyond compile and dist, three utilities help you work with plans:
+
+```sh
+# Extract one hole as a work order (share with a teammate or sub-issue)
+archon-go plan slice kv-offload.plan.json github.com/inference-sim/sim/kv/tierchain
+```
+
+Output:
+```markdown
+# github.com/inference-sim/sim/kv/tierchain
+
+## Surface
+- `CompleteStore(keys, ok bool)`
+- `Lookup(BlockKey, ReqCtx) LookupResult`
+- `PrepareStore(keys, ReqCtx) StoreGrant`
+- `TierCount() int`
+
+## Allow
+- `import github.com/inference-sim/sim`
+- `import github.com/inference-sim/sim/internal/hash`
+
+## Contract
+- **BC-C1**
+- **BC-C2**
+- **BC-C4**
+```
+
+```sh
+# Render plan as Mermaid (paste into GitHub issues/PRs)
+archon-go plan render kv-offload.plan.json
+
+# Compile with clause tally
+archon-go plan compile --stats kv-offload.archon > plan.json
+# stderr: 5 clauses: 0 checked, 5 evidenced, 0 attested:external, 0 attested:design
+```
 
 ---
 
