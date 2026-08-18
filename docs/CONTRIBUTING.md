@@ -76,7 +76,7 @@ go vet ./...      # no warnings
 ARCHON=./archon-go ./demo/run-all.sh
 ```
 
-If the demo fails, your change altered archon's output. Either fix the bug or update the golden files if the change is intentional.
+If the demo fails, your change altered archon's output — fix the bug. Do NOT update golden files yourself; flag the diff to the human reviewer and justify why the output changed. Only a human may approve golden-file updates.
 
 Commit atomically — each commit should be a coherent unit.
 
