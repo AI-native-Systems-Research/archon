@@ -107,6 +107,33 @@ func TestClassify_Unrelated(t *testing.T) {
 	}
 }
 
+func TestClassify_Exceeds_UnplannedEdgeBetweenPlanPackages(t *testing.T) {
+	// PR adds a call edge between two plan-declared packages without filling any holes
+	p := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/a"},
+			{Path: "m/b"},
+		},
+	}
+	base := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/a", Files: []string{"a.go"}},
+			{Path: "m/b", Files: []string{"b.go"}},
+		},
+	}
+	head := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/a", Files: []string{"a.go"}},
+			{Path: "m/b", Files: []string{"b.go"}},
+		},
+		Edges: []graph.Edge{{From: "m/a", To: "m/b", Kind: "call"}},
+	}
+	r := Classify(p, base, head)
+	if r.Verdict != Exceeds {
+		t.Fatalf("want EXCEEDS (unplanned edge between plan packages), got %s: %s", r.Verdict, r.Reason)
+	}
+}
+
 func TestClassify_NilPlan(t *testing.T) {
 	r := Classify(nil, &graph.Graph{}, &graph.Graph{})
 	if r.Verdict != Unrelated {

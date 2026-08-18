@@ -89,10 +89,6 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	}
 
 	// New edges in head
-	headEdges := make(map[string]bool)
-	for _, e := range head.Edges {
-		headEdges[edgeKey(e)] = true
-	}
 	baseEdges := make(map[string]bool)
 	for _, e := range base.Edges {
 		baseEdges[edgeKey(e)] = true
@@ -114,7 +110,7 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	}
 
 	// Apply precedence: Conflicts already handled above
-	if touchesPlan && addsUnplanned {
+	if addsUnplanned {
 		return ClassifyResult{
 			Verdict: Exceeds,
 			Reason:  "adds structure the plan does not declare",
