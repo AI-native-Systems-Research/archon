@@ -363,20 +363,25 @@ func cmdDelta(args []string) {
 		printJSON(d)
 		return
 	}
+
+	planSuffix := ""
+	if deltaPlanPath != "" {
+		pg := loadPlanGraph(deltaPlanPath)
+		r := plan.Ratchet(pg, a, b)
+		status := "OK"
+		if !r.OK {
+			status = "REGRESSION"
+		}
+		planSuffix = fmt.Sprintf("\nPlan distance: %d → %d (%s)\n", r.Before, r.After, status)
+	}
+
 	if summaryOut {
 		fmt.Print(d.Summary())
-		if deltaPlanPath != "" {
-			pg := loadPlanGraph(deltaPlanPath)
-			r := plan.Ratchet(pg, a, b)
-			status := "OK"
-			if !r.OK {
-				status = "REGRESSION"
-			}
-			fmt.Fprintf(os.Stdout, "\nPlan distance: %d → %d (%s)\n", r.Before, r.After, status)
-		}
+		fmt.Print(planSuffix)
 		return
 	}
 	fmt.Print(d.Render())
+	fmt.Print(planSuffix)
 }
 
 // cmdPRReview builds a CI-friendly review bundle for a PR: one command that
