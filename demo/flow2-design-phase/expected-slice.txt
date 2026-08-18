@@ -1,0 +1,20 @@
+# github.com/inference-sim/sim/kv/tierchain
+
+## Surface
+
+- `CompleteStore(keys, ok bool)`
+- `Lookup(BlockKey, ReqCtx) LookupResult`
+- `PrepareStore(keys, ReqCtx) StoreGrant`
+- `TierCount() int`
+
+## Allow
+
+- `import github.com/inference-sim/sim`
+- `import github.com/inference-sim/sim/internal/hash`
+
+## Contract
+
+- **BC-C1**
+- **BC-C2**
+- **BC-C4**
+

@@ -1,0 +1,16 @@
+graph LR
+  n0["sim"]
+  n1["cluster"]
+  n2["hash"]
+  n3(["tierchain"])
+  n4(["transfer"])
+
+  n1 --> n3
+  n3 --> n0
+  n3 --> n2
+  n4 --> n0
+
+  classDef hole fill:#ffeccc,stroke:#b45309,stroke-width:3px,stroke-dasharray:6 3,color:#3b2200
+  class n3,n4 hole
+  classDef box fill:#dbe7f8,stroke:#3b5f8f,color:#0d1b2e
+  class n0,n1,n2 box

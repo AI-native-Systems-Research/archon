@@ -53,6 +53,18 @@ check "dist vs partial repo" /tmp/demo-flow2-dist-partial.txt "$F2/expected-dist
 $ARCHON delta "$F2/empty-repo.json" "$F2/partial-repo.json" --summary --plan "$F2/kv-offload.plan.json" > /tmp/demo-flow2-delta.txt
 check "delta --plan summary" /tmp/demo-flow2-delta.txt "$F2/expected-delta-summary.txt"
 
+# Slice
+$ARCHON plan slice "$F2/kv-offload.plan.json" github.com/inference-sim/sim/kv/tierchain > /tmp/demo-flow2-slice.txt
+check "plan slice tierchain" /tmp/demo-flow2-slice.txt "$F2/expected-slice.txt"
+
+# Render
+$ARCHON plan render "$F2/kv-offload.plan.json" > /tmp/demo-flow2-render.txt
+check "plan render mermaid" /tmp/demo-flow2-render.txt "$F2/expected-render.txt"
+
+# Stats
+$ARCHON plan compile --stats "$F2/kv-offload.archon" > /dev/null 2> /tmp/demo-flow2-stats.txt
+check "plan compile --stats" /tmp/demo-flow2-stats.txt "$F2/expected-stats.txt"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [ $FAIL -gt 0 ]; then
