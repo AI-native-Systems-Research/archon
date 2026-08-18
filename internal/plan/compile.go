@@ -285,7 +285,13 @@ func parseContractEntry(l string) graph.Invariant {
 	if idx := strings.IndexByte(l, ' '); idx >= 0 {
 		name = l[:idx]
 	}
-	return graph.Invariant{Name: name, File: "plan"}
+	class := ""
+	if start := strings.Index(l, "["); start >= 0 {
+		if end := strings.Index(l[start:], "]"); end >= 0 {
+			class = strings.TrimSpace(l[start+1 : start+end])
+		}
+	}
+	return graph.Invariant{Name: name, File: "plan", Hash: class}
 }
 
 func lastSeg(path string) string {

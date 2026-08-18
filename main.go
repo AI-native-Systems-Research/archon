@@ -484,8 +484,10 @@ func cmdPRReview(args []string) {
 // cmdPlan handles `archon-go plan compile|dist` subcommands.
 func cmdPlan(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: archon-go plan compile <file.archon>")
+		fmt.Fprintln(os.Stderr, "usage: archon-go plan compile [--stats] <file.archon>")
 		fmt.Fprintln(os.Stderr, "       archon-go plan dist <plan.json> <repo|graph.json> [commit]")
+		fmt.Fprintln(os.Stderr, "       archon-go plan slice <plan.json> <hole-path>")
+		fmt.Fprintln(os.Stderr, "       archon-go plan render <plan.json>")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -493,6 +495,10 @@ func cmdPlan(args []string) {
 		cmdPlanCompile(args[1:])
 	case "dist":
 		cmdPlanDist(args[1:])
+	case "slice":
+		cmdPlanSlice(args[1:])
+	case "render":
+		cmdPlanRender(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown plan subcommand: %s\n", args[0])
 		os.Exit(2)
@@ -500,18 +506,27 @@ func cmdPlan(args []string) {
 }
 
 func cmdPlanCompile(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: archon-go plan compile <file.archon>")
+	showStats := false
+	var pos []string
+	for _, a := range args {
+		if a == "--stats" {
+			showStats = true
+		} else {
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: archon-go plan compile [--stats] <file.archon>")
 		os.Exit(2)
 	}
-	src, err := os.ReadFile(args[0])
+	src, err := os.ReadFile(pos[0])
 	if err != nil {
-		fatal("read %s: %v", args[0], err)
+		fatal("read %s: %v", pos[0], err)
 	}
 	g, diags := plan.Compile(src)
 	if len(diags) > 0 {
 		for _, d := range diags {
-			fmt.Fprintf(os.Stderr, "%s: %s\n", args[0], d)
+			fmt.Fprintf(os.Stderr, "%s: %s\n", pos[0], d)
 		}
 		os.Exit(1)
 	}
@@ -520,6 +535,31 @@ func cmdPlanCompile(args []string) {
 	if err := enc.Encode(g); err != nil {
 		fatal("encode plan graph: %v", err)
 	}
+	if showStats {
+		fmt.Fprintf(os.Stderr, "%s\n", plan.Stats(g))
+	}
+}
+
+func cmdPlanSlice(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: archon-go plan slice <plan.json> <hole-path>")
+		os.Exit(2)
+	}
+	g := loadPlanGraph(args[0])
+	out, err := plan.Slice(g, args[1])
+	if err != nil {
+		fatal("slice: %v", err)
+	}
+	fmt.Print(out)
+}
+
+func cmdPlanRender(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: archon-go plan render <plan.json>")
+		os.Exit(2)
+	}
+	g := loadPlanGraph(args[0])
+	fmt.Print(plan.Render(g))
 }
 
 func cmdPlanDist(args []string) {
