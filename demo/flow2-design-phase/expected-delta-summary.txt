@@ -1,0 +1,4 @@
+ARCHON verdict: NEEDS ARCHITECTURE REVIEW — a boundary moved.
+  new packages:  cluster, hash, sim, tierchain
+
+Plan distance: 9 → 2 (OK)

@@ -1,0 +1,8 @@
+dist(P,G) = 2
+  unfilled holes (C1): 1
+  absent boxes   (C2): 0
+  absent arrows  (C3): 1
+  disallowed     (C4): 0
+
+  [C1] hole declared, package absent in actual
+  [C3] declared arrow github.com/inference-sim/sim/kv/transfer -> github.com/inference-sim/sim (import) absent

@@ -1,0 +1,15 @@
+dist(P,G) = 9
+  unfilled holes (C1): 2
+  absent boxes   (C2): 3
+  absent arrows  (C3): 4
+  disallowed     (C4): 0
+
+  [C1] hole declared, package absent in actual
+  [C1] hole declared, package absent in actual
+  [C2] declared box absent from actual
+  [C2] declared box absent from actual
+  [C2] declared box absent from actual
+  [C3] declared arrow github.com/inference-sim/sim/cluster -> github.com/inference-sim/sim/kv/tierchain (import) absent
+  [C3] declared arrow github.com/inference-sim/sim/kv/tierchain -> github.com/inference-sim/sim (import) absent
+  [C3] declared arrow github.com/inference-sim/sim/kv/tierchain -> github.com/inference-sim/sim/internal/hash (import) absent
+  [C3] declared arrow github.com/inference-sim/sim/kv/transfer -> github.com/inference-sim/sim (import) absent

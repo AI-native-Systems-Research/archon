@@ -1,0 +1,55 @@
+# kv-offload.archon — declare the intended architecture
+
+invariant determinism {
+  statement: same seed produces byte-identical output
+  evidence: property_test
+}
+
+invariant conservation {
+  statement: allocated + free = total at all times
+  evidence: property_test
+}
+
+# Existing packages (already implemented)
+box github.com/inference-sim/sim
+box github.com/inference-sim/sim/internal/hash
+box github.com/inference-sim/sim/cluster
+
+# New packages to build
+hole github.com/inference-sim/sim/kv/tierchain {
+  surface:
+    Lookup(BlockKey, ReqCtx) LookupResult
+    PrepareStore(keys, ReqCtx) StoreGrant
+    CompleteStore(keys, ok bool)
+    TierCount() int
+  allow:
+    import github.com/inference-sim/sim
+    import github.com/inference-sim/sim/internal/hash
+  contract:
+    BC-C1 only tier 0 exchanges blocks with GPU    [evidenced: differential_test]
+    BC-C2 allocated + free = capacity, always      [evidenced: property_test]
+    BC-C4 a block with ref_cnt != 0 is never evicted [evidenced: property_test]
+  cites:
+    invariant determinism
+    invariant conservation
+}
+
+hole github.com/inference-sim/sim/kv/transfer {
+  surface:
+    Submit(TransferJob) JobId
+    Poll(now int64) []JobId
+    ActiveJobs(TierIndex, Direction) int
+  allow:
+    import github.com/inference-sim/sim
+  contract:
+    BC-S1 at most n_read + n_write jobs in service   [evidenced: property_test]
+    BC-S2 read-priority servers take reads first     [evidenced: metamorphic_test]
+  cites:
+    invariant determinism
+}
+
+# Declared dependencies
+arrow github.com/inference-sim/sim/cluster -> github.com/inference-sim/sim/kv/tierchain : import
+arrow github.com/inference-sim/sim/kv/tierchain -> github.com/inference-sim/sim : import
+arrow github.com/inference-sim/sim/kv/tierchain -> github.com/inference-sim/sim/internal/hash : import
+arrow github.com/inference-sim/sim/kv/transfer -> github.com/inference-sim/sim : import
