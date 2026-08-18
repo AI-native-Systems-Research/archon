@@ -65,7 +65,15 @@ You don't need strict TDD, but the bar is: if someone reverts your fix, a test s
 
 **For feature PRs:** Include at least one test that shows concrete input → output when run with `go test -v -run TestXxx`. A reviewer should be able to run that one command and see exactly what goes in and what comes out — no guessing.
 
-Commit atomically — each commit should be a coherent unit. Lint before pushing.
+Before pushing, confirm everything passes:
+
+```bash
+go build ./...    # compiles
+go test ./...     # all tests pass
+go vet ./...      # no warnings
+```
+
+Commit atomically — each commit should be a coherent unit.
 
 ### 5. PR Description Checklist (Medium+ feature PRs)
 
