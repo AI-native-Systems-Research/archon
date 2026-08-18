@@ -2,7 +2,6 @@ package plan
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
@@ -282,18 +281,3 @@ func lastSeg(path string) string {
 	return path
 }
 
-// Sort sorts packages and edges for deterministic output.
-func sortGraph(g *graph.Graph) {
-	sort.Slice(g.Packages, func(i, j int) bool {
-		return g.Packages[i].Path < g.Packages[j].Path
-	})
-	sort.Slice(g.Edges, func(i, j int) bool {
-		if g.Edges[i].From != g.Edges[j].From {
-			return g.Edges[i].From < g.Edges[j].From
-		}
-		if g.Edges[i].To != g.Edges[j].To {
-			return g.Edges[i].To < g.Edges[j].To
-		}
-		return g.Edges[i].Kind < g.Edges[j].Kind
-	})
-}

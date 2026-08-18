@@ -50,18 +50,20 @@ func Dist(plan, actual *graph.Graph) DistResult {
 			})
 			continue
 		}
-		// If actual also marks it as a hole, it's unfilled
+		// Plan-vs-plan: both declare the same hole
 		if ap.Hole {
-			// But if both are plans and both declare the same hole, don't count it
-			if _, inPlan := planPkgs[pp.Path]; inPlan {
-				// Only count if the actual graph ALSO has it as a hole (not filled)
-				// For plan-vs-code: actual.Hole is false for real packages
-				// For plan-vs-plan: if both declare it, it's not an unmet obligation
-				continue
+			if !surfaceMatch(pp.Surface, ap.Surface) {
+				res.C1++
+				res.Unmet = append(res.Unmet, Unmet{
+					Class:   "C1",
+					Package: pp.Path,
+					Detail:  fmt.Sprintf("hole in both but surface mismatch: declared %d, actual %d", len(pp.Surface), len(ap.Surface)),
+				})
 			}
+			continue
 		}
-		// Package exists but has no files (still a hole in practice)
-		if !ap.Hole && len(ap.Files) == 0 && len(ap.Surface) == 0 {
+		// Plan-vs-code: package exists but has no files (still unfilled)
+		if len(ap.Files) == 0 && len(ap.Surface) == 0 {
 			res.C1++
 			res.Unmet = append(res.Unmet, Unmet{
 				Class:   "C1",
