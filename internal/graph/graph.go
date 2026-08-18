@@ -34,6 +34,7 @@ type Package struct {
 	Path       string      `json:"path"`                 // import path, the stable identity at this altitude
 	Name       string      `json:"name"`                 // clause name
 	Internal   bool        `json:"internal"`             // true if part of the module under study
+	Hole       bool        `json:"hole,omitempty"`       // true if declared but not yet implemented (Def. 5.1)
 	Files      []string    `json:"files,omitempty"`      // base filenames, sorted
 	Surface    []Symbol    `json:"surface,omitempty"`    // exported entities other packages may depend on
 	Schema     []Symbol    `json:"schema,omitempty"`     // serialized (wire/DB) fields — the data contract that crosses a boundary

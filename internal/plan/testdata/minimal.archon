@@ -1,0 +1,24 @@
+# Minimal fixture: 1 hole, 1 arrow, 1 existing box
+
+invariant determinism {
+  statement: same input yields byte-identical output
+  evidence: property_test
+}
+
+box example.com/m/existing
+
+hole example.com/m/newpkg {
+  surface:
+    Run(ctx context.Context) error
+    Stop()
+  allow:
+    import example.com/m/existing
+  contract:
+    BC-N1 Run is idempotent                [evidenced: property_test]
+  evidence:
+    property_test (BC-N1)
+  cites:
+    invariant determinism
+}
+
+arrow example.com/m/cmd -> example.com/m/newpkg : import
