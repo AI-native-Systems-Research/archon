@@ -49,9 +49,10 @@ func TestCompile_Minimal(t *testing.T) {
 		t.Errorf("missing packages: hole=%v box=%v", hole, box)
 	}
 
-	// Should have edges: newpkg->existing (import from allow) + cmd->newpkg (arrow)
-	if len(g.Edges) < 2 {
-		t.Errorf("want at least 2 edges, got %d", len(g.Edges))
+	// Should have 1 edge from the explicit arrow declaration (cmd->newpkg).
+	// allow: entries only populate pkg.Allow, they don't create edges.
+	if len(g.Edges) != 1 {
+		t.Errorf("want 1 edge (from arrow), got %d", len(g.Edges))
 	}
 }
 

@@ -160,7 +160,6 @@ func (p *parser) parseAllowEntry(l string, pkg *graph.Package) {
 	switch kind {
 	case "import":
 		pkg.Allow = append(pkg.Allow, target)
-		p.g.Edges = append(p.g.Edges, graph.Edge{From: pkg.Path, To: target, Kind: "import"})
 	case "metric", "config":
 		p.g.Edges = append(p.g.Edges, graph.Edge{From: pkg.Path, To: target, Kind: "config"})
 	case "service":

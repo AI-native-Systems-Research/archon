@@ -314,6 +314,7 @@ func cmdDelta(args []string) {
 	jsonOut := false
 	summaryOut := false
 	allowPath := ""
+	deltaPlanPath := ""
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
@@ -329,6 +330,14 @@ func cmdDelta(args []string) {
 			allowPath = args[i]
 		case strings.HasPrefix(a, "--allow="):
 			allowPath = strings.TrimPrefix(a, "--allow=")
+		case a == "--plan":
+			if i+1 >= len(args) {
+				usage()
+			}
+			i++
+			deltaPlanPath = args[i]
+		case strings.HasPrefix(a, "--plan="):
+			deltaPlanPath = strings.TrimPrefix(a, "--plan=")
 		default:
 			pos = append(pos, a)
 		}
@@ -354,11 +363,25 @@ func cmdDelta(args []string) {
 		printJSON(d)
 		return
 	}
+
+	planSuffix := ""
+	if deltaPlanPath != "" {
+		pg := loadPlanGraph(deltaPlanPath)
+		r := plan.Ratchet(pg, a, b)
+		status := "OK"
+		if !r.OK {
+			status = "REGRESSION"
+		}
+		planSuffix = fmt.Sprintf("\nPlan distance: %d → %d (%s)\n", r.Before, r.After, status)
+	}
+
 	if summaryOut {
 		fmt.Print(d.Summary())
+		fmt.Print(planSuffix)
 		return
 	}
 	fmt.Print(d.Render())
+	fmt.Print(planSuffix)
 }
 
 // cmdPRReview builds a CI-friendly review bundle for a PR: one command that
@@ -371,6 +394,7 @@ func cmdPRReview(args []string) {
 	opts := review.Options{Depth: 2, Out: ".archon"}
 	allowPath := ""
 	fixedPath := ""
+	planPath := ""
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -394,6 +418,10 @@ func cmdPRReview(args []string) {
 			fixedPath = next()
 		case strings.HasPrefix(a, "--fixed="):
 			fixedPath = strings.TrimPrefix(a, "--fixed=")
+		case a == "--plan":
+			planPath = next()
+		case strings.HasPrefix(a, "--plan="):
+			planPath = strings.TrimPrefix(a, "--plan=")
 		case a == "--depth":
 			opts.Depth = atoiOr(next(), 2)
 		case strings.HasPrefix(a, "--depth="):
@@ -421,7 +449,7 @@ func cmdPRReview(args []string) {
 	case 3:
 		opts.Repo, opts.Base, opts.Head = pos[0], pos[1], pos[2]
 	default:
-		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--fixed FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
+		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--fixed FILE] [--plan FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
 		os.Exit(2)
 	}
 
@@ -438,6 +466,10 @@ func cmdPRReview(args []string) {
 	if fixedPath != "" {
 		fmt.Fprintf(os.Stderr, "      checking surface growth against %s\n", fixedPath)
 		opts.SurfacePolicy = loadFixed(fixedPath)
+	}
+	if planPath != "" {
+		fmt.Fprintf(os.Stderr, "      loading plan from %s\n", planPath)
+		opts.PlanGraph = loadPlanGraph(planPath)
 	}
 
 	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
@@ -819,6 +851,21 @@ func loadFixed(path string) *gate.SurfacePolicy {
 		policy.Fixed[p] = true
 	}
 	return policy
+}
+
+func loadPlanGraph(path string) *graph.Graph {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fatal("read plan %s: %v", path, err)
+	}
+	var g graph.Graph
+	if err := json.Unmarshal(data, &g); err != nil {
+		fatal("parse plan %s: %v", path, err)
+	}
+	if len(g.Packages) == 0 && len(g.Edges) == 0 {
+		fatal("plan %s: parsed graph is empty (no packages or edges); is this the right file?", path)
+	}
+	return &g
 }
 
 func contains(xs []string, x string) bool {
