@@ -32,21 +32,27 @@ You have a Go repo. A PR comes in. Archon tells you what changed **architectural
 **Input:** two commits (base and head)
 
 ```sh
-archon-go pr-review . main feat/saturation-rework --out .archon
+archon-go pr-review . 70e9ba85 d77764f5 --out .archon
 ```
 
-**Output:** `.archon/review.md` — real example from [BLIS PR #1546](https://github.com/inference-sim/inference-sim/pull/1546):
+**Output:** `.archon/review.md` — real output from running archon on [BLIS PR #1546](https://github.com/inference-sim/inference-sim/pull/1546):
 
 ```
+## ARCHON PR review — 70e9ba85 → d77764f5
+
 Verdict: ARCHITECTURAL_CHANGE
+Architectural change — a package boundary moved; an architecture review is required.
 
-  1 edge−, 2 surface, 1 schema, 4 invariant, 1 contract
+1 edge− · 2 surface · 1 schema · 4 invariant · 1 contract
 ```
 
-Component view (generated Mermaid, embedded in the review):
+Component view (real Mermaid from the run — renders in GitHub):
 
 ```mermaid
 graph TB
+  subgraph sg1 ["cmd"]
+    m1x0("cmd")
+  end
   subgraph sg2 ["sim"]
     m2x0("sim")
   end
@@ -63,31 +69,50 @@ graph TB
     m10x0("workload")
   end
 
-  sg3 -->|"call, import"| sg2
+  sg1 -->|"call, import"| sg2
+  sg1 -->|"call, import"| sg8
+  sg1 -->|"call, import"| sg10
   sg3 -->|"call, import"| sg5
   sg5 -->|"call, import"| sg2
   sg8 -->|"import"| sg2
   sg8 -->|"call, import"| sg10
   sg8 -. "implements REMOVED" .-> sg2
-
+  linkStyle 7 stroke:#cf222e,stroke-width:2px;
   classDef boundary fill:#eef3fb,stroke:#1a7f37,stroke-width:2px;
   classDef minor fill:#eef3fb,stroke:#0969da,stroke-width:1px,stroke-dasharray:4 3;
   classDef unchanged fill:#eef3fb,stroke:#57606a;
+  class sg1 minor;
   class sg2 boundary;
-  class sg8 boundary;
   class sg3 minor;
   class sg5 unchanged;
+  class sg8 boundary;
   class sg10 unchanged;
 ```
 
-_Green border = boundary moved. Blue dashed = surface/invariant only. Grey = unchanged._
+_Green border = boundary moved. Blue dashed = surface/invariant touched. Grey = unchanged. Red dashed arrow = edge removed._
 
-Witness delta (which connections strengthened, weakened, or broke):
+Witness delta (real output — which connections strengthened, weakened, or broke):
 
+```mermaid
+graph LR
+  p0["cmd"]
+  p1["sim"]
+  p2["sim/saturation"]
+  p3["sim/workload"]
+  p2 -. "implements REMOVED" .-> p1
+  p2 -->|"call WEAKENED"| p3
+  p0 -->|"call CHURNED"| p2
+  p0 -->|"import STRENGTHENED"| p2
+  linkStyle 0 stroke:#cf222e,stroke-width:2px;
+  linkStyle 1 stroke:#cf222e,stroke-width:2px;
+  linkStyle 2 stroke:#0969da,stroke-width:2px;
+  linkStyle 3 stroke:#1a7f37,stroke-width:2px;
 ```
-| sim/saturation → sim       | implements | REMOVED  (full decoupling)  |
-| sim/saturation → workload  | call       | WEAKENED (partial)          |
-```
+
+| Edge | Kind | Status | Detail |
+|---|---|---|---|
+| `sim/saturation → sim` | implements | **REMOVED** | `Bank \|= BatchClassifier` fully decoupled |
+| `sim/saturation → sim/workload` | call | **WEAKENED** | `NewBacklogClassifier` removed, still coupled via `DefaultBacklogDriftConfig` |
 
 **What it answers:**
 - Did any package boundary move? (or is this a safe internal-only change?)
