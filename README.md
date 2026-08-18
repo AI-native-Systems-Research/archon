@@ -32,24 +32,61 @@ You have a Go repo. A PR comes in. Archon tells you what changed **architectural
 **Input:** two commits (base and head)
 
 ```sh
-archon-go pr-review . main feat/kv-offload --out .archon
+archon-go pr-review . main feat/saturation-rework --out .archon
 ```
 
-**Output:** `.archon/review.md` containing:
+**Output:** `.archon/review.md` — real example from [BLIS PR #1546](https://github.com/inference-sim/inference-sim/pull/1546):
 
 ```
 Verdict: ARCHITECTURAL_CHANGE
 
-  1 pkg+, 2 edge+, 1 surface
+  1 edge−, 2 surface, 1 schema, 4 invariant, 1 contract
+```
 
-Component view:
-  [mermaid diagram showing which boxes moved]
+Component view (generated Mermaid, embedded in the review):
 
-Public surface changes:
-  | sim/kv | +Lookup, +PrepareStore | — |
+```mermaid
+graph TB
+  subgraph sg2 ["sim"]
+    m2x0("sim")
+  end
+  subgraph sg3 ["sim/cluster"]
+    m3x0("cluster")
+  end
+  subgraph sg5 ["sim/kv"]
+    m5x0("kv")
+  end
+  subgraph sg8 ["sim/saturation"]
+    m8x0("saturation")
+  end
+  subgraph sg10 ["sim/workload"]
+    m10x0("workload")
+  end
 
-Witness delta:
-  sim/kv -> sim : import  WEAKENED (removed: OldFunc)
+  sg3 -->|"call, import"| sg2
+  sg3 -->|"call, import"| sg5
+  sg5 -->|"call, import"| sg2
+  sg8 -->|"import"| sg2
+  sg8 -->|"call, import"| sg10
+  sg8 -. "implements REMOVED" .-> sg2
+
+  classDef boundary fill:#eef3fb,stroke:#1a7f37,stroke-width:2px;
+  classDef minor fill:#eef3fb,stroke:#0969da,stroke-width:1px,stroke-dasharray:4 3;
+  classDef unchanged fill:#eef3fb,stroke:#57606a;
+  class sg2 boundary;
+  class sg8 boundary;
+  class sg3 minor;
+  class sg5 unchanged;
+  class sg10 unchanged;
+```
+
+_Green border = boundary moved. Blue dashed = surface/invariant only. Grey = unchanged._
+
+Witness delta (which connections strengthened, weakened, or broke):
+
+```
+| sim/saturation → sim       | implements | REMOVED  (full decoupling)  |
+| sim/saturation → workload  | call       | WEAKENED (partial)          |
 ```
 
 **What it answers:**
