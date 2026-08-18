@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
+	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 )
 
@@ -222,8 +223,7 @@ func TestSurfaceWideningReported(t *testing.T) {
 	}
 	b.Sort()
 	d := delta.Compute(a, b)
-	fixed := map[string]bool{mod + "/b": true}
-	res := Build(a, b, d, Options{Fixed: fixed})
+	res := Build(a, b, d, Options{SurfacePolicy: &gate.SurfacePolicy{Fixed: map[string]bool{mod + "/b": true}}})
 	if res.Counts.SurfaceWidenings != 1 {
 		t.Fatalf("want 1 widening, got %d", res.Counts.SurfaceWidenings)
 	}

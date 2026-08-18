@@ -69,9 +69,9 @@ type Options struct {
 	LabelB string // human label for head (defaults to Head)
 	Depth  int    // component grouping depth (default 2)
 
-	// Fixed is the set of package paths whose public surface must not grow.
-	// When non-nil, the surface gate (G3) checks for unauthorized widenings.
-	Fixed map[string]bool
+	// SurfacePolicy declares which packages have a fixed surface and any
+	// authorized exceptions (widen). When non-nil, the surface gate (G3) runs.
+	SurfacePolicy *gate.SurfacePolicy
 
 	// EmitArtifacts also writes the separate .mmd/.dot/.md source files and, if
 	// `dot` is on PATH, PNGs. Off by default: review.md embeds every diagram
@@ -90,9 +90,9 @@ type Counts struct {
 	Invariants      int `json:"invariants"`
 	Contracts       int `json:"contracts"`
 	Violations      int `json:"violations"`
-	WitnessesFull      int `json:"witnessesFullyDecoupled"`
-	WitnessesWeak      int `json:"witnessesPartiallyDecoupled"`
-	SurfaceWidenings   int `json:"surfaceWidenings,omitempty"`
+	WitnessesFull    int `json:"witnessesFullyDecoupled"`
+	WitnessesWeak    int `json:"witnessesPartiallyDecoupled"`
+	SurfaceWidenings int `json:"surfaceWidenings,omitempty"`
 }
 
 // Result is the review.json schema (archon.pr-review/v1). It is fully
@@ -185,8 +185,8 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 		}
 	}
 
-	if len(opts.Fixed) > 0 {
-		res.Widenings = gate.CheckSurface(d.Surface, opts.Fixed)
+	if opts.SurfacePolicy != nil {
+		res.Widenings = gate.CheckSurface(d.Surface, opts.SurfacePolicy)
 		res.Counts.SurfaceWidenings = len(res.Widenings)
 	}
 

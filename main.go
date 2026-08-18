@@ -22,6 +22,7 @@ import (
 
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
 	"github.com/AI-native-Systems-Research/archon/internal/evidence"
+	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/extract"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 	"github.com/AI-native-Systems-Research/archon/internal/health"
@@ -433,7 +434,7 @@ func cmdPRReview(args []string) {
 	}
 	if fixedPath != "" {
 		fmt.Fprintf(os.Stderr, "      checking surface growth against %s\n", fixedPath)
-		opts.Fixed = loadFixed(fixedPath)
+		opts.SurfacePolicy = loadFixed(fixedPath)
 	}
 
 	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
@@ -703,20 +704,26 @@ func loadAllow(path string) map[string][]string {
 	return m
 }
 
-func loadFixed(path string) map[string]bool {
+func loadFixed(path string) *gate.SurfacePolicy {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fatal("read fixed-surface list %s: %v", path, err)
+		fatal("read fixed-surface file %s: %v", path, err)
 	}
-	var list []string
-	if err := json.Unmarshal(data, &list); err != nil {
-		fatal("parse fixed-surface list %s: %v", path, err)
+	var raw struct {
+		Fixed []string            `json:"fixed"`
+		Widen map[string][]string `json:"widen"`
 	}
-	m := make(map[string]bool, len(list))
-	for _, p := range list {
-		m[p] = true
+	if err := json.Unmarshal(data, &raw); err != nil {
+		fatal("parse fixed-surface file %s: %v", path, err)
 	}
-	return m
+	policy := &gate.SurfacePolicy{
+		Fixed: make(map[string]bool, len(raw.Fixed)),
+		Widen: raw.Widen,
+	}
+	for _, p := range raw.Fixed {
+		policy.Fixed[p] = true
+	}
+	return policy
 }
 
 func contains(xs []string, x string) bool {
