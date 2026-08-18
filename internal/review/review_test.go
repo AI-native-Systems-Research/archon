@@ -264,6 +264,43 @@ func TestNoWideningWithoutFixed(t *testing.T) {
 	}
 }
 
+func TestPlanRatchetInReview(t *testing.T) {
+	a := baseGraph()
+	b := baseGraph()
+	planGraph := &graph.Graph{
+		Module: mod,
+		Packages: []graph.Package{
+			{Path: mod + "/a", Internal: true},
+			{Path: mod + "/b", Internal: true},
+			{Path: mod + "/c", Internal: true, Hole: true, Surface: []graph.Symbol{
+				{Kind: "func", Name: "New"},
+			}},
+		},
+		Edges: []graph.Edge{edge("a", "c", "import")},
+	}
+	d := delta.Compute(a, b)
+	res := Build(a, b, d, Options{PlanGraph: planGraph})
+	if res.PlanRatchet == nil {
+		t.Fatal("PlanRatchet should be set when PlanGraph is provided")
+	}
+	if !res.PlanRatchet.OK {
+		t.Errorf("no change PR should be OK, got before=%d after=%d", res.PlanRatchet.Before, res.PlanRatchet.After)
+	}
+	md := renderMarkdown(res)
+	if !strings.Contains(md, "G5") {
+		t.Errorf("review.md should contain G5 plan ratchet section:\n%s", md)
+	}
+}
+
+func TestNoPlanRatchetWithoutPlanGraph(t *testing.T) {
+	a := baseGraph()
+	d := delta.Compute(a, a)
+	res := Build(a, a, d, Options{})
+	if res.PlanRatchet != nil {
+		t.Fatal("PlanRatchet should be nil when no PlanGraph provided")
+	}
+}
+
 func TestCompKey(t *testing.T) {
 	cases := []struct {
 		rel   string

@@ -31,6 +31,7 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
 	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/plan"
 )
 
 // Verdict is the triage outcome. There are exactly two: either the PR moved a
@@ -72,6 +73,10 @@ type Options struct {
 	// SurfacePolicy declares which packages have a fixed surface and any
 	// authorized exceptions (widen). When non-nil, the surface gate (G3) runs.
 	SurfacePolicy *gate.SurfacePolicy
+
+	// PlanGraph is a compiled plan. When non-nil, the plan ratchet (G5) and
+	// surface gate (G3, derived from plan holes) are computed.
+	PlanGraph *graph.Graph
 
 	// EmitArtifacts also writes the separate .mmd/.dot/.md source files and, if
 	// `dot` is on PATH, PNGs. Off by default: review.md embeds every diagram
@@ -119,7 +124,8 @@ type Result struct {
 	Surface    []delta.SurfaceChange   `json:"surface,omitempty"`
 	Contracts  []delta.ContractChange  `json:"contracts,omitempty"`
 	Violations []delta.Violation       `json:"violations,omitempty"`
-	Widenings  []gate.Widening        `json:"widenings,omitempty"`
+	Widenings    []gate.Widening       `json:"widenings,omitempty"`
+	PlanRatchet  *plan.RatchetResult   `json:"planRatchet,omitempty"`
 
 	// Higher-altitude views (computed here).
 	Components ComponentView `json:"components"`
@@ -190,8 +196,33 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 		res.Counts.SurfaceWidenings = len(res.Widenings)
 	}
 
+	if opts.PlanGraph != nil {
+		r := plan.Ratchet(opts.PlanGraph, gA, gB)
+		res.PlanRatchet = &r
+		// Auto-derive surface policy from plan's holes if not explicitly set
+		if opts.SurfacePolicy == nil {
+			policy := surfacePolicyFromPlan(opts.PlanGraph)
+			if len(policy.Fixed) > 0 {
+				res.Widenings = gate.CheckSurface(d.Surface, policy)
+				res.Counts.SurfaceWidenings = len(res.Widenings)
+			}
+		}
+	}
+
 	res.Verdict, res.Summary = verdict(d)
 	return res
+}
+
+// surfacePolicyFromPlan derives a surface policy from a compiled plan: non-hole
+// packages with a declared surface are treated as fixed.
+func surfacePolicyFromPlan(p *graph.Graph) *gate.SurfacePolicy {
+	policy := &gate.SurfacePolicy{Fixed: map[string]bool{}}
+	for _, pkg := range p.Packages {
+		if !pkg.Hole && len(pkg.Surface) > 0 {
+			policy.Fixed[pkg.Path] = true
+		}
+	}
+	return policy
 }
 
 // verdict is the binary triage: a package boundary either moved or it didn't.

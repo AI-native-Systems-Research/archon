@@ -8,6 +8,7 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
 	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/plan"
 )
 
 // renderMarkdown builds review.md — the primary human interface, designed for
@@ -24,10 +25,11 @@ func renderMarkdown(res *Result) string {
 	// Verdict line.
 	fmt.Fprintf(&b, "**Verdict: `%s`**\n\n%s\n\n", res.Verdict, res.Summary)
 
+	// Plan ratchet is shown regardless of verdict — it's always useful info.
+	writePlanRatchetSection(&b, res.PlanRatchet)
+	writeWideningSection(&b, res.Widenings)
+
 	if res.Verdict == NoChange {
-		// The boundary didn't move. If a guarded promise still changed, point at
-		// it in one line — the full detail lives in review.json — but the verdict
-		// stays "no architectural change".
 		if n := res.Counts.Invariants + res.Counts.SchemaChanged; n > 0 {
 			fmt.Fprintf(&b, "_Note: %d guarded promise(s) (invariant / schema) also changed within the existing boundary — see `review.json`._\n\n", n)
 		}
@@ -83,7 +85,6 @@ func renderMarkdown(res *Result) string {
 	writeInvariantTable(&b, res.Invariants)
 	writeSchemaTable(&b, res.Schema_)
 	writeSurfaceTable(&b, res.Surface)
-	writeWideningSection(&b, res.Widenings)
 
 	writeCollapsibleJSON(&b, res)
 	writeFooter(&b, res)
@@ -241,6 +242,18 @@ func symbolList(syms []graph.Symbol) string {
 		names[i] = s.Name
 	}
 	return "`" + strings.Join(names, "`, `") + "`"
+}
+
+func writePlanRatchetSection(b *strings.Builder, r *plan.RatchetResult) {
+	if r == nil {
+		return
+	}
+	b.WriteString("### G5 — Plan distance ratchet\n\n")
+	status := "OK"
+	if !r.OK {
+		status = "REGRESSION"
+	}
+	fmt.Fprintf(b, "**dist(P,G): %d → %d** — %s\n\n", r.Before, r.After, status)
 }
 
 func writeWideningSection(b *strings.Builder, widenings []gate.Widening) {
