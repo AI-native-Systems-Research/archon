@@ -32,25 +32,87 @@ You have a Go repo. A PR comes in. Archon tells you what changed **architectural
 **Input:** two commits (base and head)
 
 ```sh
-archon-go pr-review . main feat/kv-offload --out .archon
+archon-go pr-review . 70e9ba85 d77764f5 --out .archon
 ```
 
-**Output:** `.archon/review.md` containing:
+**Output:** `.archon/review.md` — real output from running archon on [BLIS PR #1546](https://github.com/inference-sim/inference-sim/pull/1546):
 
 ```
+## ARCHON PR review — 70e9ba85 → d77764f5
+
 Verdict: ARCHITECTURAL_CHANGE
+Architectural change — a package boundary moved; an architecture review is required.
 
-  1 pkg+, 2 edge+, 1 surface
-
-Component view:
-  [mermaid diagram showing which boxes moved]
-
-Public surface changes:
-  | sim/kv | +Lookup, +PrepareStore | — |
-
-Witness delta:
-  sim/kv -> sim : import  WEAKENED (removed: OldFunc)
+1 edge− · 2 surface · 1 schema · 4 invariant · 1 contract
 ```
+
+Component view (real Mermaid from the run — renders in GitHub):
+
+```mermaid
+graph TB
+  subgraph sg1 ["cmd"]
+    m1x0("cmd")
+  end
+  subgraph sg2 ["sim"]
+    m2x0("sim")
+  end
+  subgraph sg3 ["sim/cluster"]
+    m3x0("cluster")
+  end
+  subgraph sg5 ["sim/kv"]
+    m5x0("kv")
+  end
+  subgraph sg8 ["sim/saturation"]
+    m8x0("saturation")
+  end
+  subgraph sg10 ["sim/workload"]
+    m10x0("workload")
+  end
+
+  sg1 -->|"call, import"| sg2
+  sg1 -->|"call, import"| sg8
+  sg1 -->|"call, import"| sg10
+  sg3 -->|"call, import"| sg5
+  sg5 -->|"call, import"| sg2
+  sg8 -->|"import"| sg2
+  sg8 -->|"call, import"| sg10
+  sg8 -. "implements REMOVED" .-> sg2
+  linkStyle 7 stroke:#cf222e,stroke-width:2px;
+  classDef boundary fill:#eef3fb,stroke:#1a7f37,stroke-width:2px;
+  classDef minor fill:#eef3fb,stroke:#0969da,stroke-width:1px,stroke-dasharray:4 3;
+  classDef unchanged fill:#eef3fb,stroke:#57606a;
+  class sg1 minor;
+  class sg2 boundary;
+  class sg3 minor;
+  class sg5 unchanged;
+  class sg8 boundary;
+  class sg10 unchanged;
+```
+
+_Green border = boundary moved. Blue dashed = surface/invariant touched. Grey = unchanged. Red dashed arrow = edge removed._
+
+Witness delta (real output — which connections strengthened, weakened, or broke):
+
+```mermaid
+graph LR
+  p0["cmd"]
+  p1["sim"]
+  p2["sim/saturation"]
+  p3["sim/workload"]
+  p2 -. "implements REMOVED" .-> p1
+  p2 -->|"call WEAKENED"| p3
+  p0 -->|"call CHURNED"| p2
+  p0 -->|"import STRENGTHENED"| p2
+  linkStyle 0 stroke:#cf222e,stroke-width:2px;
+  linkStyle 1 stroke:#cf222e,stroke-width:2px;
+  linkStyle 2 stroke:#0969da,stroke-width:2px;
+  linkStyle 3 stroke:#1a7f37,stroke-width:2px;
+```
+
+| Edge | Kind | Status | Detail |
+|---|---|---|---|
+| `sim/saturation → sim` | implements | **REMOVED** | `Bank \|= BatchClassifier` fully decoupled |
+| `sim/saturation → sim/workload` | call | **WEAKENED** | `NewBacklogClassifier` removed, still coupled via `DefaultBacklogDriftConfig` |
 
 **What it answers:**
 - Did any package boundary move? (or is this a safe internal-only change?)
@@ -140,10 +202,15 @@ arrow github.com/inference-sim/sim/kv/transfer -> github.com/inference-sim/sim :
 #### Step 2: Compile and commit
 
 ```sh
-archon-go plan compile kv-offload.archon > kv-offload.plan.json
+archon-go plan compile --stats kv-offload.archon > kv-offload.plan.json
 ```
 
-Output is standard graph JSON (same format `extract` produces):
+Stats output (stderr):
+```
+5 clauses: 0 checked, 5 evidenced, 0 attested:external, 0 attested:design
+```
+
+The compiled JSON is standard graph format (same as `extract` output):
 ```json
 {
   "packages": [
@@ -155,6 +222,32 @@ Output is standard graph JSON (same format `extract` produces):
   "edges": [...]
 }
 ```
+
+Visualize the plan as a Mermaid diagram:
+```sh
+archon-go plan render kv-offload.plan.json
+```
+
+```mermaid
+graph LR
+  n0["sim"]
+  n1["cluster"]
+  n2["hash"]
+  n3(["tierchain"])
+  n4(["transfer"])
+
+  n1 --> n3
+  n3 --> n0
+  n3 --> n2
+  n4 --> n0
+
+  classDef hole fill:#ffeccc,stroke:#b45309,stroke-width:3px,stroke-dasharray:6 3,color:#3b2200
+  class n3,n4 hole
+  classDef box fill:#dbe7f8,stroke:#3b5f8f,color:#0d1b2e
+  class n0,n1,n2 box
+```
+
+_Holes (tierchain, transfer) are stadium-shaped with dashed borders. Existing boxes are solid._
 
 Commit `kv-offload.plan.json` to your repo.
 
@@ -238,6 +331,46 @@ Four block types — see [docs/plan-syntax.md](docs/plan-syntax.md) for the full
 | C4 | Disallowed arrow — dependency exists but plan forbids it |
 
 `dist = 0` means the code fully realizes the plan.
+
+---
+
+## Plan utilities
+
+Beyond compile and dist, three utilities help you work with plans:
+
+```sh
+# Extract one hole as a work order (share with a teammate or sub-issue)
+archon-go plan slice kv-offload.plan.json github.com/inference-sim/sim/kv/tierchain
+```
+
+Output:
+```markdown
+# github.com/inference-sim/sim/kv/tierchain
+
+## Surface
+- `CompleteStore(keys, ok bool)`
+- `Lookup(BlockKey, ReqCtx) LookupResult`
+- `PrepareStore(keys, ReqCtx) StoreGrant`
+- `TierCount() int`
+
+## Allow
+- `import github.com/inference-sim/sim`
+- `import github.com/inference-sim/sim/internal/hash`
+
+## Contract
+- **BC-C1**
+- **BC-C2**
+- **BC-C4**
+```
+
+```sh
+# Render plan as Mermaid (paste into GitHub issues/PRs)
+archon-go plan render kv-offload.plan.json
+
+# Compile with clause tally
+archon-go plan compile --stats kv-offload.archon > plan.json
+# stderr: 5 clauses: 0 checked, 5 evidenced, 0 attested:external, 0 attested:design
+```
 
 ---
 

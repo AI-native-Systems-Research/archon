@@ -20,6 +20,10 @@ tool can check. With it, you can:
 # Compile a .archon file into graph JSON
 archon-go plan compile myplan.archon > myplan.json
 
+# Compile with clause statistics
+archon-go plan compile --stats myplan.archon > myplan.json
+# stderr: 8 clauses: 3 checked, 4 evidenced, 0 attested:external, 1 attested:design
+
 # Compute distance between plan and actual code
 archon-go plan dist myplan.json /path/to/repo
 
@@ -28,6 +32,12 @@ archon-go plan dist myplan.json /path/to/repo abc123
 
 # Compute distance between plan and another graph JSON
 archon-go plan dist myplan.json actual.json
+
+# Extract one hole as a work order (surface, allow, contract)
+archon-go plan slice myplan.json github.com/myorg/repo/internal/auth
+
+# Render the plan as a Mermaid diagram (holes dashed, boxes solid)
+archon-go plan render myplan.json
 ```
 
 ---
