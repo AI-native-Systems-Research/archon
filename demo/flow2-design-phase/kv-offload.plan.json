@@ -1,0 +1,129 @@
+{
+  "module": "",
+  "packages": [
+    {
+      "path": "github.com/inference-sim/sim",
+      "name": "sim",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/sim/cluster",
+      "name": "cluster",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/sim/internal/hash",
+      "name": "hash",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/sim/kv/tierchain",
+      "name": "tierchain",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "CompleteStore",
+          "sig": "(keys, ok bool)"
+        },
+        {
+          "kind": "func",
+          "name": "Lookup",
+          "sig": "(BlockKey, ReqCtx) LookupResult"
+        },
+        {
+          "kind": "func",
+          "name": "PrepareStore",
+          "sig": "(keys, ReqCtx) StoreGrant"
+        },
+        {
+          "kind": "func",
+          "name": "TierCount",
+          "sig": "() int"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-C1",
+          "file": "plan",
+          "hash": "evidenced: differential_test"
+        },
+        {
+          "name": "BC-C2",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-C4",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/sim",
+        "github.com/inference-sim/sim/internal/hash"
+      ]
+    },
+    {
+      "path": "github.com/inference-sim/sim/kv/transfer",
+      "name": "transfer",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "ActiveJobs",
+          "sig": "(TierIndex, Direction) int"
+        },
+        {
+          "kind": "func",
+          "name": "Poll",
+          "sig": "(now int64) []JobId"
+        },
+        {
+          "kind": "func",
+          "name": "Submit",
+          "sig": "(TransferJob) JobId"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-S1",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-S2",
+          "file": "plan",
+          "hash": "evidenced: metamorphic_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/sim"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "github.com/inference-sim/sim/cluster",
+      "to": "github.com/inference-sim/sim/kv/tierchain",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/sim/kv/tierchain",
+      "to": "github.com/inference-sim/sim",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/sim/kv/tierchain",
+      "to": "github.com/inference-sim/sim/internal/hash",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/sim/kv/transfer",
+      "to": "github.com/inference-sim/sim",
+      "kind": "import"
+    }
+  ]
+}

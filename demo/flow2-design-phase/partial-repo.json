@@ -1,0 +1,13 @@
+{"module":"github.com/inference-sim","packages":[
+  {"path":"github.com/inference-sim/sim","name":"sim","internal":true,"files":["sim.go"]},
+  {"path":"github.com/inference-sim/sim/internal/hash","name":"hash","internal":true,"files":["hash.go"]},
+  {"path":"github.com/inference-sim/sim/cluster","name":"cluster","internal":true,"files":["cluster.go"]},
+  {"path":"github.com/inference-sim/sim/kv/tierchain","name":"tierchain","internal":true,"files":["tierchain.go"],"surface":[
+    {"kind":"func","name":"Lookup"},{"kind":"func","name":"PrepareStore"},
+    {"kind":"func","name":"CompleteStore"},{"kind":"func","name":"TierCount"}
+  ]}
+],"edges":[
+  {"from":"github.com/inference-sim/sim/cluster","to":"github.com/inference-sim/sim/kv/tierchain","kind":"import"},
+  {"from":"github.com/inference-sim/sim/kv/tierchain","to":"github.com/inference-sim/sim","kind":"import"},
+  {"from":"github.com/inference-sim/sim/kv/tierchain","to":"github.com/inference-sim/sim/internal/hash","kind":"import"}
+]}

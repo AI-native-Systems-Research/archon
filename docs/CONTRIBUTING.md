@@ -71,7 +71,12 @@ Before pushing, confirm everything passes:
 go build ./...    # compiles
 go test ./...     # all tests pass
 go vet ./...      # no warnings
+
+# Run golden-file demos to catch output regressions
+ARCHON=./archon-go ./demo/run-all.sh
 ```
+
+If the demo fails, your change altered archon's output — fix the bug. Do NOT update golden files yourself; flag the diff to the human reviewer and justify why the output changed. Only a human may approve golden-file updates.
 
 Commit atomically — each commit should be a coherent unit.
 
