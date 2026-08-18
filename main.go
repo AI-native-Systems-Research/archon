@@ -23,6 +23,7 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
 	"github.com/AI-native-Systems-Research/archon/internal/evidence"
 	"github.com/AI-native-Systems-Research/archon/internal/gate"
+	"github.com/AI-native-Systems-Research/archon/internal/plan"
 	"github.com/AI-native-Systems-Research/archon/internal/extract"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 	"github.com/AI-native-Systems-Research/archon/internal/health"
@@ -55,6 +56,8 @@ func main() {
 		cmdReflexion(os.Args[2:])
 	case "pr-review":
 		cmdPRReview(os.Args[2:])
+	case "plan":
+		cmdPlan(os.Args[2:])
 	default:
 		usage()
 	}
@@ -444,6 +447,93 @@ func cmdPRReview(args []string) {
 		fatal("write bundle: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "done: %s\n", res.Verdict)
+}
+
+// cmdPlan handles `archon-go plan compile|dist` subcommands.
+func cmdPlan(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: archon-go plan compile <file.archon>")
+		fmt.Fprintln(os.Stderr, "       archon-go plan dist <plan.json> <repo|graph.json> [commit]")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "compile":
+		cmdPlanCompile(args[1:])
+	case "dist":
+		cmdPlanDist(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown plan subcommand: %s\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func cmdPlanCompile(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: archon-go plan compile <file.archon>")
+		os.Exit(2)
+	}
+	src, err := os.ReadFile(args[0])
+	if err != nil {
+		fatal("read %s: %v", args[0], err)
+	}
+	g, diags := plan.Compile(src)
+	if len(diags) > 0 {
+		for _, d := range diags {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", args[0], d)
+		}
+		os.Exit(1)
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(g)
+}
+
+func cmdPlanDist(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: archon-go plan dist <plan.json> <repo|graph.json> [commit]")
+		os.Exit(2)
+	}
+	planPath := args[0]
+	planData, err := os.ReadFile(planPath)
+	if err != nil {
+		fatal("read plan %s: %v", planPath, err)
+	}
+	var planGraph graph.Graph
+	if err := json.Unmarshal(planData, &planGraph); err != nil {
+		fatal("parse plan %s: %v", planPath, err)
+	}
+
+	var actual *graph.Graph
+	target := args[1]
+	if strings.HasSuffix(target, ".json") {
+		data, err := os.ReadFile(target)
+		if err != nil {
+			fatal("read %s: %v", target, err)
+		}
+		actual = &graph.Graph{}
+		if err := json.Unmarshal(data, actual); err != nil {
+			fatal("parse %s: %v", target, err)
+		}
+	} else {
+		commit := ""
+		if len(args) > 2 {
+			commit = args[2]
+		}
+		actual = extractAt(target, commit)
+	}
+
+	res := plan.Dist(&planGraph, actual)
+	fmt.Fprintf(os.Stdout, "dist(P,G) = %d\n", res.Total)
+	fmt.Fprintf(os.Stdout, "  unfilled holes (C1): %d\n", res.C1)
+	fmt.Fprintf(os.Stdout, "  absent boxes   (C2): %d\n", res.C2)
+	fmt.Fprintf(os.Stdout, "  absent arrows  (C3): %d\n", res.C3)
+	fmt.Fprintf(os.Stdout, "  disallowed     (C4): %d\n", res.C4)
+	if len(res.Unmet) > 0 {
+		fmt.Fprintln(os.Stdout)
+		for _, u := range res.Unmet {
+			fmt.Fprintf(os.Stdout, "  [%s] %s\n", u.Class, u.Detail)
+		}
+	}
 }
 
 func atoiOr(s string, def int) int {
