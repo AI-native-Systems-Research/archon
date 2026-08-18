@@ -291,6 +291,10 @@ func parseContractEntry(l string) graph.Invariant {
 			class = strings.TrimSpace(l[start+1 : start+end])
 		}
 	}
+	// Hash is repurposed for plan-sourced invariants to store the class
+	// annotation. Plan invariants have no function body, so Hash is never
+	// used as a content digest for them. Code-extracted invariants use Hash
+	// as a digest and never set it from a class annotation.
 	return graph.Invariant{Name: name, File: "plan", Hash: class}
 }
 

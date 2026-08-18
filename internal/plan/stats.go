@@ -31,8 +31,6 @@ func Stats(g *graph.Graph) string {
 				attestedExt++
 			case strings.HasPrefix(class, "attested:design"):
 				attestedDesign++
-			case strings.HasPrefix(class, "attested"):
-				attestedDesign++
 			default:
 				unclassified++
 			}
