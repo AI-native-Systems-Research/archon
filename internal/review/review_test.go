@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
+	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 )
 
@@ -199,6 +200,67 @@ func TestComponentCycleDetection(t *testing.T) {
 		if !c.InCycle {
 			t.Errorf("component %s should be flagged in-cycle", c.Name)
 		}
+	}
+}
+
+func TestSurfaceWideningReported(t *testing.T) {
+	a := baseGraph()
+	// head adds a new exported symbol to package b.
+	b := &graph.Graph{
+		Module: mod,
+		Packages: []graph.Package{
+			pkg("a", true),
+			{Path: mod + "/b", Name: "b", Internal: true, Surface: []graph.Symbol{
+				{Kind: "func", Name: "NewThing"},
+				{Kind: "func", Name: "Extra"},
+			}},
+		},
+		Edges: []graph.Edge{
+			edge("a", "b", "import", "a/x.go"),
+			edge("a", "b", "call", "NewThing", "DefaultThing"),
+			edge("a", "b", "implements", "Bank |= Classifier"),
+		},
+	}
+	b.Sort()
+	d := delta.Compute(a, b)
+	res := Build(a, b, d, Options{SurfacePolicy: &gate.SurfacePolicy{Fixed: map[string]bool{mod + "/b": true}}})
+	if res.Counts.SurfaceWidenings != 1 {
+		t.Fatalf("want 1 widening, got %d", res.Counts.SurfaceWidenings)
+	}
+	if res.Widenings[0].Package != mod+"/b" {
+		t.Errorf("widening package = %q", res.Widenings[0].Package)
+	}
+	md := renderMarkdown(res)
+	if !strings.Contains(md, "G3") {
+		t.Errorf("review.md should contain G3 surface growth section:\n%s", md)
+	}
+}
+
+func TestNoWideningWithoutFixed(t *testing.T) {
+	a := baseGraph()
+	b := &graph.Graph{
+		Module: mod,
+		Packages: []graph.Package{
+			pkg("a", true),
+			{Path: mod + "/b", Name: "b", Internal: true, Surface: []graph.Symbol{
+				{Kind: "func", Name: "NewThing"},
+				{Kind: "func", Name: "Extra"},
+			}},
+		},
+		Edges: []graph.Edge{
+			edge("a", "b", "import", "a/x.go"),
+			edge("a", "b", "call", "NewThing", "DefaultThing"),
+			edge("a", "b", "implements", "Bank |= Classifier"),
+		},
+	}
+	b.Sort()
+	d := delta.Compute(a, b)
+	res := Build(a, b, d, Options{})
+	if res.Counts.SurfaceWidenings != 0 {
+		t.Fatalf("without Fixed, want 0 widenings, got %d", res.Counts.SurfaceWidenings)
+	}
+	if len(res.Widenings) != 0 {
+		t.Fatalf("without Fixed, want nil widenings, got %v", res.Widenings)
 	}
 }
 

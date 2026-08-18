@@ -22,6 +22,7 @@ import (
 
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
 	"github.com/AI-native-Systems-Research/archon/internal/evidence"
+	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/extract"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 	"github.com/AI-native-Systems-Research/archon/internal/health"
@@ -366,6 +367,7 @@ func cmdDelta(args []string) {
 func cmdPRReview(args []string) {
 	opts := review.Options{Depth: 2, Out: ".archon"}
 	allowPath := ""
+	fixedPath := ""
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -385,6 +387,10 @@ func cmdPRReview(args []string) {
 			allowPath = next()
 		case strings.HasPrefix(a, "--allow="):
 			allowPath = strings.TrimPrefix(a, "--allow=")
+		case a == "--fixed":
+			fixedPath = next()
+		case strings.HasPrefix(a, "--fixed="):
+			fixedPath = strings.TrimPrefix(a, "--fixed=")
 		case a == "--depth":
 			opts.Depth = atoiOr(next(), 2)
 		case strings.HasPrefix(a, "--depth="):
@@ -412,7 +418,7 @@ func cmdPRReview(args []string) {
 	case 3:
 		opts.Repo, opts.Base, opts.Head = pos[0], pos[1], pos[2]
 	default:
-		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
+		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--fixed FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
 		os.Exit(2)
 	}
 
@@ -425,6 +431,10 @@ func cmdPRReview(args []string) {
 	if allowPath != "" {
 		fmt.Fprintf(os.Stderr, "      checking contract against %s\n", allowPath)
 		d.CheckContract(gB, loadAllow(allowPath))
+	}
+	if fixedPath != "" {
+		fmt.Fprintf(os.Stderr, "      checking surface growth against %s\n", fixedPath)
+		opts.SurfacePolicy = loadFixed(fixedPath)
 	}
 
 	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
@@ -692,6 +702,28 @@ func loadAllow(path string) map[string][]string {
 		fatal("parse allow-list %s: %v", path, err)
 	}
 	return m
+}
+
+func loadFixed(path string) *gate.SurfacePolicy {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fatal("read fixed-surface file %s: %v", path, err)
+	}
+	var raw struct {
+		Fixed []string            `json:"fixed"`
+		Widen map[string][]string `json:"widen"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		fatal("parse fixed-surface file %s: %v", path, err)
+	}
+	policy := &gate.SurfacePolicy{
+		Fixed: make(map[string]bool, len(raw.Fixed)),
+		Widen: raw.Widen,
+	}
+	for _, p := range raw.Fixed {
+		policy.Fixed[p] = true
+	}
+	return policy
 }
 
 func contains(xs []string, x string) bool {

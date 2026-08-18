@@ -2,7 +2,7 @@
 
 How we deliver PRs that actually close issues, with minimal ceremony.
 
-## The 5-Step Workflow
+## The Workflow
 
 ### 1. Worktree
 
@@ -44,7 +44,7 @@ If the issue is vague, comment on it to clarify scope before proceeding.
 - Don't solve problems that belong to other sub-issues — note them and move on.
 - If your sub-issue reveals a gap in the tracking issue, comment there rather than expanding your PR.
 
-### 3. Micro-Plan in PR Description
+### 3. Micro-Plan — get approval before coding
 
 Write 3-5 bullets covering:
 
@@ -52,6 +52,8 @@ Write 3-5 bullets covering:
 - **How** it works (approach, not line-by-line)
 - **What tests** prove it works
 - **What you're NOT changing** (scope boundary)
+
+**Present this to the reviewer (or issue owner) and get explicit approval before writing code.** This avoids wasted work when the approach is wrong. A quick "does this make sense?" saves hours of rework.
 
 This is your contract with the reviewer. If you can't write this clearly, you don't understand the issue yet — go back to step 2.
 
@@ -61,9 +63,28 @@ Write the code. Include at least one test that proves the issue is resolved.
 
 You don't need strict TDD, but the bar is: if someone reverts your fix, a test should fail.
 
-Commit atomically — each commit should be a coherent unit. Lint before pushing.
+**For feature PRs:** Include at least one test that shows concrete input → output when run with `go test -v -run TestXxx`. A reviewer should be able to run that one command and see exactly what goes in and what comes out — no guessing.
 
-### 5. Review with pr-review-toolkit
+Before pushing, confirm everything passes:
+
+```bash
+go build ./...    # compiles
+go test ./...     # all tests pass
+go vet ./...      # no warnings
+```
+
+Commit atomically — each commit should be a coherent unit.
+
+### 5. PR Description Checklist (Medium+ feature PRs)
+
+Your PR description must include:
+
+1. **Context** — what is this about in the big picture? Few sentences linking to the issue/tracking issue.
+2. **What the PR delivers** — what changed, concretely (files, behavior, flags).
+3. **Input/output proof** — which test to run (e.g., `go test -v -run TestXxx ./internal/pkg/`) and what the output demonstrates.
+4. **No-regression proof** — which existing tests still pass, and what guarantees previous behavior is unchanged (e.g., "without `--flag`, output is byte-identical").
+
+### 6. Review with pr-review-toolkit (/pr-review-toolkit:review-pr)
 
 Before marking the PR ready, run the review skill with this prompt:
 
@@ -74,15 +95,7 @@ Review this PR against the linked issue. Check:
 3. Is there any overengineering or unnecessary scope creep?
 ```
 
-Fix anything it flags, then mark ready for human review.
-
-## PR Size Guide
-
-| Size | Definition | Process |
-|------|-----------|---------|
-| Express | ≤3 lines, mechanical (typo, version bump) | Skip review, merge directly |
-| Small | Docs-only or ≤3 files, straightforward | Steps 1-4, quick human review |
-| Medium+ | 4+ files or behavioral changes | Full workflow including step 5 |
+Please first reason about findings, Fix if they are valid, then mark ready for human review.
 
 ## Principles
 
