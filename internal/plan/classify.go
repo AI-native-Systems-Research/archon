@@ -30,6 +30,12 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	if p == nil {
 		return ClassifyResult{Verdict: Unrelated, Reason: "no plan provided"}
 	}
+	if base == nil {
+		base = &graph.Graph{}
+	}
+	if head == nil {
+		head = &graph.Graph{}
+	}
 
 	before := Dist(p, base)
 	after := Dist(p, head)
@@ -79,8 +85,6 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 		}
 		if planPkgs[path] {
 			touchesPlan = true
-		} else {
-			addsUnplanned = true
 		}
 	}
 
@@ -93,13 +97,13 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	for _, e := range base.Edges {
 		baseEdges[edgeKey(e)] = true
 	}
-	for key := range headEdges {
-		if baseEdges[key] {
+	for _, e := range head.Edges {
+		if baseEdges[edgeKey(e)] {
 			continue
 		}
-		if planEdgeSet[key] {
+		if planEdgeSet[edgeKey(e)] {
 			touchesPlan = true
-		} else {
+		} else if planPkgs[e.From] || planPkgs[e.To] {
 			addsUnplanned = true
 		}
 	}
@@ -110,7 +114,7 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	}
 
 	// Apply precedence: Conflicts already handled above
-	if addsUnplanned {
+	if touchesPlan && addsUnplanned {
 		return ClassifyResult{
 			Verdict: Exceeds,
 			Reason:  "adds structure the plan does not declare",

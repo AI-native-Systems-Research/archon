@@ -56,21 +56,32 @@ func TestClassify_Conflicts(t *testing.T) {
 }
 
 func TestClassify_Exceeds(t *testing.T) {
+	// PR fills the hole (touches plan) AND adds an unplanned edge from a plan package
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Hole: true},
+			{Path: "m/a", Hole: true, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
+			{Path: "m/b"},
+		},
+		Edges: []graph.Edge{{From: "m/cmd", To: "m/a", Kind: "import"}},
+	}
+	base := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/b", Files: []string{"b.go"}},
 		},
 	}
-	base := &graph.Graph{}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/unplanned", Files: []string{"u.go"}},
+			{Path: "m/a", Files: []string{"a.go"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
+			{Path: "m/b", Files: []string{"b.go"}},
+		},
+		Edges: []graph.Edge{
+			{From: "m/cmd", To: "m/a", Kind: "import"},
+			{From: "m/a", To: "m/b", Kind: "call"}, // unplanned edge from plan-declared package
 		},
 	}
 	r := Classify(p, base, head)
 	if r.Verdict != Exceeds {
-		t.Fatalf("want EXCEEDS (added unplanned package), got %s: %s", r.Verdict, r.Reason)
+		t.Fatalf("want EXCEEDS (fills hole + adds unplanned edge), got %s: %s", r.Verdict, r.Reason)
 	}
 }
 
