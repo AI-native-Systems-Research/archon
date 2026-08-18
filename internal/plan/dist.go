@@ -30,6 +30,12 @@ type DistResult struct {
 // Both operands are *graph.Graph. When comparing two plans (Review A), a hole
 // present in both is NOT counted as unfilled.
 func Dist(plan, actual *graph.Graph) DistResult {
+	if plan == nil {
+		return DistResult{}
+	}
+	if actual == nil {
+		actual = &graph.Graph{}
+	}
 	var res DistResult
 
 	actualPkgs := indexPackages(actual)
@@ -112,11 +118,12 @@ func Dist(plan, actual *graph.Graph) DistResult {
 		}
 	}
 
-	// C4: disallowed arrows (edges in actual between plan-declared packages,
-	// outside the Allow list)
+	// C4: disallowed arrows (import edges in actual between plan-declared packages,
+	// outside the Allow list). Only import edges are checked because Allow
+	// declarations only cover imports.
 	planAllow := indexAllow(plan)
 	for _, e := range actual.Edges {
-		if e.Kind != "import" && e.Kind != "call" {
+		if e.Kind != "import" {
 			continue
 		}
 		// Only check edges between packages that the plan mentions

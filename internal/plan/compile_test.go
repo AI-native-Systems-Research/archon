@@ -104,6 +104,36 @@ func TestCompile_MalformedArrow(t *testing.T) {
 	}
 }
 
+func TestCompile_UnterminatedHole(t *testing.T) {
+	src := []byte(`hole example.com/m/pkg {
+  surface:
+    Foo() error
+`)
+	_, diags := Compile(src)
+	if len(diags) == 0 {
+		t.Fatal("expected compile error for unterminated hole block")
+	}
+	found := false
+	for _, d := range diags {
+		if contains(d.Message, "unterminated") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'unterminated' diagnostic, got: %v", diags)
+	}
+}
+
+func TestCompile_UnterminatedInvariant(t *testing.T) {
+	src := []byte(`invariant myinv {
+  statement: something
+`)
+	_, diags := Compile(src)
+	if len(diags) == 0 {
+		t.Fatal("expected compile error for unterminated invariant block")
+	}
+}
+
 func TestCompile_EmptyInput(t *testing.T) {
 	g, diags := Compile([]byte(""))
 	if len(diags) > 0 {

@@ -103,10 +103,12 @@ func (p *parser) parseHole() {
 	}
 
 	section := ""
+	closed := false
 	for p.pos < len(p.lines) {
 		l := strings.TrimSpace(p.lines[p.pos])
 		if l == "}" {
 			p.pos++
+			closed = true
 			break
 		}
 		switch {
@@ -118,15 +120,18 @@ func (p *parser) parseHole() {
 		default:
 			switch section {
 			case "surface":
-				pkg.Surface = append(pkg.Surface, parseSurfaceEntry(l))
+				sym := parseSurfaceEntry(l)
+				if sym.Name == "" {
+					p.diags = append(p.diags, Diagnostic{Line: p.pos + 1, Message: fmt.Sprintf("empty surface entry: %q", l)})
+				} else {
+					pkg.Surface = append(pkg.Surface, sym)
+				}
 			case "allow":
 				p.parseAllowEntry(l, &pkg)
 			case "contract":
 				pkg.Invariants = append(pkg.Invariants, parseContractEntry(l))
 			case "evidence":
-				// stored as metadata — no mechanical verification in PoC
-				p.pos++
-				continue
+				// PoC: evidence lines are parsed but not stored mechanically.
 			case "cites":
 				p.parseCiteEntry(l, path)
 			default:
@@ -136,6 +141,10 @@ func (p *parser) parseHole() {
 		}
 	}
 
+	if !closed {
+		p.diags = append(p.diags, Diagnostic{Line: p.pos, Message: fmt.Sprintf("unterminated hole block %q (missing closing '}')", path)})
+		return
+	}
 	p.g.Packages = append(p.g.Packages, pkg)
 }
 
@@ -218,10 +227,12 @@ func (p *parser) parseInvariant() {
 	p.pos++
 
 	decl := &InvariantDecl{Name: name}
+	closed := false
 	for p.pos < len(p.lines) {
 		l := strings.TrimSpace(p.lines[p.pos])
 		if l == "}" {
 			p.pos++
+			closed = true
 			break
 		}
 		switch {
@@ -234,6 +245,10 @@ func (p *parser) parseInvariant() {
 			}
 		}
 		p.pos++
+	}
+	if !closed {
+		p.diags = append(p.diags, Diagnostic{Line: p.pos, Message: fmt.Sprintf("unterminated invariant block %q (missing closing '}')", name)})
+		return
 	}
 	p.invs[name] = decl
 }

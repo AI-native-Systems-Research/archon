@@ -485,7 +485,9 @@ func cmdPlanCompile(args []string) {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	enc.Encode(g)
+	if err := enc.Encode(g); err != nil {
+		fatal("encode plan graph: %v", err)
+	}
 }
 
 func cmdPlanDist(args []string) {
@@ -501,6 +503,9 @@ func cmdPlanDist(args []string) {
 	var planGraph graph.Graph
 	if err := json.Unmarshal(planData, &planGraph); err != nil {
 		fatal("parse plan %s: %v", planPath, err)
+	}
+	if len(planGraph.Packages) == 0 && len(planGraph.Edges) == 0 {
+		fatal("plan %s: parsed graph is empty (no packages or edges); is this the right file?", planPath)
 	}
 
 	var actual *graph.Graph
