@@ -366,6 +366,7 @@ func cmdDelta(args []string) {
 func cmdPRReview(args []string) {
 	opts := review.Options{Depth: 2, Out: ".archon"}
 	allowPath := ""
+	fixedPath := ""
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -385,6 +386,10 @@ func cmdPRReview(args []string) {
 			allowPath = next()
 		case strings.HasPrefix(a, "--allow="):
 			allowPath = strings.TrimPrefix(a, "--allow=")
+		case a == "--fixed":
+			fixedPath = next()
+		case strings.HasPrefix(a, "--fixed="):
+			fixedPath = strings.TrimPrefix(a, "--fixed=")
 		case a == "--depth":
 			opts.Depth = atoiOr(next(), 2)
 		case strings.HasPrefix(a, "--depth="):
@@ -412,7 +417,7 @@ func cmdPRReview(args []string) {
 	case 3:
 		opts.Repo, opts.Base, opts.Head = pos[0], pos[1], pos[2]
 	default:
-		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
+		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--fixed FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
 		os.Exit(2)
 	}
 
@@ -425,6 +430,10 @@ func cmdPRReview(args []string) {
 	if allowPath != "" {
 		fmt.Fprintf(os.Stderr, "      checking contract against %s\n", allowPath)
 		d.CheckContract(gB, loadAllow(allowPath))
+	}
+	if fixedPath != "" {
+		fmt.Fprintf(os.Stderr, "      checking surface growth against %s\n", fixedPath)
+		opts.Fixed = loadFixed(fixedPath)
 	}
 
 	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
@@ -690,6 +699,22 @@ func loadAllow(path string) map[string][]string {
 	var m map[string][]string
 	if err := json.Unmarshal(data, &m); err != nil {
 		fatal("parse allow-list %s: %v", path, err)
+	}
+	return m
+}
+
+func loadFixed(path string) map[string]bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fatal("read fixed-surface list %s: %v", path, err)
+	}
+	var list []string
+	if err := json.Unmarshal(data, &list); err != nil {
+		fatal("parse fixed-surface list %s: %v", path, err)
+	}
+	m := make(map[string]bool, len(list))
+	for _, p := range list {
+		m[p] = true
 	}
 	return m
 }

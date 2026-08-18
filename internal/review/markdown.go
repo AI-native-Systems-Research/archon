@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
+	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 )
 
@@ -82,6 +83,7 @@ func renderMarkdown(res *Result) string {
 	writeInvariantTable(&b, res.Invariants)
 	writeSchemaTable(&b, res.Schema_)
 	writeSurfaceTable(&b, res.Surface)
+	writeWideningSection(&b, res.Widenings)
 
 	writeCollapsibleJSON(&b, res)
 	writeFooter(&b, res)
@@ -239,6 +241,16 @@ func symbolList(syms []graph.Symbol) string {
 		names[i] = s.Name
 	}
 	return "`" + strings.Join(names, "`, `") + "`"
+}
+
+func writeWideningSection(b *strings.Builder, widenings []gate.Widening) {
+	if len(widenings) == 0 {
+		return
+	}
+	b.WriteString("### G3 — Surface growth on fixed packages\n\n")
+	for _, w := range widenings {
+		fmt.Fprintf(b, "**`%s`** +%d entities: %s\n\n", shortID(w.Package), len(w.Added), symbolList(w.Added))
+	}
 }
 
 func writeCollapsibleJSON(b *strings.Builder, res *Result) {

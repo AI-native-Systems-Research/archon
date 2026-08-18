@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
+	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 )
 
@@ -68,6 +69,10 @@ type Options struct {
 	LabelB string // human label for head (defaults to Head)
 	Depth  int    // component grouping depth (default 2)
 
+	// Fixed is the set of package paths whose public surface must not grow.
+	// When non-nil, the surface gate (G3) checks for unauthorized widenings.
+	Fixed map[string]bool
+
 	// EmitArtifacts also writes the separate .mmd/.dot/.md source files and, if
 	// `dot` is on PATH, PNGs. Off by default: review.md embeds every diagram
 	// inline (as Mermaid), so the bundle is self-contained without them.
@@ -85,8 +90,9 @@ type Counts struct {
 	Invariants      int `json:"invariants"`
 	Contracts       int `json:"contracts"`
 	Violations      int `json:"violations"`
-	WitnessesFull   int `json:"witnessesFullyDecoupled"`
-	WitnessesWeak   int `json:"witnessesPartiallyDecoupled"`
+	WitnessesFull      int `json:"witnessesFullyDecoupled"`
+	WitnessesWeak      int `json:"witnessesPartiallyDecoupled"`
+	SurfaceWidenings   int `json:"surfaceWidenings,omitempty"`
 }
 
 // Result is the review.json schema (archon.pr-review/v1). It is fully
@@ -113,6 +119,7 @@ type Result struct {
 	Surface    []delta.SurfaceChange   `json:"surface,omitempty"`
 	Contracts  []delta.ContractChange  `json:"contracts,omitempty"`
 	Violations []delta.Violation       `json:"violations,omitempty"`
+	Widenings  []gate.Widening        `json:"widenings,omitempty"`
 
 	// Higher-altitude views (computed here).
 	Components ComponentView `json:"components"`
@@ -176,6 +183,11 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 		case wsWeakened:
 			res.Counts.WitnessesWeak++
 		}
+	}
+
+	if len(opts.Fixed) > 0 {
+		res.Widenings = gate.CheckSurface(d.Surface, opts.Fixed)
+		res.Counts.SurfaceWidenings = len(res.Widenings)
 	}
 
 	res.Verdict, res.Summary = verdict(d)
