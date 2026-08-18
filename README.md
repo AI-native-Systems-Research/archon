@@ -287,18 +287,22 @@ Verdict: ARCHITECTURAL_CHANGE
 G5 — Plan distance ratchet
   dist(P,G): 7 → 4 — OK
 
+Plan verdict: REALIZES — discharges plan obligations without introducing new ones
+
   1 pkg+, 2 edge+
 
 Component view:
   [mermaid diagram]
 ```
 
-**dist went from 7 to 4 — the PR moved us closer. OK.**
+**dist went from 7 to 4, verdict is REALIZES — the PR filled a hole. OK.**
 
 If a later PR introduces a dependency that the plan forbids:
 ```
 G5 — Plan distance ratchet
   dist(P,G): 4 → 5 — REGRESSION
+
+Plan verdict: CONFLICTS — introduced a dependency outside a declared Allow list
 
 G3 — Surface growth on fixed packages
   sim/kv/tierchain +1 entities: UnauthorizedFunc
@@ -331,6 +335,21 @@ Four block types — see [docs/plan-syntax.md](docs/plan-syntax.md) for the full
 | C4 | Disallowed arrow — dependency exists but plan forbids it |
 
 `dist = 0` means the code fully realizes the plan.
+
+---
+
+## Plan verdicts
+
+When `--plan` is used, archon classifies the PR's relationship to the plan:
+
+| Verdict | Meaning | Precedence |
+|---------|---------|-----------|
+| **REALIZES** | PR fills a hole or adds a declared arrow — progress | 3 (good) |
+| **EXCEEDS** | PR adds structure the plan doesn't mention — real work, outside plan | 2 |
+| **CONFLICTS** | PR adds a disallowed arrow or moves away from the plan | 1 (worst) |
+| **UNRELATED** | PR touches nothing the plan mentions | 4 |
+
+Precedence: worst wins. A PR that fills a hole AND adds a disallowed arrow is **CONFLICTS**.
 
 ---
 
