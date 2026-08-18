@@ -22,16 +22,18 @@ R=/path/to/your/repo
 ```
 
 The full walkthrough — every command, with example output — is in
-[`USERGUIDE.md`](USERGUIDE.md). For a PR review at three altitudes in one command,
-see the reviewer wrapper: [`reviewer/review.py`](reviewer/review.py) and
+[`USERGUIDE.md`](USERGUIDE.md). For declaring an intended architecture before code
+exists, see the [**plan syntax reference**](docs/plan-syntax.md). For a PR review
+at three altitudes in one command, see the reviewer wrapper:
+[`reviewer/review.py`](reviewer/review.py) and
 [`reviewer/RENDERERS.md`](reviewer/RENDERERS.md).
 
 ## Repository layout
 
 - **`main.go`** — the `archon-go` CLI (subcommands: `extract`, `delta`, `render`,
-  `contract`, `evidence`, `impact`, `health`, `reflexion`, `pr-review`).
+  `contract`, `evidence`, `impact`, `health`, `reflexion`, `pr-review`, `plan`).
 - **`internal/`** — the analysis libraries (`extract`, `graph`, `delta`,
-  `evidence`, `impact`, `health`, `reflexion`, `render`).
+  `evidence`, `impact`, `health`, `reflexion`, `render`, `plan`, `gate`).
 - **`cmd/`** — auxiliary CLI tools (`consumes`, `callgraph`, `eventflow`), each
   built separately, e.g. `go build -o consumes ./cmd/consumes`.
 - **`reviewer/`** — deterministic, no-LLM Python views for PR review
