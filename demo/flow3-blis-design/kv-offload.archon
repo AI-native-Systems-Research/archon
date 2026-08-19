@@ -1,0 +1,122 @@
+# KV-offload plan — 5 holes from inference-sim#1585
+# Base commit: 52161669
+
+invariant determinism {
+  statement: same seed produces byte-identical output
+  evidence: property_test
+}
+
+invariant kv-conservation {
+  statement: allocated + free = total at all times
+  evidence: property_test
+}
+
+# Existing packages
+box github.com/inference-sim/inference-sim/sim
+box github.com/inference-sim/inference-sim/sim/kv
+box github.com/inference-sim/inference-sim/sim/cluster
+box github.com/inference-sim/inference-sim/sim/internal/hash
+box github.com/inference-sim/inference-sim/sim/internal/util
+box github.com/inference-sim/inference-sim/sim/internal/tokenid
+
+# H1 — kv_tier_chain: the tier list itself
+hole github.com/inference-sim/inference-sim/sim/kv/tierchain {
+  surface:
+    Lookup(BlockKey, ReqCtx) LookupResult
+    PrepareStore(keys, ReqCtx) StoreGrant
+    PrepareLoad(keys, ReqCtx) LoadGrant
+    CompleteStore(keys, ok bool)
+    CompleteLoad(keys)
+    Residency(BlockKey) TierIndex
+    TierCount() int
+  allow:
+    import github.com/inference-sim/inference-sim/sim
+    import github.com/inference-sim/inference-sim/sim/internal/hash
+    import github.com/inference-sim/inference-sim/sim/internal/util
+  contract:
+    BC-C1 only tier 0 exchanges blocks with GPU        [evidenced: differential_test]
+    BC-C2 per tier allocated + free = capacity always  [evidenced: property_test]
+    BC-C3 ref_cnt is a state not just a count          [evidenced: property_test]
+    BC-C4 a block with ref_cnt != 0 is never evicted   [evidenced: property_test]
+    BC-C5 PrepareStore fails iff evictable count exceeded [evidenced: mutation_test]
+  cites:
+    invariant determinism
+    invariant kv-conservation
+}
+
+# H2 — kv_transfer_station: the thread pool
+hole github.com/inference-sim/inference-sim/sim/kv/transfer {
+  surface:
+    Submit(TransferJob) JobId
+    Poll(now int64) []JobId
+    ActiveJobs(TierIndex, Direction) int
+  allow:
+    import github.com/inference-sim/inference-sim/sim
+    import github.com/inference-sim/inference-sim/sim/internal/util
+  contract:
+    BC-S1 at most n_read + n_write jobs in service     [evidenced: property_test]
+    BC-S2 read-priority servers take reads first       [evidenced: metamorphic_test]
+    BC-S3 service_time = base + bytes/bandwidth        [evidenced: property_test]
+    BC-S4 completion order is deterministic            [evidenced: property_test]
+  cites:
+    invariant determinism
+}
+
+# H3 — kv_deferral: the step-boundary wait
+hole github.com/inference-sim/inference-sim/sim/kv/deferral {
+  surface:
+    PollDeferred(now int64) []RequestId
+  allow:
+    import github.com/inference-sim/inference-sim/sim
+    import github.com/inference-sim/inference-sim/sim/kv/tierchain
+  contract:
+    BC-T1 unresolved request re-examined at next StepEvent [evidenced: differential_test]
+    BC-T2 offload TTFT is a whole multiple of step time    [evidenced: metamorphic_test]
+    BC-T3 no request defers forever                        [evidenced: property_test]
+  cites:
+    invariant determinism
+}
+
+# H4 — kv_block_key: one hash everywhere
+hole github.com/inference-sim/inference-sim/sim/kv/blockkey {
+  surface:
+    DeriveChunkKeys(prevKey, tokens []TokenID, tokensPerChunk int) []BlockKey
+    Intern(BlockKey) KeyId
+  allow:
+    import github.com/inference-sim/inference-sim/sim/internal/hash
+    import github.com/inference-sim/inference-sim/sim/internal/tokenid
+  contract:
+    BC-K1 one hash function serves GPU CPU and all tiers [evidenced: metamorphic_test]
+    BC-K2 chunk keys chain hierarchically               [evidenced: property_test]
+    BC-K3 Intern is injective and stable within a run   [evidenced: property_test]
+  cites:
+    invariant determinism
+}
+
+# H5 — kv_offload_config: the knobs
+hole github.com/inference-sim/inference-sim/sim/kv/offloadconfig {
+  surface:
+    TierChainSpec() []TierSpec
+    PrimarySpec() PrimaryConfig
+    ChunkSpec() ChunkConfig
+    OffloadScope() Scope
+  allow:
+    import github.com/inference-sim/inference-sim/sim
+  contract:
+    BC-G1 every vLLM knob is representable or fails loudly [evidenced: property_test]
+    BC-G2 defaults equal vLLM defaults knob for knob       [evidenced: differential_test]
+    BC-G3 validated at construction                        [evidenced: property_test]
+    BC-G5 byte-identical output when offload disabled      [evidenced: metamorphic_test]
+  cites:
+    invariant determinism
+}
+
+# Declared dependencies
+arrow github.com/inference-sim/inference-sim/sim/cluster -> github.com/inference-sim/inference-sim/sim/kv/tierchain : import
+arrow github.com/inference-sim/inference-sim/sim/kv/tierchain -> github.com/inference-sim/inference-sim/sim : import
+arrow github.com/inference-sim/inference-sim/sim/kv/tierchain -> github.com/inference-sim/inference-sim/sim/internal/hash : import
+arrow github.com/inference-sim/inference-sim/sim/kv/transfer -> github.com/inference-sim/inference-sim/sim : import
+arrow github.com/inference-sim/inference-sim/sim/kv/deferral -> github.com/inference-sim/inference-sim/sim : import
+arrow github.com/inference-sim/inference-sim/sim/kv/blockkey -> github.com/inference-sim/inference-sim/sim/internal/hash : import
+arrow github.com/inference-sim/inference-sim/sim/kv/blockkey -> github.com/inference-sim/inference-sim/sim/internal/tokenid : import
+arrow github.com/inference-sim/inference-sim/sim/kv/offloadconfig -> github.com/inference-sim/inference-sim/sim : import

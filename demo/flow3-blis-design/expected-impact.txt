@@ -1,0 +1,5 @@
+BLAST RADIUS of github.com/inference-sim/inference-sim/sim/kv
+  1 direct dependent(s), 3 total (transitive)
+  direct:   cluster
+  indirect: inference-sim
+  indirect: cmd

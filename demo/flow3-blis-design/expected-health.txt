@@ -1,0 +1,17 @@
+ARCHITECTURE HEALTH
+  cycles: none — internal dependency graph is an acyclic DAG (healthy)
+  god-modules (high fan-in + large surface): sim, latency, workload
+  coupling (top by blast radius):
+    package                       fanIn  fanOut   surf   instab  blast
+    tokenid                           2       0      1     0.00     10
+    util                              2       0      1     0.00      9
+    hash                              2       1      2     0.33      9
+    sim                               7       3    305     0.30      8  <god>
+    latency                           2       1     41     0.33      3  <god>
+    workload                          2       1    126     0.33      3  <god>
+    trace                             2       0     24     0.00      3
+    kv                                1       3     32     0.75      3
+    lora                              1       1     15     0.50      2
+    saturation                        1       1     62     0.50      2
+    cluster                           1       5    315     0.83      2
+    cmd                               1       7     25     0.88      1

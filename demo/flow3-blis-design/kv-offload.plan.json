@@ -1,0 +1,327 @@
+{
+  "module": "",
+  "packages": [
+    {
+      "path": "github.com/inference-sim/inference-sim/sim",
+      "name": "sim",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/cluster",
+      "name": "cluster",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/internal/hash",
+      "name": "hash",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/internal/tokenid",
+      "name": "tokenid",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/internal/util",
+      "name": "util",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/kv",
+      "name": "kv",
+      "internal": true
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/kv/blockkey",
+      "name": "blockkey",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "DeriveChunkKeys",
+          "sig": "(prevKey, tokens []TokenID, tokensPerChunk int) []BlockKey"
+        },
+        {
+          "kind": "func",
+          "name": "Intern",
+          "sig": "(BlockKey) KeyId"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-K1",
+          "file": "plan",
+          "hash": "evidenced: metamorphic_test"
+        },
+        {
+          "name": "BC-K2",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-K3",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/inference-sim/sim/internal/hash",
+        "github.com/inference-sim/inference-sim/sim/internal/tokenid"
+      ]
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/kv/deferral",
+      "name": "deferral",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "PollDeferred",
+          "sig": "(now int64) []RequestId"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-T1",
+          "file": "plan",
+          "hash": "evidenced: differential_test"
+        },
+        {
+          "name": "BC-T2",
+          "file": "plan",
+          "hash": "evidenced: metamorphic_test"
+        },
+        {
+          "name": "BC-T3",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/inference-sim/sim",
+        "github.com/inference-sim/inference-sim/sim/kv/tierchain"
+      ]
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/kv/offloadconfig",
+      "name": "offloadconfig",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "ChunkSpec",
+          "sig": "() ChunkConfig"
+        },
+        {
+          "kind": "func",
+          "name": "OffloadScope",
+          "sig": "() Scope"
+        },
+        {
+          "kind": "func",
+          "name": "PrimarySpec",
+          "sig": "() PrimaryConfig"
+        },
+        {
+          "kind": "func",
+          "name": "TierChainSpec",
+          "sig": "() []TierSpec"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-G1",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-G2",
+          "file": "plan",
+          "hash": "evidenced: differential_test"
+        },
+        {
+          "name": "BC-G3",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-G5",
+          "file": "plan",
+          "hash": "evidenced: metamorphic_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/inference-sim/sim"
+      ]
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/kv/tierchain",
+      "name": "tierchain",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "CompleteLoad",
+          "sig": "(keys)"
+        },
+        {
+          "kind": "func",
+          "name": "CompleteStore",
+          "sig": "(keys, ok bool)"
+        },
+        {
+          "kind": "func",
+          "name": "Lookup",
+          "sig": "(BlockKey, ReqCtx) LookupResult"
+        },
+        {
+          "kind": "func",
+          "name": "PrepareLoad",
+          "sig": "(keys, ReqCtx) LoadGrant"
+        },
+        {
+          "kind": "func",
+          "name": "PrepareStore",
+          "sig": "(keys, ReqCtx) StoreGrant"
+        },
+        {
+          "kind": "func",
+          "name": "Residency",
+          "sig": "(BlockKey) TierIndex"
+        },
+        {
+          "kind": "func",
+          "name": "TierCount",
+          "sig": "() int"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-C1",
+          "file": "plan",
+          "hash": "evidenced: differential_test"
+        },
+        {
+          "name": "BC-C2",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-C3",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-C4",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-C5",
+          "file": "plan",
+          "hash": "evidenced: mutation_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/inference-sim/sim",
+        "github.com/inference-sim/inference-sim/sim/internal/hash",
+        "github.com/inference-sim/inference-sim/sim/internal/util"
+      ]
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/kv/transfer",
+      "name": "transfer",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "ActiveJobs",
+          "sig": "(TierIndex, Direction) int"
+        },
+        {
+          "kind": "func",
+          "name": "Poll",
+          "sig": "(now int64) []JobId"
+        },
+        {
+          "kind": "func",
+          "name": "Submit",
+          "sig": "(TransferJob) JobId"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-S1",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-S2",
+          "file": "plan",
+          "hash": "evidenced: metamorphic_test"
+        },
+        {
+          "name": "BC-S3",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-S4",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/inference-sim/sim",
+        "github.com/inference-sim/inference-sim/sim/internal/util"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/cluster",
+      "to": "github.com/inference-sim/inference-sim/sim/kv/tierchain",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/kv/blockkey",
+      "to": "github.com/inference-sim/inference-sim/sim/internal/hash",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/kv/blockkey",
+      "to": "github.com/inference-sim/inference-sim/sim/internal/tokenid",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/kv/deferral",
+      "to": "github.com/inference-sim/inference-sim/sim",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/kv/offloadconfig",
+      "to": "github.com/inference-sim/inference-sim/sim",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/kv/tierchain",
+      "to": "github.com/inference-sim/inference-sim/sim",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/kv/tierchain",
+      "to": "github.com/inference-sim/inference-sim/sim/internal/hash",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/kv/transfer",
+      "to": "github.com/inference-sim/inference-sim/sim",
+      "kind": "import"
+    }
+  ]
+}

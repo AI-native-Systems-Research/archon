@@ -1,0 +1,6 @@
+ARCHON verdict: NEEDS ARCHITECTURE REVIEW — a boundary moved.
+  capabilities:  reflect
+  surface +:     cmd.KVOffloadDeviceDefaults, sim.KVCacheOption, sim.KVOffloadConfig, sim.KVOffloadConfig.IsEnabled, sim.KVOffloadConfig.Validate, sim.KVOffloadTier, sim.WithKVOffload, workload.TraceKVOffloadConfig, …(+1 more)
+  schema +:      cmd.Config.KVOffloadDevices, cmd.KVOffloadDeviceDefaults.BaseLatency, cmd.KVOffloadDeviceDefaults.ReadBandwidth, cmd.KVOffloadDeviceDefaults.WriteBandwidth, workload.TraceHeader.KVOffload, workload.TraceKVOffloadConfig.BlockSize, workload.TraceKVOffloadConfig.BlocksPerChunk, workload.TraceKVOffloadConfig.CPUBytesToUse, …(+16 more)
+
+Plan distance: 13 → 13 (OK)
