@@ -83,13 +83,17 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
-            core.setOutput('base_sha', pr.base.sha);
-            core.setOutput('head_sha', pr.head.sha);
+            try {
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number
+              });
+              core.setOutput('base_sha', pr.base.sha);
+              core.setOutput('head_sha', pr.head.sha);
+            } catch (e) {
+              core.setFailed(`Failed to resolve PR refs: ${e.message}`);
+            }
 
       - name: Fetch PR head ref
         run: git fetch origin "pull/${{ github.event.issue.number }}/head"
@@ -142,6 +146,7 @@ jobs:
           echo "$OUTPUT" > /tmp/archon-output.md
 
       - name: Post PR comment
+        if: always() && steps.build.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
