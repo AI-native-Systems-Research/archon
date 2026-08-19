@@ -229,6 +229,13 @@ func usage() {
       --label-a / --label-b S                   human labels for base/head
       --emit-artifacts                          also write .dot/.mmd/.md (+ PNGs
                                                 if Graphviz is installed)
+      --plan <file>                             plan ratchet: check dist(plan,
+                                                base) vs dist(plan, head)
+      --fixed <file>                            surface growth gate (G3)
+  archon-go plan compile [--stats] <file.archon>  compile a plan into graph JSON
+  archon-go plan dist <plan.json> <repo|graph> [commit]  plan distance (C1-C4)
+  archon-go plan slice <plan.json> <hole-path>  extract one hole as a work order
+  archon-go plan render <plan.json>             Mermaid diagram (holes dashed)
 `)
 	os.Exit(2)
 }
