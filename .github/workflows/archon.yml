@@ -36,7 +36,7 @@ jobs:
               }
             } catch (e) {
               core.setOutput('allowed', 'false');
-              core.info(`User ${context.actor} is not a collaborator — skipping.`);
+              core.warning(`Permission check failed for ${context.actor}: ${e.message}. Denying by default.`);
             }
 
   archon-review:
@@ -46,7 +46,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
