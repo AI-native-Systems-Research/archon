@@ -27,6 +27,7 @@ func renderMarkdown(res *Result) string {
 
 	// Plan ratchet is shown regardless of verdict — it's always useful info.
 	writePlanRatchetSection(&b, res.PlanRatchet)
+	writePlanClassifySection(&b, res.PlanClassify)
 	writeWideningSection(&b, res.Widenings)
 
 	if res.Verdict == NoChange {
@@ -254,6 +255,13 @@ func writePlanRatchetSection(b *strings.Builder, r *plan.RatchetResult) {
 		status = "REGRESSION"
 	}
 	fmt.Fprintf(b, "**dist(P,G): %d → %d** — %s\n\n", r.Before, r.After, status)
+}
+
+func writePlanClassifySection(b *strings.Builder, c *plan.ClassifyResult) {
+	if c == nil {
+		return
+	}
+	fmt.Fprintf(b, "**Plan verdict: `%s`** — %s\n\n", c.Verdict, c.Reason)
 }
 
 func writeWideningSection(b *strings.Builder, widenings []gate.Widening) {

@@ -124,8 +124,9 @@ type Result struct {
 	Surface    []delta.SurfaceChange   `json:"surface,omitempty"`
 	Contracts  []delta.ContractChange  `json:"contracts,omitempty"`
 	Violations []delta.Violation       `json:"violations,omitempty"`
-	Widenings    []gate.Widening       `json:"widenings,omitempty"`
-	PlanRatchet  *plan.RatchetResult   `json:"planRatchet,omitempty"`
+	Widenings      []gate.Widening        `json:"widenings,omitempty"`
+	PlanRatchet    *plan.RatchetResult    `json:"planRatchet,omitempty"`
+	PlanClassify   *plan.ClassifyResult   `json:"planClassify,omitempty"`
 
 	// Higher-altitude views (computed here).
 	Components ComponentView `json:"components"`
@@ -199,6 +200,8 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 	if opts.PlanGraph != nil {
 		r := plan.Ratchet(opts.PlanGraph, gA, gB)
 		res.PlanRatchet = &r
+		c := plan.Classify(opts.PlanGraph, gA, gB)
+		res.PlanClassify = &c
 		// Auto-derive surface policy from plan's holes if not explicitly set
 		if opts.SurfacePolicy == nil {
 			policy := surfacePolicyFromPlan(opts.PlanGraph)
