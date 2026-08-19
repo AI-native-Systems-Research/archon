@@ -275,6 +275,21 @@ dist(P,G) = 0
 
 ---
 
+## Plan verdicts
+
+When `--plan` is used with `pr-review`, archon also classifies the PR:
+
+| Verdict | Meaning |
+|---------|---------|
+| **REALIZES** | PR fills a hole or adds a declared arrow — progress toward the plan |
+| **EXCEEDS** | PR adds unplanned structure touching plan-declared packages |
+| **CONFLICTS** | PR adds a disallowed arrow or increases dist — moves away from the plan |
+| **UNRELATED** | PR touches nothing the plan mentions |
+
+Precedence: CONFLICTS > EXCEEDS > REALIZES > UNRELATED (worst wins).
+
+---
+
 ## Error messages
 
 If your `.archon` file has syntax errors, the compiler reports them with line numbers:
