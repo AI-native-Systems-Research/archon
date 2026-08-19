@@ -1,0 +1,19 @@
+dist(P,G) = 13
+  unfilled holes (C1): 5
+  absent boxes   (C2): 0
+  absent arrows  (C3): 8
+  disallowed     (C4): 0
+
+  [C1] hole declared, package absent in actual
+  [C1] hole declared, package absent in actual
+  [C1] hole declared, package absent in actual
+  [C1] hole declared, package absent in actual
+  [C1] hole declared, package absent in actual
+  [C3] declared arrow github.com/inference-sim/inference-sim/sim/cluster -> github.com/inference-sim/inference-sim/sim/kv/tierchain (import) absent
+  [C3] declared arrow github.com/inference-sim/inference-sim/sim/kv/blockkey -> github.com/inference-sim/inference-sim/sim/internal/hash (import) absent
+  [C3] declared arrow github.com/inference-sim/inference-sim/sim/kv/blockkey -> github.com/inference-sim/inference-sim/sim/internal/tokenid (import) absent
+  [C3] declared arrow github.com/inference-sim/inference-sim/sim/kv/deferral -> github.com/inference-sim/inference-sim/sim (import) absent
+  [C3] declared arrow github.com/inference-sim/inference-sim/sim/kv/offloadconfig -> github.com/inference-sim/inference-sim/sim (import) absent
+  [C3] declared arrow github.com/inference-sim/inference-sim/sim/kv/tierchain -> github.com/inference-sim/inference-sim/sim (import) absent
+  [C3] declared arrow github.com/inference-sim/inference-sim/sim/kv/tierchain -> github.com/inference-sim/inference-sim/sim/internal/hash (import) absent
+  [C3] declared arrow github.com/inference-sim/inference-sim/sim/kv/transfer -> github.com/inference-sim/inference-sim/sim (import) absent

@@ -66,6 +66,45 @@ $ARCHON plan compile --stats "$F2/kv-offload.archon" > /dev/null 2> /tmp/demo-fl
 check "plan compile --stats" /tmp/demo-flow2-stats.txt "$F2/expected-stats.txt"
 
 echo ""
+echo "=== Flow 3: BLIS Design-Phase Tracking (real PRs) ==="
+if [ -z "$BLIS_REPO" ]; then
+    echo "  SKIP: set BLIS_REPO=/path/to/blis to run Flow 3"
+else
+    F3="$SCRIPT_DIR/flow3-blis-design"
+
+    # Compile
+    $ARCHON plan compile "$F3/kv-offload.archon" > /tmp/demo-flow3-plan.json
+    check "flow3 plan compile" /tmp/demo-flow3-plan.json "$F3/kv-offload.plan.json"
+
+    # Health (reference only — sort order is non-deterministic for equal blast radius)
+    # $ARCHON health "$BLIS_REPO" 52161669 > /tmp/demo-flow3-health.txt 2>&1
+
+    # Dist at base
+    $ARCHON plan dist "$F3/kv-offload.plan.json" "$BLIS_REPO" 52161669 > /tmp/demo-flow3-dist-base.txt 2>&1
+    check "flow3 dist at base (13)" /tmp/demo-flow3-dist-base.txt "$F3/expected-dist-base.txt"
+
+    # PR #1593
+    $ARCHON delta "$BLIS_REPO" 52161669 2fc4fa53 --summary --plan "$F3/kv-offload.plan.json" > /tmp/demo-flow3-pr1593.txt 2>&1
+    check "flow3 PR#1593 (13→13)" /tmp/demo-flow3-pr1593.txt "$F3/expected-pr1593.txt"
+
+    # PR #1594
+    $ARCHON delta "$BLIS_REPO" 2fc4fa53 3673d365 --summary --plan "$F3/kv-offload.plan.json" > /tmp/demo-flow3-pr1594.txt 2>&1
+    check "flow3 PR#1594 (13→13)" /tmp/demo-flow3-pr1594.txt "$F3/expected-pr1594.txt"
+
+    # PR #1592
+    $ARCHON delta "$BLIS_REPO" 3673d365 82b64188 --summary --plan "$F3/kv-offload.plan.json" > /tmp/demo-flow3-pr1592.txt 2>&1
+    check "flow3 PR#1592 (13→13)" /tmp/demo-flow3-pr1592.txt "$F3/expected-pr1592.txt"
+
+    # PR #1595
+    $ARCHON delta "$BLIS_REPO" 82b64188 eaba67fe --summary --plan "$F3/kv-offload.plan.json" > /tmp/demo-flow3-pr1595.txt 2>&1
+    check "flow3 PR#1595 (13→13)" /tmp/demo-flow3-pr1595.txt "$F3/expected-pr1595.txt"
+
+    # Final dist
+    $ARCHON plan dist "$F3/kv-offload.plan.json" "$BLIS_REPO" eaba67fe > /tmp/demo-flow3-dist-final.txt 2>&1
+    check "flow3 final dist (13)" /tmp/demo-flow3-dist-final.txt "$F3/expected-dist-final.txt"
+fi
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [ $FAIL -gt 0 ]; then
     red "DEMO FAILED — output differs from golden files."

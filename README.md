@@ -412,7 +412,9 @@ archon-go plan compile --stats kv-offload.archon > plan.json
 
 The full command walkthrough — every command, with example output — is in
 [`USERGUIDE.md`](USERGUIDE.md). For declaring an intended architecture before code
-exists, see the [**plan syntax reference**](docs/plan-syntax.md). For a PR review
+exists, see the [**plan syntax reference**](docs/plan-syntax.md). For a real
+end-to-end walkthrough tracking progress across PRs, see
+[**demo/flow3-blis-design**](demo/flow3-blis-design/README.md). For a PR review
 at three altitudes in one command, see the reviewer wrapper:
 [`reviewer/review.py`](reviewer/review.py) and
 [`reviewer/RENDERERS.md`](reviewer/RENDERERS.md).
