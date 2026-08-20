@@ -15,7 +15,10 @@ import (
 	"strings"
 
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/hello"
 )
+
+var _ = hello.Greet
 
 // isConfigNode reports whether a package path is a synthetic config-key node
 // (an env var or CLI flag). These are shown by default even though they are not
