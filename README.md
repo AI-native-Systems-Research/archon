@@ -23,7 +23,7 @@ R=/path/to/your/repo
 
 ---
 
-## How Archon works — two flows
+## How Archon works — three flows
 
 ### Flow 1: PR Review (existing code, no setup)
 
@@ -393,6 +393,73 @@ archon-go plan compile --stats kv-offload.archon > plan.json
 
 ---
 
+### Flow 3: Design-Phase Tracking (real PRs, real drift)
+
+You wrote a plan, the team shipped PRs — did the code converge on the declared
+architecture or did it drift? Flow 3 tracks `dist(P,G)` across a sequence of
+PRs and makes plan/code divergence visible.
+
+This is the full workflow demonstrated on the BLIS kv-offload feature
+(inference-sim#1585): 5 declared holes, 4 real PRs, plan distance tracked at
+every step.
+
+#### Step 1: Understand the codebase before touching it
+
+```sh
+archon-go health $BLIS_REPO 52161669
+archon-go impact $BLIS_REPO github.com/inference-sim/inference-sim/sim/kv 52161669
+```
+
+Health shows cycles, god-modules, blast radius. Impact shows what depends on
+the package you're about to change.
+
+#### Step 2: Write and compile the plan
+
+```sh
+archon-go plan compile --stats demo/flow3-blis-design/kv-offload.archon > kv-offload.plan.json
+# stderr: 19 clauses: 0 checked, 19 evidenced, 0 attested:external, 0 attested:design
+```
+
+#### Step 3: Measure initial distance
+
+```sh
+archon-go plan dist kv-offload.plan.json $BLIS_REPO 52161669
+```
+
+Output:
+```
+dist(P,G) = 13
+  unfilled holes (C1): 5
+  absent arrows  (C3): 8
+```
+
+#### Step 4: Track each PR
+
+```sh
+archon-go delta $BLIS_REPO 52161669 2fc4fa53 --summary --plan kv-offload.plan.json   # PR #1593
+archon-go delta $BLIS_REPO 2fc4fa53 3673d365 --summary --plan kv-offload.plan.json   # PR #1594
+archon-go delta $BLIS_REPO 3673d365 82b64188 --summary --plan kv-offload.plan.json   # PR #1592
+archon-go delta $BLIS_REPO 82b64188 eaba67fe --summary --plan kv-offload.plan.json   # PR #1595
+```
+
+All four PRs report `Plan distance: 13 → 13 (OK)` — dist didn't decrease
+because the implementation used different package paths than the plan declared:
+
+| Hole | Plan declared | Implementation chose |
+|------|--------------|---------------------|
+| H2 transfer | `sim/kv/transfer` | `sim/kvtransfer` |
+| H4 blockkey | `sim/kv/blockkey` | `sim/internal/kvkey` |
+| H5 config | `sim/kv/offloadconfig` | types in `sim/` (no new package) |
+
+**This demonstrates archon working correctly** — it faithfully reports that the
+declared architecture has not been realized at the declared paths. The team
+should either update the plan to match reality or refactor to match the plan.
+
+See the full step-by-step walkthrough with all real output:
+[demo/flow3-blis-design/README.md](demo/flow3-blis-design/README.md)
+
+---
+
 ## Repository layout
 
 - **`main.go`** — the `archon-go` CLI (subcommands: `extract`, `delta`, `render`,
@@ -401,6 +468,8 @@ archon-go plan compile --stats kv-offload.archon > plan.json
   `evidence`, `impact`, `health`, `reflexion`, `render`, `plan`, `gate`).
 - **`cmd/`** — auxiliary CLI tools (`consumes`, `callgraph`, `eventflow`), each
   built separately, e.g. `go build -o consumes ./cmd/consumes`.
+- **`demo/`** — runnable end-to-end golden tests for all three flows
+  (`run-all.sh`), with committed expected output.
 - **`reviewer/`** — deterministic, no-LLM Python views for PR review
   (`review.py` wrapper + the per-view scripts) and a worked example under
   `reviewer/examples/`.
