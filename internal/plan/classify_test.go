@@ -9,14 +9,14 @@ import (
 func TestClassify_Realizes(t *testing.T) {
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Hole: true, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
+			{Path: "m/a", Internal: true, Hole: true, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
 		},
 		Edges: []graph.Edge{{From: "m/cmd", To: "m/a", Kind: "import"}},
 	}
 	base := &graph.Graph{}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
 		},
 		Edges: []graph.Edge{{From: "m/cmd", To: "m/a", Kind: "import"}},
 	}
@@ -29,23 +29,23 @@ func TestClassify_Realizes(t *testing.T) {
 func TestClassify_Conflicts(t *testing.T) {
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Allow: []string{"m/b"}},
-			{Path: "m/b"},
-			{Path: "m/c"},
+			{Path: "m/a", Internal: true, Allow: []string{"m/b"}},
+			{Path: "m/b", Internal: true},
+			{Path: "m/c", Internal: true},
 		},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
-			{Path: "m/c", Files: []string{"c.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
+			{Path: "m/c", Internal: true, Files: []string{"c.go"}},
 		},
 	}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
-			{Path: "m/c", Files: []string{"c.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
+			{Path: "m/c", Internal: true, Files: []string{"c.go"}},
 		},
 		Edges: []graph.Edge{{From: "m/a", To: "m/c", Kind: "import"}},
 	}
@@ -59,20 +59,20 @@ func TestClassify_Exceeds(t *testing.T) {
 	// PR fills the hole (touches plan) AND adds an unplanned edge from a plan package
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Hole: true, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
-			{Path: "m/b"},
+			{Path: "m/a", Internal: true, Hole: true, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
+			{Path: "m/b", Internal: true},
 		},
 		Edges: []graph.Edge{{From: "m/cmd", To: "m/a", Kind: "import"}},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/b", Files: []string{"b.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
 		},
 	}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
-			{Path: "m/b", Files: []string{"b.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
 		},
 		Edges: []graph.Edge{
 			{From: "m/cmd", To: "m/a", Kind: "import"},
@@ -88,17 +88,17 @@ func TestClassify_Exceeds(t *testing.T) {
 func TestClassify_Unrelated(t *testing.T) {
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/planned", Hole: true},
+			{Path: "m/planned", Internal: true, Hole: true},
 		},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/other", Files: []string{"o.go"}},
+			{Path: "m/other", Internal: true, Files: []string{"o.go"}},
 		},
 	}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/other", Files: []string{"o.go", "o2.go"}},
+			{Path: "m/other", Internal: true, Files: []string{"o.go", "o2.go"}},
 		},
 	}
 	r := Classify(p, base, head)
@@ -111,20 +111,20 @@ func TestClassify_Exceeds_UnplannedEdgeBetweenPlanPackages(t *testing.T) {
 	// PR adds a call edge between two plan-declared packages without filling any holes
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a"},
-			{Path: "m/b"},
+			{Path: "m/a", Internal: true},
+			{Path: "m/b", Internal: true},
 		},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
 		},
 	}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
 		},
 		Edges: []graph.Edge{{From: "m/a", To: "m/b", Kind: "call"}},
 	}
@@ -140,18 +140,18 @@ func TestClassify_Realizes_CallEdgeImpliedByDeclaredImport(t *testing.T) {
 	// be counted as unplanned structure.
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/util"},
-			{Path: "m/hello", Hole: true},
+			{Path: "m/util", Internal: true},
+			{Path: "m/hello", Internal: true, Hole: true},
 		},
 		Edges: []graph.Edge{{From: "m/hello", To: "m/util", Kind: "import"}},
 	}
 	base := &graph.Graph{
-		Packages: []graph.Package{{Path: "m/util", Files: []string{"util.go"}}},
+		Packages: []graph.Package{{Path: "m/util", Internal: true, Files: []string{"util.go"}}},
 	}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/util", Files: []string{"util.go"}},
-			{Path: "m/hello", Files: []string{"hello.go"}},
+			{Path: "m/util", Internal: true, Files: []string{"util.go"}},
+			{Path: "m/hello", Internal: true, Files: []string{"hello.go"}},
 		},
 		Edges: []graph.Edge{
 			{From: "m/hello", To: "m/util", Kind: "import"},
@@ -164,20 +164,83 @@ func TestClassify_Realizes_CallEdgeImpliedByDeclaredImport(t *testing.T) {
 	}
 }
 
+func TestClassify_Realizes_StdlibImportIsNotUnplannedStructure(t *testing.T) {
+	// No plan declares fmt, and every real package imports something from stdlib,
+	// so scoring out-of-module edges would make EXCEEDS the verdict for all
+	// correct work. Dist agrees: such an edge is not a C4 violation.
+	p := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/util", Internal: true},
+			{Path: "m/hello", Internal: true, Hole: true},
+		},
+		Edges: []graph.Edge{{From: "m/hello", To: "m/util", Kind: "import"}},
+	}
+	base := &graph.Graph{
+		Packages: []graph.Package{{Path: "m/util", Internal: true, Files: []string{"util.go"}}},
+	}
+	head := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "fmt"},
+			{Path: "m/util", Internal: true, Files: []string{"util.go"}},
+			{Path: "m/hello", Internal: true, Files: []string{"hello.go"}},
+		},
+		Edges: []graph.Edge{
+			{From: "m/hello", To: "m/util", Kind: "import"},
+			{From: "m/hello", To: "fmt", Kind: "import"},
+		},
+	}
+	r := Classify(p, base, head)
+	if r.Verdict != Realizes || len(r.Offending) != 0 {
+		t.Fatalf("want REALIZES with nothing offending, got %s %v", r.Verdict, r.Offending)
+	}
+}
+
+// A new third-party dependency is out-of-module too, so the plan verdict stays
+// silent about it by the same rule as stdlib: plans declare in-module paths, and
+// C4 scores only pairs the plan declares. The added box still shows in the delta
+// section tagged "(external)", so the dependency is reported, just not here.
+func TestClassify_Realizes_ThirdPartyImportIsNotUnplannedStructure(t *testing.T) {
+	p := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/util", Internal: true},
+			{Path: "m/hello", Internal: true, Hole: true},
+		},
+		Edges: []graph.Edge{{From: "m/hello", To: "m/util", Kind: "import"}},
+	}
+	base := &graph.Graph{
+		Packages: []graph.Package{{Path: "m/util", Internal: true, Files: []string{"util.go"}}},
+	}
+	head := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "github.com/other/orm"},
+			{Path: "m/util", Internal: true, Files: []string{"util.go"}},
+			{Path: "m/hello", Internal: true, Files: []string{"hello.go"}},
+		},
+		Edges: []graph.Edge{
+			{From: "m/hello", To: "m/util", Kind: "import"},
+			{From: "m/hello", To: "github.com/other/orm", Kind: "import"},
+		},
+	}
+	r := Classify(p, base, head)
+	if r.Verdict != Realizes || len(r.Offending) != 0 {
+		t.Fatalf("want REALIZES with nothing offending, got %s %v", r.Verdict, r.Offending)
+	}
+}
+
 func TestClassify_Exceeds_NamesUnplannedEdge(t *testing.T) {
 	p := &graph.Graph{
-		Packages: []graph.Package{{Path: "m/a"}, {Path: "m/b"}},
+		Packages: []graph.Package{{Path: "m/a", Internal: true}, {Path: "m/b", Internal: true}},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
 		},
 	}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
 		},
 		Edges: []graph.Edge{{From: "m/a", To: "m/b", Kind: "call"}},
 	}
@@ -191,16 +254,16 @@ func TestClassify_Exceeds_NamesUnplannedEdge(t *testing.T) {
 func TestClassify_Conflicts_NamesDisallowedArrow(t *testing.T) {
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Allow: []string{"m/b"}},
-			{Path: "m/b"},
-			{Path: "m/c"},
+			{Path: "m/a", Internal: true, Allow: []string{"m/b"}},
+			{Path: "m/b", Internal: true},
+			{Path: "m/c", Internal: true},
 		},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
-			{Path: "m/c", Files: []string{"c.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
+			{Path: "m/c", Internal: true, Files: []string{"c.go"}},
 		},
 	}
 	head := &graph.Graph{
@@ -219,17 +282,17 @@ func TestClassify_Conflicts_OmitsAlreadyUnmetObligations(t *testing.T) {
 	// this PR's doing, so only it may be named.
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Allow: []string{"m/b"}},
-			{Path: "m/b"},
-			{Path: "m/c"},
-			{Path: "m/gone"},
+			{Path: "m/a", Internal: true, Allow: []string{"m/b"}},
+			{Path: "m/b", Internal: true},
+			{Path: "m/c", Internal: true},
+			{Path: "m/gone", Internal: true},
 		},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
-			{Path: "m/c", Files: []string{"c.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
+			{Path: "m/c", Internal: true, Files: []string{"c.go"}},
 		},
 	}
 	head := &graph.Graph{
@@ -249,16 +312,16 @@ func TestClassify_Conflicts_DistIncrease_NamesRemovedBox(t *testing.T) {
 	// with a byte-identical detail string, and sorting after m/b — must not be
 	// attributed here.
 	p := &graph.Graph{
-		Packages: []graph.Package{{Path: "m/a"}, {Path: "m/b"}, {Path: "m/zzz"}},
+		Packages: []graph.Package{{Path: "m/a", Internal: true}, {Path: "m/b", Internal: true}, {Path: "m/zzz", Internal: true}},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
 		},
 	}
 	head := &graph.Graph{
-		Packages: []graph.Package{{Path: "m/a", Files: []string{"a.go"}}},
+		Packages: []graph.Package{{Path: "m/a", Internal: true, Files: []string{"a.go"}}},
 	}
 	r := Classify(p, base, head)
 	want := []string{"C2 m/b: declared box absent from actual"}
@@ -268,12 +331,12 @@ func TestClassify_Conflicts_DistIncrease_NamesRemovedBox(t *testing.T) {
 }
 
 func TestClassify_Exceeds_OffendingIsSorted(t *testing.T) {
-	p := &graph.Graph{Packages: []graph.Package{{Path: "m/a"}, {Path: "m/b"}, {Path: "m/c"}}}
+	p := &graph.Graph{Packages: []graph.Package{{Path: "m/a", Internal: true}, {Path: "m/b", Internal: true}, {Path: "m/c", Internal: true}}}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}},
-			{Path: "m/b", Files: []string{"b.go"}},
-			{Path: "m/c", Files: []string{"c.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
+			{Path: "m/c", Internal: true, Files: []string{"c.go"}},
 		},
 	}
 	head := &graph.Graph{
@@ -313,23 +376,23 @@ func TestClassify_Precedence_ConflictsWins(t *testing.T) {
 	// PR fills a hole (would be Realizes) BUT also adds disallowed arrow (Conflicts wins)
 	p := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Hole: true, Allow: []string{"m/b"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
-			{Path: "m/b"},
-			{Path: "m/c"},
+			{Path: "m/a", Internal: true, Hole: true, Allow: []string{"m/b"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
+			{Path: "m/b", Internal: true},
+			{Path: "m/c", Internal: true},
 		},
 		Edges: []graph.Edge{{From: "m/cmd", To: "m/a", Kind: "import"}},
 	}
 	base := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/b", Files: []string{"b.go"}},
-			{Path: "m/c", Files: []string{"c.go"}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
+			{Path: "m/c", Internal: true, Files: []string{"c.go"}},
 		},
 	}
 	head := &graph.Graph{
 		Packages: []graph.Package{
-			{Path: "m/a", Files: []string{"a.go"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
-			{Path: "m/b", Files: []string{"b.go"}},
-			{Path: "m/c", Files: []string{"c.go"}},
+			{Path: "m/a", Internal: true, Files: []string{"a.go"}, Surface: []graph.Symbol{{Kind: "func", Name: "Run"}}},
+			{Path: "m/b", Internal: true, Files: []string{"b.go"}},
+			{Path: "m/c", Internal: true, Files: []string{"c.go"}},
 		},
 		Edges: []graph.Edge{
 			{From: "m/cmd", To: "m/a", Kind: "import"},

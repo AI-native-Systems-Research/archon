@@ -31,6 +31,10 @@ type ClassifyResult struct {
 //
 // Precedence: Conflicts > Exceeds > Realizes > Unrelated.
 // A PR that both fills a hole AND adds a disallowed arrow is Conflicts (worst wins).
+//
+// base and head must be extractor-produced graphs, which mark module packages
+// Internal. Unpopulated Internal reads as everything being out-of-module and so
+// suppresses Exceeds; it does not affect Conflicts, which Dist computes.
 func Classify(p, base, head *graph.Graph) ClassifyResult {
 	if p == nil {
 		return ClassifyResult{Verdict: Unrelated, Reason: "no plan provided"}
@@ -96,6 +100,7 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	}
 
 	// New edges in head
+	internal := head.InternalPaths()
 	baseEdges := make(map[string]bool)
 	for _, e := range base.Edges {
 		baseEdges[edgeKey(e)] = true
@@ -111,6 +116,10 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 		// declared but not realized is C3's job in Dist, not this verdict's.
 		case planPairs[pairKey(e)]:
 			touchesPlan = true
+		case !internal[e.From] || !internal[e.To]:
+			// A plan governs intra-module structure, so an edge leaving the module
+			// (stdlib, third party) is not structure it failed to declare. C4 in
+			// Dist ignores these too, by only scoring pairs the plan declares.
 		case planPkgs[e.From] || planPkgs[e.To]:
 			unplanned = append(unplanned, "undeclared: "+edgeKey(e))
 		}
