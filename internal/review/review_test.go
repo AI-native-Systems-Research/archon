@@ -7,6 +7,7 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
 	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/plan"
 )
 
 const mod = "example.com/m"
@@ -289,6 +290,30 @@ func TestPlanRatchetInReview(t *testing.T) {
 	md := renderMarkdown(res)
 	if !strings.Contains(md, "G5") {
 		t.Errorf("review.md should contain G5 plan ratchet section:\n%s", md)
+	}
+}
+
+func TestPlanClassifyOffendingInMarkdown(t *testing.T) {
+	a := baseGraph()
+	b := baseGraph()
+	b.Packages = append(b.Packages, pkg("c", true))
+	b.Edges = append(b.Edges, edge("a", "c", "import", "a/y.go"))
+	b.Sort()
+	planGraph := &graph.Graph{
+		Module: mod,
+		Packages: []graph.Package{
+			pkg("a", true), pkg("b", true), pkg("c", true),
+		},
+		Edges: []graph.Edge{edge("a", "b", "import")},
+	}
+	d := delta.Compute(a, b)
+	res := Build(a, b, d, Options{PlanGraph: planGraph})
+	if res.PlanClassify == nil || res.PlanClassify.Verdict != plan.Exceeds {
+		t.Fatalf("want EXCEEDS for an undeclared edge, got %+v", res.PlanClassify)
+	}
+	md := renderMarkdown(res)
+	if !strings.Contains(md, "undeclared: "+mod+"/a -> "+mod+"/c : import") {
+		t.Errorf("review.md should name the undeclared edge under the verdict:\n%s", md)
 	}
 }
 

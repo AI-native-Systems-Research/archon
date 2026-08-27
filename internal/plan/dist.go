@@ -186,6 +186,10 @@ func edgeKey(e graph.Edge) string {
 	return e.From + " -> " + e.To + " : " + e.Kind
 }
 
+func pairKey(e graph.Edge) string {
+	return e.From + " -> " + e.To
+}
+
 func surfaceMatch(declared, actual []graph.Symbol) bool {
 	if len(declared) == 0 {
 		return true

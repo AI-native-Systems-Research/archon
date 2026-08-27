@@ -10,18 +10,18 @@ import (
 type Verdict string
 
 const (
-	Realizes   Verdict = "REALIZES"
-	Exceeds    Verdict = "EXCEEDS"
-	Conflicts  Verdict = "CONFLICTS"
-	Unrelated  Verdict = "UNRELATED"
+	Realizes  Verdict = "REALIZES"
+	Exceeds   Verdict = "EXCEEDS"
+	Conflicts Verdict = "CONFLICTS"
+	Unrelated Verdict = "UNRELATED"
 )
 
 // ClassifyResult holds the verdict and supporting detail.
 type ClassifyResult struct {
 	Verdict Verdict `json:"verdict"`
 	Reason  string  `json:"reason"`
-	// Offending names the structure behind an EXCEEDS or CONFLICTS verdict, so a
-	// reviewer does not have to diff the plan against the witness table by hand.
+	// Offending names the structure behind the verdict, each entry formatted as
+	// "<label>: <detail>". Empty for REALIZES and UNRELATED.
 	Offending []string `json:"offending,omitempty"`
 }
 
@@ -49,12 +49,9 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	for _, pkg := range p.Packages {
 		planPkgs[pkg.Path] = true
 	}
-	planEdgeSet := make(map[string]bool)
-	// planPairs is kind-agnostic: a declared arrow of any kind covers the pair.
 	planPairs := make(map[string]bool)
 	for _, e := range p.Edges {
-		planEdgeSet[edgeKey(e)] = true
-		planPairs[e.From+" -> "+e.To] = true
+		planPairs[pairKey(e)] = true
 	}
 
 	// Check for conflicts: C4 increased (disallowed arrow introduced)
@@ -108,14 +105,14 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 			continue
 		}
 		switch {
-		case planEdgeSet[edgeKey(e)]:
-			touchesPlan = true
-		// A used import always yields a call edge, so a call is the reason for a
-		// declared arrow, not extra structure the plan failed to anticipate.
-		case e.Kind == "call" && planPairs[e.From+" -> "+e.To]:
+		// Matched on the pair, not on edgeKey: extraction derives call and
+		// implements edges from a dependency the plan may declare only as an
+		// import, and a derived edge is not structure the plan failed to sanction.
+		// Kind is still enforced for declared arrows, by C3 in Dist.
+		case planPairs[pairKey(e)]:
 			touchesPlan = true
 		case planPkgs[e.From] || planPkgs[e.To]:
-			unplanned = append(unplanned, edgeKey(e))
+			unplanned = append(unplanned, "undeclared: "+edgeKey(e))
 		}
 	}
 	sort.Strings(unplanned)
@@ -145,23 +142,27 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	}
 }
 
-// newUnmet returns the details of obligations present in after but not before,
-// restricted to class when class is non-empty.
+// newUnmet returns the obligations present in after but not before, restricted
+// to class when class is non-empty. Package is part of the identity because C1
+// and C2 details are identical across packages, so matching on the detail alone
+// would attribute a newly unmet package to the wrong one.
 func newUnmet(before, after []Unmet, class string) []string {
 	had := make(map[string]bool, len(before))
 	for _, u := range before {
-		had[u.Class+"|"+u.Detail] = true
+		had[unmetKey(u)] = true
 	}
 	var out []string
 	for _, u := range after {
 		if class != "" && u.Class != class {
 			continue
 		}
-		if had[u.Class+"|"+u.Detail] {
+		if had[unmetKey(u)] {
 			continue
 		}
-		out = append(out, u.Class+": "+u.Detail)
+		out = append(out, u.Class+" "+u.Package+": "+u.Detail)
 	}
 	sort.Strings(out)
 	return out
 }
+
+func unmetKey(u Unmet) string { return u.Class + "|" + u.Package + "|" + u.Detail }
