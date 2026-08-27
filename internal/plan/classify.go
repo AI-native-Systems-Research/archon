@@ -105,10 +105,10 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 			continue
 		}
 		switch {
-		// Matched on the pair, not on edgeKey: extraction derives call and
-		// implements edges from a dependency the plan may declare only as an
-		// import, and a derived edge is not structure the plan failed to sanction.
-		// Kind is still enforced for declared arrows, by C3 in Dist.
+		// Matched on the pair, not on edgeKey: a plan declares intent at pair
+		// granularity while extraction reports several kinds per pair, so a
+		// declared pair sanctions the dependency whatever kind surfaces. A kind
+		// declared but not realized is C3's job in Dist, not this verdict's.
 		case planPairs[pairKey(e)]:
 			touchesPlan = true
 		case planPkgs[e.From] || planPkgs[e.To]:
@@ -142,10 +142,9 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	}
 }
 
-// newUnmet returns the obligations present in after but not before, restricted
-// to class when class is non-empty. Package is part of the identity because C1
-// and C2 details are identical across packages, so matching on the detail alone
-// would attribute a newly unmet package to the wrong one.
+// Package is part of the obligation identity because C1 and C2 details are
+// identical across packages, so matching on the detail alone would attribute a
+// newly unmet package to the wrong one. An empty class means all classes.
 func newUnmet(before, after []Unmet, class string) []string {
 	had := make(map[string]bool, len(before))
 	for _, u := range before {
