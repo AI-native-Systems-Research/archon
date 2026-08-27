@@ -262,6 +262,12 @@ func writePlanClassifySection(b *strings.Builder, c *plan.ClassifyResult) {
 		return
 	}
 	fmt.Fprintf(b, "**Plan verdict: `%s`** — %s\n\n", c.Verdict, c.Reason)
+	if len(c.Offending) > 0 {
+		for _, o := range c.Offending {
+			fmt.Fprintf(b, "- `%s`\n", o)
+		}
+		b.WriteString("\n")
+	}
 }
 
 func writeWideningSection(b *strings.Builder, widenings []gate.Widening) {

@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"sort"
+
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 )
 
@@ -16,8 +18,11 @@ const (
 
 // ClassifyResult holds the verdict and supporting detail.
 type ClassifyResult struct {
-	Verdict Verdict  `json:"verdict"`
-	Reason  string   `json:"reason"`
+	Verdict Verdict `json:"verdict"`
+	Reason  string  `json:"reason"`
+	// Offending names the structure behind an EXCEEDS or CONFLICTS verdict, so a
+	// reviewer does not have to diff the plan against the witness table by hand.
+	Offending []string `json:"offending,omitempty"`
 }
 
 // Classify determines a PR's relationship to a plan by comparing what changed
@@ -45,23 +50,28 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 		planPkgs[pkg.Path] = true
 	}
 	planEdgeSet := make(map[string]bool)
+	// planPairs is kind-agnostic: a declared arrow of any kind covers the pair.
+	planPairs := make(map[string]bool)
 	for _, e := range p.Edges {
 		planEdgeSet[edgeKey(e)] = true
+		planPairs[e.From+" -> "+e.To] = true
 	}
 
 	// Check for conflicts: C4 increased (disallowed arrow introduced)
 	if after.C4 > before.C4 {
 		return ClassifyResult{
-			Verdict: Conflicts,
-			Reason:  "introduced a dependency outside a declared Allow list",
+			Verdict:   Conflicts,
+			Reason:    "introduced a dependency outside a declared Allow list",
+			Offending: newUnmet(before.Unmet, after.Unmet, "C4"),
 		}
 	}
 
 	// Check for conflicts: declared element removed (dist increased for other reasons)
 	if after.Total > before.Total {
 		return ClassifyResult{
-			Verdict: Conflicts,
-			Reason:  "moved away from the plan (dist increased)",
+			Verdict:   Conflicts,
+			Reason:    "moved away from the plan (dist increased)",
+			Offending: newUnmet(before.Unmet, after.Unmet, ""),
 		}
 	}
 
@@ -76,7 +86,7 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	}
 
 	touchesPlan := false
-	addsUnplanned := false
+	var unplanned []string
 
 	// New packages in head that weren't in base
 	for path := range headPkgs {
@@ -97,12 +107,18 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 		if baseEdges[edgeKey(e)] {
 			continue
 		}
-		if planEdgeSet[edgeKey(e)] {
+		switch {
+		case planEdgeSet[edgeKey(e)]:
 			touchesPlan = true
-		} else if planPkgs[e.From] || planPkgs[e.To] {
-			addsUnplanned = true
+		// A used import always yields a call edge, so a call is the reason for a
+		// declared arrow, not extra structure the plan failed to anticipate.
+		case e.Kind == "call" && planPairs[e.From+" -> "+e.To]:
+			touchesPlan = true
+		case planPkgs[e.From] || planPkgs[e.To]:
+			unplanned = append(unplanned, edgeKey(e))
 		}
 	}
+	sort.Strings(unplanned)
 
 	// Also check: did dist decrease? That means the PR filled something.
 	if after.Total < before.Total {
@@ -110,10 +126,11 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 	}
 
 	// Apply precedence: Conflicts already handled above
-	if addsUnplanned {
+	if len(unplanned) > 0 {
 		return ClassifyResult{
-			Verdict: Exceeds,
-			Reason:  "adds structure the plan does not declare",
+			Verdict:   Exceeds,
+			Reason:    "adds structure the plan does not declare",
+			Offending: unplanned,
 		}
 	}
 	if touchesPlan {
@@ -126,4 +143,25 @@ func Classify(p, base, head *graph.Graph) ClassifyResult {
 		Verdict: Unrelated,
 		Reason:  "touches nothing the plan declares",
 	}
+}
+
+// newUnmet returns the details of obligations present in after but not before,
+// restricted to class when class is non-empty.
+func newUnmet(before, after []Unmet, class string) []string {
+	had := make(map[string]bool, len(before))
+	for _, u := range before {
+		had[u.Class+"|"+u.Detail] = true
+	}
+	var out []string
+	for _, u := range after {
+		if class != "" && u.Class != class {
+			continue
+		}
+		if had[u.Class+"|"+u.Detail] {
+			continue
+		}
+		out = append(out, u.Class+": "+u.Detail)
+	}
+	sort.Strings(out)
+	return out
 }

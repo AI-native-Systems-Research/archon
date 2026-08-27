@@ -134,6 +134,98 @@ func TestClassify_Exceeds_UnplannedEdgeBetweenPlanPackages(t *testing.T) {
 	}
 }
 
+func TestClassify_Realizes_CallEdgeImpliedByDeclaredImport(t *testing.T) {
+	// A plan declares `hello -> util : import`. Extraction of a correct
+	// implementation yields both an import and a call edge for that pair; the call
+	// must not be counted as unplanned structure.
+	p := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/util"},
+			{Path: "m/hello", Hole: true},
+		},
+		Edges: []graph.Edge{{From: "m/hello", To: "m/util", Kind: "import"}},
+	}
+	base := &graph.Graph{
+		Packages: []graph.Package{{Path: "m/util", Files: []string{"util.go"}}},
+	}
+	head := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/util", Files: []string{"util.go"}},
+			{Path: "m/hello", Files: []string{"hello.go"}},
+		},
+		Edges: []graph.Edge{
+			{From: "m/hello", To: "m/util", Kind: "import"},
+			{From: "m/hello", To: "m/util", Kind: "call"},
+		},
+	}
+	r := Classify(p, base, head)
+	if r.Verdict != Realizes {
+		t.Fatalf("want REALIZES (call implied by declared import), got %s: %s %v", r.Verdict, r.Reason, r.Offending)
+	}
+}
+
+func TestClassify_Exceeds_NamesUnplannedEdge(t *testing.T) {
+	p := &graph.Graph{
+		Packages: []graph.Package{{Path: "m/a"}, {Path: "m/b"}},
+	}
+	base := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/a", Files: []string{"a.go"}},
+			{Path: "m/b", Files: []string{"b.go"}},
+		},
+	}
+	head := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/a", Files: []string{"a.go"}},
+			{Path: "m/b", Files: []string{"b.go"}},
+		},
+		Edges: []graph.Edge{{From: "m/a", To: "m/b", Kind: "call"}},
+	}
+	r := Classify(p, base, head)
+	want := []string{"m/a -> m/b : call"}
+	if r.Verdict != Exceeds || !equalStrs(r.Offending, want) {
+		t.Fatalf("want EXCEEDS naming %v, got %s %v", want, r.Verdict, r.Offending)
+	}
+}
+
+func TestClassify_Conflicts_NamesDisallowedArrow(t *testing.T) {
+	p := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/a", Allow: []string{"m/b"}},
+			{Path: "m/b"},
+			{Path: "m/c"},
+		},
+	}
+	base := &graph.Graph{
+		Packages: []graph.Package{
+			{Path: "m/a", Files: []string{"a.go"}},
+			{Path: "m/b", Files: []string{"b.go"}},
+			{Path: "m/c", Files: []string{"c.go"}},
+		},
+	}
+	head := &graph.Graph{
+		Packages: base.Packages,
+		Edges:    []graph.Edge{{From: "m/a", To: "m/c", Kind: "import"}},
+	}
+	r := Classify(p, base, head)
+	want := []string{"C4: arrow m/a -> m/c (import) not in Allow"}
+	if r.Verdict != Conflicts || !equalStrs(r.Offending, want) {
+		t.Fatalf("want CONFLICTS naming %v, got %s %v", want, r.Verdict, r.Offending)
+	}
+}
+
+func equalStrs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestClassify_NilPlan(t *testing.T) {
 	r := Classify(nil, &graph.Graph{}, &graph.Graph{})
 	if r.Verdict != Unrelated {
