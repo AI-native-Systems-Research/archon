@@ -286,18 +286,23 @@ func parseContractEntry(l string) graph.Invariant {
 		name = l[:idx]
 	}
 	class := ""
-	// The prose runs from after the name up to the class annotation, or to end of
-	// line when there is none. Kept so review can print the promise itself rather
-	// than a bare ID the reader has to go look up in the plan.
-	statement := strings.TrimSpace(l[len(name):])
-	if start := strings.Index(l, "["); start >= 0 {
-		if end := strings.Index(l[start:], "]"); end >= 0 {
-			class = strings.TrimSpace(l[start+1 : start+end])
-		}
-		if start >= len(name) {
-			statement = strings.TrimSpace(l[len(name):start])
+	// Everything after the name is prose, then optionally a class annotation.
+	// Kept so review can print the promise itself rather than a bare ID the
+	// reader has to go look up in the plan.
+	rest := strings.TrimSpace(l[len(name):])
+	// The annotation is a bracket group at the END of the line, so anchor on the
+	// trailing bracket rather than the first one. Anchoring on the first would
+	// truncate a promise that legitimately contains one — "queue[0] stays
+	// ordered" would become "queue" with a class of "0". A clause whose entire
+	// prose is a bracket group stays ambiguous and is read as an annotation;
+	// there is nothing to distinguish the two.
+	if strings.HasSuffix(rest, "]") {
+		if start := strings.LastIndex(rest, "["); start >= 0 {
+			class = strings.TrimSpace(rest[start+1 : len(rest)-1])
+			rest = strings.TrimSpace(rest[:start])
 		}
 	}
+	statement := rest
 	// Hash is repurposed for plan-sourced invariants to store the class
 	// annotation. Plan invariants have no function body, so Hash is never
 	// used as a content digest for them. Code-extracted invariants use Hash

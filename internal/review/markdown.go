@@ -236,13 +236,14 @@ func writeClauseTable(b *strings.Builder, rows []ClauseRow) {
 		"name. Nothing here is verified — an unbound clause is a gap to close, not a failure.\n\n")
 }
 
-// cellText renders a value for a Markdown table cell, escaping the pipe that
-// would otherwise split the row, and showing an em dash when empty.
+// cellText renders a possibly-empty value for a Markdown table cell: an em dash
+// when blank, otherwise the escaped text. Escaping is tableCell's job — keeping
+// one copy of that rule means a future addition to it applies everywhere.
 func cellText(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "—"
 	}
-	return strings.ReplaceAll(s, "|", "\\|")
+	return tableCell(s)
 }
 
 func writeSchemaTable(b *strings.Builder, changes []delta.SurfaceChange) {

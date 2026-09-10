@@ -60,9 +60,61 @@ func TestClauseReportExcludesUntouchedPackages(t *testing.T) {
 	// Only pkg a is touched; pkg b declares a clause but must not be reported.
 	d := &delta.Delta{Surface: []delta.SurfaceChange{{Package: mod + "/a"}}}
 
-	for _, r := range ClauseReport(planWithClauses(), baseGraph(), d) {
+	rows := ClauseReport(planWithClauses(), baseGraph(), d)
+	if len(rows) == 0 {
+		t.Fatal("no rows at all — the exclusion below would pass vacuously")
+	}
+	for _, r := range rows {
 		if r.Package == mod+"/b" {
 			t.Errorf("clause %s on untouched package b was reported", r.ID)
+		}
+	}
+}
+
+// Every axis of the delta must mark a package touched. Without one case per
+// axis, a deleted loop in touchedPackages goes unnoticed.
+func TestClauseReportEveryDeltaAxisCountsAsTouched(t *testing.T) {
+	a := mod + "/a"
+	cases := []struct {
+		axis string
+		d    *delta.Delta
+	}{
+		{"PackagesAdded", &delta.Delta{PackagesAdded: []delta.PackageRef{{Path: a}}}},
+		{"PackagesRemoved", &delta.Delta{PackagesRemoved: []delta.PackageRef{{Path: a}}}},
+		{"Surface", &delta.Delta{Surface: []delta.SurfaceChange{{Package: a}}}},
+		{"SchemaChanges", &delta.Delta{SchemaChanges: []delta.SurfaceChange{{Package: a}}}},
+		{"EdgesAdded", &delta.Delta{EdgesAdded: []graph.Edge{{From: a, To: mod + "/z", Kind: "import"}}}},
+		{"EdgesRemoved", &delta.Delta{EdgesRemoved: []graph.Edge{{From: a, To: mod + "/z", Kind: "import"}}}},
+		{"Invariants", &delta.Delta{Invariants: []delta.InvariantChange{{Package: a}}}},
+		{"Contracts/Interface", &delta.Delta{Contracts: []delta.ContractChange{{Interface: a + ".Store"}}}},
+		{"Contracts/Implementer", &delta.Delta{Contracts: []delta.ContractChange{
+			{Interface: mod + "/z.Iface", ImplementersAdded: []string{a + ".Impl"}}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.axis, func(t *testing.T) {
+			rows := ClauseReport(planWithClauses(), baseGraph(), tc.d)
+			found := false
+			for _, r := range rows {
+				if r.Package == a {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s did not mark %s as touched; rows = %+v", tc.axis, a, rows)
+			}
+		})
+	}
+}
+
+func TestPkgOfQualified(t *testing.T) {
+	cases := map[string]string{
+		"example.com/m/a.Store":    "example.com/m/a",
+		"github.com/x/y/pkg.Thing": "github.com/x/y/pkg",
+		"nodothere":                "",
+	}
+	for in, want := range cases {
+		if got := pkgOfQualified(in); got != want {
+			t.Errorf("pkgOfQualified(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -137,7 +189,11 @@ func TestClauseCannotEvidenceItself(t *testing.T) {
 	}
 	d := &delta.Delta{Surface: []delta.SurfaceChange{{Package: mod + "/a"}}}
 
-	for _, r := range ClauseReport(planWithClauses(), head, d) {
+	rows := ClauseReport(planWithClauses(), head, d)
+	if len(rows) == 0 {
+		t.Fatal("no rows at all — the check below would pass vacuously")
+	}
+	for _, r := range rows {
 		if r.ID == "BC-A1" && r.BoundTest != "" {
 			t.Errorf("BC-A1 bound to a plan-sourced entry %q; only real tests may count", r.BoundTest)
 		}
@@ -169,14 +225,45 @@ func TestClauseTableRendersPromiseAndGap(t *testing.T) {
 	})
 	out := b.String()
 
-	for _, want := range []string{
-		"Contract clauses implicated (2, 1 without evidence)",
-		"BC-A1", "Login rejects empty credentials", "evidenced: property_test", "TestBC_A1",
-		"BC-A2", "Validate never panics", "none found",
+	if !strings.Contains(out, "Contract clauses implicated (2, 1 without evidence)") {
+		t.Errorf("header wrong or missing\n---\n%s", out)
+	}
+	// Whole rows, not scattered substrings: a substring check cannot tell a
+	// correct table from one with its columns permuted.
+	for _, wantRow := range []string{
+		"| `a` | **BC-A1** | Login rejects empty credentials | evidenced: property_test | `TestBC_A1` |",
+		"| `a` | **BC-A2** | Validate never panics | evidenced: fuzz | — none found |",
 	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("clause table missing %q\n---\n%s", want, out)
+		if !strings.Contains(out, wantRow) {
+			t.Errorf("missing row:\n  %s\n--- got ---\n%s", wantRow, out)
 		}
+	}
+}
+
+// The deliverable is the wiring: --plan must actually produce the section in
+// review.md. Without this, deleting the ClauseReport call in Build leaves every
+// other test green.
+func TestClauseSectionRenderedViaBuildWithPlan(t *testing.T) {
+	gA, gB := baseGraph(), baseGraph()
+	// Grow pkg a's surface so the delta touches it.
+	for i := range gB.Packages {
+		if gB.Packages[i].Path == mod+"/a" {
+			gB.Packages[i].Surface = []graph.Symbol{{Kind: "func", Name: "Added", Sig: "func()"}}
+		}
+	}
+	d := delta.Compute(gA, gB)
+
+	res := Build(gA, gB, d, Options{PlanGraph: planWithClauses()})
+
+	if len(res.Clauses) == 0 {
+		t.Fatalf("Build produced no clauses with a plan; delta surface = %+v", d.Surface)
+	}
+	out := renderMarkdown(res)
+	if !strings.Contains(out, "Contract clauses implicated") {
+		t.Errorf("clause section absent from review markdown\n---\n%s", out)
+	}
+	if !strings.Contains(out, "BC-A1") || !strings.Contains(out, "Login rejects empty credentials") {
+		t.Errorf("clause detail missing from review markdown\n---\n%s", out)
 	}
 }
 

@@ -26,10 +26,19 @@ type ClauseRow struct {
 func (c ClauseRow) Bound() bool { return c.BoundTest != "" }
 
 // touchedPackages returns every package the delta implicates at the package
-// altitude: added or removed boxes, changed surface or schema, and both
-// endpoints of every added or removed arrow. An edge endpoint counts because a
-// clause on the far side of a new dependency is exactly the kind of promise a
-// reviewer needs reminding of.
+// altitude: added or removed boxes, changed surface or schema, both endpoints of
+// every added or removed arrow, packages whose guarding tests changed, and both
+// sides of an interface whose implementer set changed.
+//
+// An edge endpoint counts because a clause on the far side of a new dependency is
+// exactly the kind of promise a reviewer needs reminding of. Contract membership
+// counts because it is an independent axis: an unexported type gaining a method
+// that satisfies an interface changes no surface and adds no arrow when the
+// coarse implements edge already existed, yet a contract just gained a member.
+//
+// d.ContractViolations is deliberately excluded. It requires --allow and reports
+// STANDING violations rather than new ones, so keying "touched" off it would
+// surface clauses on packages this change never went near.
 func touchedPackages(d *delta.Delta) map[string]bool {
 	touched := map[string]bool{}
 	for _, p := range d.PackagesAdded {
@@ -55,7 +64,31 @@ func touchedPackages(d *delta.Delta) map[string]bool {
 	for _, ic := range d.Invariants {
 		touched[ic.Package] = true
 	}
+	for _, cc := range d.Contracts {
+		// Interface and implementers are "pkgpath.Name"; the declaring package
+		// and every changed implementer's package are both implicated.
+		if pkg := pkgOfQualified(cc.Interface); pkg != "" {
+			touched[pkg] = true
+		}
+		for _, impl := range append(cc.ImplementersAdded, cc.ImplementersRemoved...) {
+			if pkg := pkgOfQualified(impl); pkg != "" {
+				touched[pkg] = true
+			}
+		}
+	}
 	return touched
+}
+
+// pkgOfQualified splits "example.com/m/pkg.TypeName" into its package path. The
+// final dot is the separator: a Go type name cannot contain one, while the
+// package path usually does ("github.com/..."), so LastIndex is the correct end
+// to search from.
+func pkgOfQualified(fq string) string {
+	i := strings.LastIndex(fq, ".")
+	if i < 0 {
+		return ""
+	}
+	return fq[:i]
 }
 
 // planClauses extracts the plan-declared clauses for one package.
