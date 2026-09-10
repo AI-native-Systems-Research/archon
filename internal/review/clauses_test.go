@@ -1,11 +1,16 @@
 package review
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
+	"github.com/AI-native-Systems-Research/archon/internal/extract"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/plan"
 )
 
 // clause builds a plan-sourced clause. File == "plan" is the discriminator that
@@ -301,5 +306,134 @@ func TestClauseSectionAbsentFromMarkdownWithoutPlan(t *testing.T) {
 	}
 	if strings.Contains(renderMarkdown(res), "Contract clauses implicated") {
 		t.Error("clause section rendered without a plan")
+	}
+}
+
+// --- End-to-end: real extraction, real plan JSON, real Build ---
+
+// writeTempModule writes a small module and returns its directory.
+func writeTempModule(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, src := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	return dir
+}
+
+func extractOrFail(t *testing.T, files map[string]string) *graph.Graph {
+	t.Helper()
+	res, err := extract.Extract(writeTempModule(t, files))
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if res.NumErrors != 0 {
+		t.Fatalf("fixture does not typecheck (%d errors) — the result would be meaningless", res.NumErrors)
+	}
+	return res.Graph
+}
+
+// The bound path had no end-to-end coverage: every other test hand-builds
+// graphs, so "a real test in a real package was matched to a clause" was never
+// actually exercised. This drives the whole chain — extraction, a plan compiled
+// and round-tripped through JSON as the CLI does, Build, and the rendered table.
+func TestClauseBindingEndToEndWithRealExtraction(t *testing.T) {
+	const covMod = "example.com/cov"
+
+	base := map[string]string{
+		"go.mod": "module example.com/cov\n\ngo 1.26\n",
+		"util/util.go": `package util
+
+func Help() string { return "h" }
+`,
+		"kv/kv.go": `package kv
+
+import "example.com/cov/util"
+
+func Get() string { return util.Help() }
+`,
+		// A test named for clause BC-A1, which is what binding looks for.
+		"kv/kv_test.go": `package kv
+
+import "testing"
+
+func TestBC_A1(t *testing.T) {
+	if Get() == "" {
+		t.Fatal("want non-empty")
+	}
+}
+`,
+	}
+	// Head grows kv's surface, so the delta touches it.
+	head := map[string]string{}
+	for k, v := range base {
+		head[k] = v
+	}
+	head["kv/kv.go"] = base["kv/kv.go"] + "\nfunc Put() {}\n"
+
+	gA := extractOrFail(t, base)
+	gB := extractOrFail(t, head)
+
+	planSrc := `hole example.com/cov/kv {
+  surface:
+    Get() string
+  allow:
+    import example.com/cov/util
+  contract:
+    BC-A1 Get never returns empty [evidenced: property_test]
+    BC-A2 Put is idempotent       [evidenced: fuzz]
+}
+box example.com/cov/util
+`
+	compiled, diags := plan.Compile([]byte(planSrc))
+	if len(diags) != 0 {
+		t.Fatalf("plan does not compile: %v", diags)
+	}
+	// Round-trip through JSON exactly as the CLI does (plan compile > file, then
+	// pr-review --plan reads it back), so the prose is proven to survive.
+	blob, err := json.Marshal(compiled)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	var planGraph graph.Graph
+	if err := json.Unmarshal(blob, &planGraph); err != nil {
+		t.Fatalf("unmarshal plan: %v", err)
+	}
+
+	res := Build(gA, gB, delta.Compute(gA, gB), Options{PlanGraph: &planGraph})
+
+	byID := map[string]ClauseRow{}
+	for _, r := range res.Clauses {
+		byID[r.ID] = r
+	}
+	if len(byID) != 2 {
+		t.Fatalf("got %d clauses, want 2 (both on %s/kv): %+v", len(byID), covMod, res.Clauses)
+	}
+
+	// The case with no prior end-to-end coverage: a real test, found by name.
+	if got := byID["BC-A1"]; got.BoundTest != "TestBC_A1" {
+		t.Errorf("BC-A1 bound test = %q, want TestBC_A1 (the test exists in kv)", got.BoundTest)
+	}
+	// And the gap case, from the same run.
+	if got := byID["BC-A2"]; got.BoundTest != "" {
+		t.Errorf("BC-A2 bound test = %q, want empty (no TestBC_A2 exists)", got.BoundTest)
+	}
+	// Prose survived compile -> JSON -> review.
+	if got := byID["BC-A1"].Statement; got != "Get never returns empty" {
+		t.Errorf("statement = %q, want the plan's prose after a JSON round trip", got)
+	}
+
+	out := renderMarkdown(res)
+	if !strings.Contains(out, "Contract clauses implicated (2, 1 without evidence)") {
+		t.Errorf("header missing or miscounted\n---\n%s", out)
+	}
+	if !strings.Contains(out, "`TestBC_A1`") {
+		t.Errorf("bound test not rendered\n---\n%s", out)
 	}
 }
