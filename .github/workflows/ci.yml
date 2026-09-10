@@ -32,6 +32,17 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # gofmt -l exits 0 whether or not it finds anything, so this has to assert
+      # on the output. Checking the exit code would silently never fire.
+      - name: Gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [[ -n "$unformatted" ]]; then
+            echo "::error::gofmt needs to run on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Test
         run: go test ./...
 
