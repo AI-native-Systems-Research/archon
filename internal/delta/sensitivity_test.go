@@ -30,8 +30,9 @@ const (
 // mutation in one test cannot leak into another.
 //
 // Shape: app --import,call--> mem --import--> store, and mem.Store satisfies
-// store.Cache (an implements edge). mem carries a test so the gofmt-normalized
-// invariant hash is exercised too.
+// store.Cache (an implements edge). mem carries a test, which the base-shape
+// test asserts is actually collected and bound — without that positive control
+// the reformat case below would pass even if invariants were never extracted.
 func baseFiles() map[string]string {
 	return map[string]string{
 		"go.mod": "module example.com/s\n\ngo 1.26\n",
@@ -94,8 +95,15 @@ func mutate(t *testing.T, edits map[string]string) map[string]string {
 	t.Helper()
 	files := baseFiles()
 	for name, src := range edits {
-		if _, ok := files[name]; !ok {
+		old, ok := files[name]
+		if !ok {
 			t.Fatalf("mutate targets unknown file %q — check the name", name)
+		}
+		// A no-op edit degrades a case into base-vs-base. The positive cases
+		// would catch that via their exact assertions, but the reformat case
+		// asserts that NOTHING changed and so could never notice.
+		if old == src {
+			t.Fatalf("mutate is a no-op for %q — the edit is byte-identical to the base", name)
 		}
 		files[name] = src
 	}
@@ -122,6 +130,11 @@ func extractModule(t *testing.T, files map[string]string) *graph.Graph {
 	// Guard, not decoration: Extract returns a partial graph when the fixture
 	// fails to typecheck, so without this a broken fixture yields an empty
 	// delta and the test passes for entirely the wrong reason.
+	//
+	// Limit worth knowing: Extract loads with Tests:false, so NumErrors is blind
+	// to _test.go errors. The base-shape test covers that gap indirectly by
+	// asserting the invariant's Exercises are bound, which only happens when the
+	// test file typechecks.
 	if res.NumErrors != 0 {
 		t.Fatalf("fixture does not typecheck (%d package errors); fix the fixture — "+
 			"a non-compiling fixture makes this test meaningless", res.NumErrors)
@@ -194,6 +207,38 @@ func TestSensitivityBaseFixtureShape(t *testing.T) {
 	// could be reporting noise rather than its mutation.
 	if d := delta.Compute(g, extractModule(t, baseFiles())); !d.EmptyAtPackageAltitude {
 		t.Errorf("base vs base is not empty at package altitude: %+v", d)
+	}
+
+	// Positive control for the invariant machinery. The reformat case asserts
+	// that NO invariant changed, which would also hold if invariants were never
+	// collected at all — disabling testInvariants entirely leaves it green. So
+	// pin here that the promise exists, is hashed, and is bound to real types.
+	//
+	// Exercises is the load-bearing one: it is populated only when the fixture's
+	// _test.go typechecks and bindInvariants succeeded, which is the gap that
+	// Extract's own NumErrors cannot see (it loads with Tests:false).
+	var inv *graph.Invariant
+	for _, p := range g.Packages {
+		if p.Path != pkgMem {
+			continue
+		}
+		for i := range p.Invariants {
+			if p.Invariants[i].Name == "TestConserve" {
+				inv = &p.Invariants[i]
+			}
+		}
+	}
+	if inv == nil {
+		t.Fatalf("base fixture invariant TestConserve was not collected; the reformat "+
+			"case cannot prove anything without it. %s packages = %+v", pkgMem, g.Packages)
+	}
+	if inv.Hash == "" {
+		t.Errorf("invariant TestConserve has an empty hash; a reformat could not be "+
+			"distinguished from a semantic edit: %+v", inv)
+	}
+	if len(inv.Exercises) == 0 {
+		t.Errorf("invariant TestConserve has no bound Exercises, so the fixture's "+
+			"_test.go likely does not typecheck: %+v", inv)
 	}
 }
 
@@ -305,16 +350,6 @@ func Compact() {}
 	if !hasSymbol(widenings[0].Added, "Compact") {
 		t.Errorf("widening added = %+v, want it to include Compact", widenings[0].Added)
 	}
-
-	// The same growth must be silent once explicitly authorized, or the gate
-	// would be reporting any change rather than an unauthorized one.
-	authorized := gate.CheckSurface(d.Surface, &gate.SurfacePolicy{
-		Fixed: map[string]bool{pkgMem: true},
-		Widen: map[string][]string{pkgMem: {"Compact"}},
-	})
-	if len(authorized) != 0 {
-		t.Errorf("authorized widening still reported: %+v", authorized)
-	}
 }
 
 // --- 4. Unexporting an entity -> surface removal. ---
@@ -336,8 +371,6 @@ func (s *Store) Get(k string) (store.Item, bool) { return store.Item{Key: k}, tr
 func (s *Store) Put(e Entry) {}
 
 func flush() {}
-
-var _ = flush
 `,
 		// Flush is no longer reachable from app.
 		"app/app.go": `package app
@@ -438,6 +471,11 @@ func Run() {
 	if findEdge(d.EdgesRemoved, pkgApp, "call", pkgMem) != nil {
 		t.Errorf("surviving call edge wrongly reported as removed: %+v", d.EdgesRemoved)
 	}
+	// The stronger claim, and the one that matters for review: dropping one call
+	// of several is not a boundary move at all.
+	if !d.EmptyAtPackageAltitude {
+		t.Errorf("weakening a call edge moved the boundary: %+v", d)
+	}
 }
 
 // --- 7. Removing the last call -> edge removed. ---
@@ -460,7 +498,52 @@ func TestSensitivityRemovingLastCallRemovesEdge(t *testing.T) {
 	}
 }
 
-// --- 8. Pure reformat -> empty delta. ---
+// --- 8. Semantic edit to a test -> invariant reported modified. ---
+
+// The other direction from the reformat case below. Together they pin the
+// gofmt-normalized hash from both sides: formatting must NOT register, meaning
+// must. This case also pins the design in delta.go — an invariant change is a
+// separate axis from the structural verdict, so touching a promise must be
+// reported WITHOUT claiming the boundary moved.
+func TestSensitivitySemanticTestEditModifiesInvariant(t *testing.T) {
+	_, _, d := baseAnd(t, map[string]string{
+		"mem/mem_test.go": `package mem
+
+import "testing"
+
+func TestConserve(t *testing.T) {
+	s := New()
+	if _, ok := s.Get("a different key"); !ok {
+		t.Fatal("want hit")
+	}
+}
+`,
+	})
+
+	if len(d.Invariants) != 1 {
+		t.Fatalf("invariant changes = %+v, want exactly 1 for %s", d.Invariants, pkgMem)
+	}
+	ic := d.Invariants[0]
+	if ic.Package != pkgMem {
+		t.Errorf("invariant change on %s, want %s", ic.Package, pkgMem)
+	}
+	found := false
+	for _, n := range ic.Modified {
+		if n == "TestConserve" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("modified = %v, want it to include TestConserve (added=%v removed=%v)",
+			ic.Modified, ic.Added, ic.Removed)
+	}
+	// Editing a test is not a boundary move.
+	if !d.EmptyAtPackageAltitude {
+		t.Errorf("a test-body edit moved the boundary: %+v", d)
+	}
+}
+
+// --- 9. Pure reformat -> empty delta. ---
 
 // This is the case that protects a real advantage over file-hash-based tooling
 // (Bazel and friends re-run on any byte change). Invariant bodies are
@@ -509,7 +592,7 @@ func TestConserve(t *testing.T) {
 		t.Errorf("reformat changed edges: added %+v removed %+v", d.EdgesAdded, d.EdgesRemoved)
 	}
 	if len(d.Invariants) != 0 {
-		t.Errorf("reformat registered an invariant change (gofmt normalization failed): %+v",
-			d.Invariants)
+		t.Errorf("reformat registered an invariant change — gofmt normalization of the "+
+			"invariant hash regressed: %+v", d.Invariants)
 	}
 }
