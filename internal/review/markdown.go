@@ -84,6 +84,7 @@ func renderMarkdown(res *Result) string {
 
 	// Invariant / schema / surface detail.
 	writeInvariantTable(&b, res.Invariants)
+	writeClauseTable(&b, res.Clauses)
 	writeSchemaTable(&b, res.Schema_)
 	writeSurfaceTable(&b, res.Surface)
 
@@ -204,6 +205,44 @@ func writeInvariantTable(b *strings.Builder, invs []delta.InvariantChange) {
 		)
 	}
 	b.WriteString("\n")
+}
+
+// writeClauseTable reports the plan-declared clauses on packages this change
+// touched, and whether a test was found for each. Kept separate from
+// writeInvariantTable on purpose: that one renders code-extracted tests, whose
+// Invariant fields carry different meanings.
+func writeClauseTable(b *strings.Builder, rows []ClauseRow) {
+	if len(rows) == 0 {
+		return
+	}
+	unbound := 0
+	for _, r := range rows {
+		if !r.Bound() {
+			unbound++
+		}
+	}
+	fmt.Fprintf(b, "### Contract clauses implicated (%d, %d without evidence)\n\n", len(rows), unbound)
+	b.WriteString("| Package | Clause | Promise | Declared evidence | Bound test |\n")
+	b.WriteString("|---|---|---|---|---|\n")
+	for _, r := range rows {
+		bound := "— none found"
+		if r.Bound() {
+			bound = "`" + r.BoundTest + "`"
+		}
+		fmt.Fprintf(b, "| `%s` | **%s** | %s | %s | %s |\n",
+			shortID(r.Package), r.ID, cellText(r.Statement), cellText(r.Class), bound)
+	}
+	b.WriteString("\nDeclared evidence is what the plan asks for; a bound test is one found by " +
+		"name. Nothing here is verified — an unbound clause is a gap to close, not a failure.\n\n")
+}
+
+// cellText renders a value for a Markdown table cell, escaping the pipe that
+// would otherwise split the row, and showing an em dash when empty.
+func cellText(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "—"
+	}
+	return strings.ReplaceAll(s, "|", "\\|")
 }
 
 func writeSchemaTable(b *strings.Builder, changes []delta.SurfaceChange) {
