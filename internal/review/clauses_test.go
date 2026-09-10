@@ -91,6 +91,8 @@ func TestClauseReportEveryDeltaAxisCountsAsTouched(t *testing.T) {
 		{"EdgesAdded", &delta.Delta{EdgesAdded: []graph.Edge{{From: a, To: mod + "/z", Kind: "import"}}}},
 		{"EdgesRemoved", &delta.Delta{EdgesRemoved: []graph.Edge{{From: a, To: mod + "/z", Kind: "import"}}}},
 		{"Invariants", &delta.Delta{Invariants: []delta.InvariantChange{{Package: a}}}},
+		{"Invariants/GuardedContracts", &delta.Delta{Invariants: []delta.InvariantChange{
+			{Package: mod + "/z", Modified: []string{"TestX"}, GuardedContracts: []string{a + ".Cache"}}}}},
 		{"Contracts/Interface", &delta.Delta{Contracts: []delta.ContractChange{{Interface: a + ".Store"}}}},
 		{"Contracts/Implementer", &delta.Delta{Contracts: []delta.ContractChange{
 			{Interface: mod + "/z.Iface", ImplementersAdded: []string{a + ".Impl"}}}}},
@@ -499,5 +501,97 @@ func (s Second) Get(k string) string { return k }
 		t.Errorf("store (the interface owner) not marked touched; its clauses would be "+
 			"silently skipped even though its contract gained a member: contracts = %+v, touched = %+v",
 			d.Contracts, touched)
+	}
+}
+
+// When a contract test is modified, delta records the interfaces it guarded —
+// which usually live in a DIFFERENT package from the test. That package owns the
+// promise that was just weakened, so it is the strongest possible reason to show
+// a clause, and it must not be dropped because only the test's own package was
+// marked.
+func TestGuardedContractOwnerIsTouchedOnModifiedTest(t *testing.T) {
+	base := map[string]string{
+		"go.mod": "module example.com/gc\n\ngo 1.26\n",
+		"store/store.go": `package store
+
+type Cache interface {
+	Get(k string) string
+}
+`,
+		"mem/mem.go": `package mem
+
+type First struct{}
+
+func (f First) Get(k string) string { return k }
+`,
+		"mem/mem_test.go": `package mem
+
+import (
+	"testing"
+
+	"example.com/gc/store"
+)
+
+func TestCacheContract(t *testing.T) {
+	var c store.Cache = First{}
+	if c.Get("k") != "k" {
+		t.Fatal("want k")
+	}
+}
+`,
+	}
+	head := map[string]string{}
+	for k, v := range base {
+		head[k] = v
+	}
+	// Semantic edit to the contract test: the promise it guards was altered.
+	head["mem/mem_test.go"] = `package mem
+
+import (
+	"testing"
+
+	"example.com/gc/store"
+)
+
+func TestCacheContract(t *testing.T) {
+	var c store.Cache = First{}
+	if c.Get("other") == "" {
+		t.Fatal("want non-empty")
+	}
+}
+`
+
+	gA := extractOrFail(t, base)
+	gB := extractOrFail(t, head)
+	d := delta.Compute(gA, gB)
+
+	if len(d.Invariants) == 0 {
+		t.Fatalf("no invariant change reported; this test cannot prove anything: %+v", d)
+	}
+	var guarded []string
+	for _, ic := range d.Invariants {
+		guarded = append(guarded, ic.GuardedContracts...)
+	}
+	if len(guarded) == 0 {
+		t.Fatalf("delta bound no guarded contract to the modified test, so the "+
+			"precondition fails: %+v", d.Invariants)
+	}
+
+	touched := touchedPackages(d)
+	if !touched["example.com/gc/store"] {
+		t.Errorf("store owns the guarded contract %v but was not marked touched; its "+
+			"clauses would be skipped for the very change that weakened them: touched = %+v",
+			guarded, touched)
+	}
+}
+
+// cellText's em-dash branch: parseContractEntry demonstrably yields clauses with
+// no prose ("BC-C2 [evidenced: fuzz]"), so an empty cell is a reachable state.
+func TestClauseTableRendersEmptyFieldsAsDash(t *testing.T) {
+	var b strings.Builder
+	writeClauseTable(&b, []ClauseRow{{Package: mod + "/a", ID: "BC-A9"}})
+	out := b.String()
+	if !strings.Contains(out, "| `a` | **BC-A9** | — | — | — none found |") {
+		t.Errorf("empty statement/class not rendered as em dashes:\n%s", out)
 	}
 }

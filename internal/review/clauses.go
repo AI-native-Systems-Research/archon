@@ -67,6 +67,17 @@ func touchedPackages(d *delta.Delta) map[string]bool {
 	}
 	for _, ic := range d.Invariants {
 		touched[ic.Package] = true
+		// GuardedContracts names the interfaces whose bound tests were modified or
+		// removed, and those usually live in a different package from the test —
+		// the same owner/implementer asymmetry the Contracts axis handles below.
+		// This is the strongest reason to surface a clause at all: a promise on
+		// that contract was just weakened. delta only populates the field for
+		// modified or removed tests, so no further gate is needed here.
+		for _, g := range ic.GuardedContracts {
+			if pkg := pkgOfQualified(g); pkg != "" {
+				touched[pkg] = true
+			}
+		}
 	}
 	for _, cc := range d.Contracts {
 		// Interface and implementers are "pkgpath.Name"; the declaring package
