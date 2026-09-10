@@ -7,6 +7,12 @@ type RatchetResult struct {
 	Before int  `json:"before"`
 	After  int  `json:"after"`
 	OK     bool `json:"ok"`
+
+	// Drift carries the head distance's surface drift. Ratchet already computes
+	// that distance and used to discard everything but the total, which is how a
+	// stale declared signature stayed invisible. Not part of Before/After: drift
+	// never moves the ratchet.
+	Drift []SurfaceDrift `json:"surfaceDrift,omitempty"`
 }
 
 // Ratchet computes plan distance before and after a change and reports whether
@@ -28,5 +34,6 @@ func Ratchet(p, base, head *graph.Graph) RatchetResult {
 		Before: before.Total,
 		After:  after.Total,
 		OK:     after.Total <= before.Total,
+		Drift:  after.Drift,
 	}
 }

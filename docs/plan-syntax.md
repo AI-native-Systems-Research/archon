@@ -306,6 +306,38 @@ dist(P,G) = 0
 
 `dist = 0` means the code fully realizes the plan.
 
+### Surface drift — reported, never counted
+
+The four classes above compare entity **names**. A declared entity can exist under
+the right name with a different signature, which leaves `dist = 0` while the plan
+no longer describes what shipped. That is reported separately:
+
+```
+$ archon-go plan dist plan.json .
+dist(P,G) = 0
+  unfilled holes (C1): 0
+  ...
+
+surface drift (1) — declared signature is not what shipped:
+  example.com/y/pkg Do
+    plan: (s string) string
+    code: func(parts ...string) string
+```
+
+`pr-review --plan` prints the same as a table under the distance ratchet.
+
+Drift is **not** added to `dist`, so `dist = 0` keeps meaning "structure realized"
+and a parameter rename cannot fail a merge gate. Two rules keep the report quiet
+enough to be worth reading:
+
+- Signatures are compared after normalizing the `func` prefix and whitespace, so
+  the plan's `(s string) string` and extraction's `func(s string) string` agree.
+- A signature missing on **either** side means "not recorded", not "different" —
+  a hand-written or older graph JSON carries names with no signature at all.
+
+A parameter rename does show as drift. That is intended: the plan and the code
+disagree, and updating the plan is the cheap fix.
+
 ---
 
 ## Plan verdicts

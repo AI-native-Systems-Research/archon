@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 )
@@ -14,6 +15,15 @@ type Unmet struct {
 	Detail  string `json:"detail"`  // human-readable explanation
 }
 
+// SurfaceDrift is one declared entity that exists under the right name but with
+// a different signature than the plan states.
+type SurfaceDrift struct {
+	Package  string `json:"package"`
+	Entity   string `json:"entity"`   // symbol name, e.g. "Format"
+	Declared string `json:"declared"` // signature the plan states
+	Actual   string `json:"actual"`   // signature the code has
+}
+
 // DistResult holds the computed plan distance and its breakdown.
 type DistResult struct {
 	Total int     `json:"total"`
@@ -22,6 +32,13 @@ type DistResult struct {
 	C3    int     `json:"c3_absent_arrows"`
 	C4    int     `json:"c4_disallowed_arrows"`
 	Unmet []Unmet `json:"unmet,omitempty"`
+
+	// Drift records declared entities whose signature is not the one that shipped.
+	// Deliberately NOT counted in Total: a parameter rename is not an
+	// architectural regression, and making it one would break a plan for no
+	// structural reason. So dist == 0 keeps meaning "structure realized", while
+	// plan-vs-code divergence stops being invisible.
+	Drift []SurfaceDrift `json:"surfaceDrift,omitempty"`
 }
 
 // Dist computes plan distance: the number of unmet obligations between a plan
@@ -87,6 +104,9 @@ func Dist(plan, actual *graph.Graph) DistResult {
 				Detail:  fmt.Sprintf("hole filled but surface mismatch: declared %d, actual %d", len(pp.Surface), len(ap.Surface)),
 			})
 		}
+		// Names can all line up while the signatures do not. Reported separately
+		// so it never changes Total.
+		res.Drift = append(res.Drift, surfaceDrift(pp.Path, pp.Surface, ap.Surface)...)
 	}
 
 	// C2: absent declared boxes (non-hole packages in plan not present in actual)
@@ -188,6 +208,57 @@ func edgeKey(e graph.Edge) string {
 
 func pairKey(e graph.Edge) string {
 	return e.From + " -> " + e.To
+}
+
+// normalizeSig puts the two sources of a signature into one shape before they are
+// compared. A plan states what its author typed — "(s string) string" — while
+// extraction reports the go/types rendering, "func(s string) string". Comparing
+// those raw makes every declared entity look drifted, including a perfect match,
+// so the leading "func" and any whitespace differences are removed first.
+//
+// Parameter NAMES are deliberately left in. A rename is genuine plan-vs-code
+// divergence worth seeing, and since drift is reported rather than counted it
+// cannot break a build.
+func normalizeSig(s string) string {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "func")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// surfaceDrift reports declared entities that exist under the right name but with
+// a different signature.
+//
+// A missing signature on either side means "not recorded", NOT "different": a
+// hand-written or older graph JSON can carry names with no sig at all, and
+// treating that as drift would report divergence for every such fixture. So both
+// sides must state a signature before they can disagree.
+func surfaceDrift(pkgPath string, declared, actual []graph.Symbol) []SurfaceDrift {
+	if len(declared) == 0 || len(actual) == 0 {
+		return nil
+	}
+	actualSigs := make(map[string]string, len(actual))
+	for _, s := range actual {
+		actualSigs[s.Name] = s.Sig
+	}
+	var out []SurfaceDrift
+	for _, d := range declared {
+		got, exists := actualSigs[d.Name]
+		if !exists {
+			continue // absent entirely — that is the name check's business (C1)
+		}
+		if d.Sig == "" || got == "" {
+			continue
+		}
+		if normalizeSig(d.Sig) != normalizeSig(got) {
+			out = append(out, SurfaceDrift{
+				Package:  pkgPath,
+				Entity:   d.Name,
+				Declared: d.Sig,
+				Actual:   got,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Entity < out[j].Entity })
+	return out
 }
 
 func surfaceMatch(declared, actual []graph.Symbol) bool {

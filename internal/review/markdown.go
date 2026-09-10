@@ -295,6 +295,25 @@ func writePlanRatchetSection(b *strings.Builder, r *plan.RatchetResult) {
 		status = "REGRESSION"
 	}
 	fmt.Fprintf(b, "**dist(P,G): %d → %d** — %s\n\n", r.Before, r.After, status)
+	writeSurfaceDriftTable(b, r.Drift)
+}
+
+// writeSurfaceDriftTable reports declared entities whose signature is not the one
+// that shipped. Distance can be 0 — the structure is realized — while the plan
+// still misdescribes the code, and the plan is what a reader trusts.
+func writeSurfaceDriftTable(b *strings.Builder, drift []plan.SurfaceDrift) {
+	if len(drift) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "**Surface drift (%d)** — declared signature is not what shipped. "+
+		"Does not affect the distance above.\n\n", len(drift))
+	b.WriteString("| Package | Entity | Plan declares | Code has |\n")
+	b.WriteString("|---|---|---|---|\n")
+	for _, d := range drift {
+		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s |\n",
+			shortID(d.Package), d.Entity, cellText(d.Declared), cellText(d.Actual))
+	}
+	b.WriteString("\n")
 }
 
 func writePlanClassifySection(b *strings.Builder, c *plan.ClassifyResult) {

@@ -140,3 +140,125 @@ func TestDist_AbsentDeclaredBox(t *testing.T) {
 		t.Fatalf("want C2=1 (absent declared box), got %d", res.C2)
 	}
 }
+
+// --- Surface drift (#41) ---
+
+func sym(name, sig string) graph.Symbol {
+	return graph.Symbol{Kind: "func", Name: name, Sig: sig}
+}
+
+// filledHolePlan declares one hole whose surface states the given signature.
+func filledHolePlan(sig string) *graph.Graph {
+	return &graph.Graph{Module: "example.com/y", Packages: []graph.Package{
+		{Path: "example.com/y/pkg", Name: "pkg", Internal: true, Hole: true,
+			Surface: []graph.Symbol{sym("Do", sig)}},
+	}}
+}
+
+// filledActual is a realized package with the given signature.
+func filledActual(sig string) *graph.Graph {
+	return &graph.Graph{Module: "example.com/y", Packages: []graph.Package{
+		{Path: "example.com/y/pkg", Name: "pkg", Internal: true,
+			Files:   []string{"pkg.go"},
+			Surface: []graph.Symbol{sym("Do", sig)}},
+	}}
+}
+
+func TestDistReportsSurfaceDrift(t *testing.T) {
+	res := Dist(filledHolePlan("(s string) string"), filledActual("func(parts ...string) string"))
+
+	if len(res.Drift) != 1 {
+		t.Fatalf("got %d drift entries, want 1: %+v", len(res.Drift), res.Drift)
+	}
+	d := res.Drift[0]
+	if d.Entity != "Do" || d.Declared != "(s string) string" || d.Actual != "func(parts ...string) string" {
+		t.Errorf("drift = %+v, want Do with both signatures verbatim", d)
+	}
+	// The whole point: the structure IS realized, so distance stays 0 and the
+	// drift is what carries the signal.
+	if res.Total != 0 || res.C1 != 0 {
+		t.Errorf("drift changed the distance: total=%d c1=%d, want 0/0", res.Total, res.C1)
+	}
+}
+
+// The trap this feature nearly shipped with: a plan writes "(s string) string"
+// while extraction writes "func(s string) string", so comparing raw reports drift
+// for a PERFECT match and the report becomes noise nobody reads.
+func TestDistNoDriftWhenSignaturesAgreeModuloRendering(t *testing.T) {
+	for _, actual := range []string{
+		"func(s string) string", // go/types rendering
+		"(s string) string",     // already plan-shaped
+		"func(s string)  string",
+		"  func(s string) string  ",
+	} {
+		if res := Dist(filledHolePlan("(s string) string"), filledActual(actual)); len(res.Drift) != 0 {
+			t.Errorf("actual %q reported drift against an equivalent declaration: %+v", actual, res.Drift)
+		}
+	}
+}
+
+// A signature absent on either side means "not recorded", not "different".
+// Hand-written and older graph JSON carry names with no sig at all.
+func TestDistNoDriftWhenEitherSignatureMissing(t *testing.T) {
+	if res := Dist(filledHolePlan("(s string) string"), filledActual("")); len(res.Drift) != 0 {
+		t.Errorf("missing actual signature reported as drift: %+v", res.Drift)
+	}
+	if res := Dist(filledHolePlan(""), filledActual("func(s string) string")); len(res.Drift) != 0 {
+		t.Errorf("missing declared signature reported as drift: %+v", res.Drift)
+	}
+}
+
+// An entity that is absent entirely is C1's business, not drift's.
+func TestDistAbsentEntityIsNotDrift(t *testing.T) {
+	actual := &graph.Graph{Module: "example.com/y", Packages: []graph.Package{
+		{Path: "example.com/y/pkg", Name: "pkg", Internal: true,
+			Files:   []string{"pkg.go"},
+			Surface: []graph.Symbol{sym("Other", "func() int")}},
+	}}
+	res := Dist(filledHolePlan("(s string) string"), actual)
+
+	if len(res.Drift) != 0 {
+		t.Errorf("absent entity reported as drift instead of C1: %+v", res.Drift)
+	}
+	if res.C1 != 1 {
+		t.Errorf("C1 = %d, want 1 (declared entity is missing)", res.C1)
+	}
+}
+
+// An unfilled hole has nothing to compare against.
+func TestDistNoDriftForUnfilledHole(t *testing.T) {
+	if res := Dist(filledHolePlan("(s string) string"), &graph.Graph{}); len(res.Drift) != 0 {
+		t.Errorf("unfilled hole produced drift: %+v", res.Drift)
+	}
+}
+
+func TestNormalizeSig(t *testing.T) {
+	cases := map[string]string{
+		"func(s string) string":    "(s string) string",
+		"(s string) string":        "(s string) string",
+		"  func(s string)  string": "(s string) string",
+		"":                         "",
+		"func() int":               "() int",
+	}
+	for in, want := range cases {
+		if got := normalizeSig(in); got != want {
+			t.Errorf("normalizeSig(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRatchetCarriesDrift(t *testing.T) {
+	p := filledHolePlan("(s string) string")
+	base := filledActual("func(s string) string")        // agrees
+	head := filledActual("func(parts ...string) string") // drifted
+
+	r := Ratchet(p, base, head)
+
+	if len(r.Drift) != 1 {
+		t.Fatalf("ratchet dropped the drift: %+v", r)
+	}
+	// Drift must not move the ratchet.
+	if r.Before != r.After || !r.OK {
+		t.Errorf("drift moved the ratchet: before=%d after=%d ok=%v", r.Before, r.After, r.OK)
+	}
+}

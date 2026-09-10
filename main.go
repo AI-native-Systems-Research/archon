@@ -618,6 +618,15 @@ func cmdPlanDist(args []string) {
 			fmt.Fprintf(os.Stdout, "  [%s] %s\n", u.Class, u.Detail)
 		}
 	}
+	// Drift is not part of Total, so it gets its own section: the structure is
+	// realized, and the plan still does not describe what shipped.
+	if len(res.Drift) > 0 {
+		fmt.Fprintf(os.Stdout, "\nsurface drift (%d) — declared signature is not what shipped:\n", len(res.Drift))
+		for _, d := range res.Drift {
+			fmt.Fprintf(os.Stdout, "  %s %s\n    plan: %s\n    code: %s\n",
+				d.Package, d.Entity, d.Declared, d.Actual)
+		}
+	}
 }
 
 func atoiOr(s string, def int) int {
