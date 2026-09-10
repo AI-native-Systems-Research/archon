@@ -86,15 +86,15 @@ type Options struct {
 
 // Counts is the at-a-glance tally embedded in review.json.
 type Counts struct {
-	PackagesAdded   int `json:"packagesAdded"`
-	PackagesRemoved int `json:"packagesRemoved"`
-	EdgesAdded      int `json:"edgesAdded"`
-	EdgesRemoved    int `json:"edgesRemoved"`
-	SurfaceChanged  int `json:"surfaceChanged"`
-	SchemaChanged   int `json:"schemaChanged"`
-	Invariants      int `json:"invariants"`
-	Contracts       int `json:"contracts"`
-	Violations      int `json:"violations"`
+	PackagesAdded    int `json:"packagesAdded"`
+	PackagesRemoved  int `json:"packagesRemoved"`
+	EdgesAdded       int `json:"edgesAdded"`
+	EdgesRemoved     int `json:"edgesRemoved"`
+	SurfaceChanged   int `json:"surfaceChanged"`
+	SchemaChanged    int `json:"schemaChanged"`
+	Invariants       int `json:"invariants"`
+	Contracts        int `json:"contracts"`
+	Violations       int `json:"violations"`
 	WitnessesFull    int `json:"witnessesFullyDecoupled"`
 	WitnessesWeak    int `json:"witnessesPartiallyDecoupled"`
 	SurfaceWidenings int `json:"surfaceWidenings,omitempty"`
@@ -119,14 +119,14 @@ type Result struct {
 
 	// Raw delta axes (machine-readable; the Markdown tables are derived from
 	// these).
-	Invariants []delta.InvariantChange `json:"invariants,omitempty"`
-	Schema_    []delta.SurfaceChange   `json:"schemaChanges,omitempty"`
-	Surface    []delta.SurfaceChange   `json:"surface,omitempty"`
-	Contracts  []delta.ContractChange  `json:"contracts,omitempty"`
-	Violations []delta.Violation       `json:"violations,omitempty"`
-	Widenings      []gate.Widening        `json:"widenings,omitempty"`
-	PlanRatchet    *plan.RatchetResult    `json:"planRatchet,omitempty"`
-	PlanClassify   *plan.ClassifyResult   `json:"planClassify,omitempty"`
+	Invariants   []delta.InvariantChange `json:"invariants,omitempty"`
+	Schema_      []delta.SurfaceChange   `json:"schemaChanges,omitempty"`
+	Surface      []delta.SurfaceChange   `json:"surface,omitempty"`
+	Contracts    []delta.ContractChange  `json:"contracts,omitempty"`
+	Violations   []delta.Violation       `json:"violations,omitempty"`
+	Widenings    []gate.Widening         `json:"widenings,omitempty"`
+	PlanRatchet  *plan.RatchetResult     `json:"planRatchet,omitempty"`
+	PlanClassify *plan.ClassifyResult    `json:"planClassify,omitempty"`
 
 	// Higher-altitude views (computed here).
 	Components ComponentView `json:"components"`

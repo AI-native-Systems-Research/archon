@@ -304,4 +304,3 @@ func lastSeg(path string) string {
 	}
 	return path
 }
-

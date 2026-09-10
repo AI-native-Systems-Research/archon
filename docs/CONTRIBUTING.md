@@ -71,10 +71,17 @@ Before pushing, confirm everything passes:
 go build ./...    # compiles
 go test ./...     # all tests pass
 go vet ./...      # no warnings
+gofmt -l .        # must print NOTHING (it exits 0 either way, so read the output)
 
 # Run golden-file demos to catch output regressions
 ARCHON=./archon-go ./demo/run-all.sh
 ```
+
+CI runs these same checks on every pull request (`.github/workflows/ci.yml`) and
+`main` requires them to pass, so a failure here is a blocked merge rather than a
+suggestion. CI runs the demos without `BLIS_REPO`, which exercises Flow 2 only —
+if your change touches review rendering or extraction, run them locally with
+`BLIS_REPO` set so Flows 1 and 3 are covered too.
 
 If the demo fails, your change altered archon's output — fix the bug. Do NOT update golden files yourself; flag the diff to the human reviewer and justify why the output changed. Only a human may approve golden-file updates.
 

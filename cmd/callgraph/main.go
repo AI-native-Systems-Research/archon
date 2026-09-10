@@ -6,16 +6,19 @@
 // so this is a static direct-call graph, not a devirtualized one.
 //
 // Two views:
-//   full          every in-module function, clustered by package.
-//   delta-scoped  pass --since <ref>; the tool diffs <ref> against the working
-//                 tree, marks the functions whose bodies overlap changed lines,
-//                 and draws only those plus their callers/callees out to --depth
-//                 hops (default 1). Changed functions are highlighted.
+//
+//	full          every in-module function, clustered by package.
+//	delta-scoped  pass --since <ref>; the tool diffs <ref> against the working
+//	              tree, marks the functions whose bodies overlap changed lines,
+//	              and draws only those plus their callers/callees out to --depth
+//	              hops (default 1). Changed functions are highlighted.
 //
 // Usage:
-//   callgraph <module-dir> <pkg-pattern> [--since <ref>] [--depth N]
-//   e.g.  callgraph ../inference-sim ./...                 # full graph
-//         callgraph ../inference-sim ./... --since HEAD~1  # what the last commit touched
+//
+//	callgraph <module-dir> <pkg-pattern> [--since <ref>] [--depth N]
+//	e.g.  callgraph ../inference-sim ./...                 # full graph
+//	      callgraph ../inference-sim ./... --since HEAD~1  # what the last commit touched
+//
 // Emits Graphviz DOT on stdout; a one-line summary on stderr.
 package main
 
