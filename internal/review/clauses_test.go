@@ -437,3 +437,67 @@ box example.com/cov/util
 		t.Errorf("bound test not rendered\n---\n%s", out)
 	}
 }
+
+// The Contracts axis earns its place by attributing a change to the INTERFACE's
+// package. When package mem gains a new implementer of store.Cache and the
+// implements edge mem -> store already existed, the surface axis marks mem (the
+// new type is exported) but NOTHING marks store — yet store owns the contract
+// that just gained a member, and store is where its clauses live.
+//
+// Verified on real code rather than argued: an earlier version of this test tried
+// the unexported-implementer case, which cannot happen at all — extract's
+// typeDefs skips unexported names, so an unexported type is never an implementer.
+func TestContractsAxisMarksInterfacePackage(t *testing.T) {
+	base := map[string]string{
+		"go.mod": "module example.com/ctr\n\ngo 1.26\n",
+		"store/store.go": `package store
+
+type Cache interface {
+	Get(k string) string
+}
+`,
+		// First already satisfies Cache, so the implements edge mem -> store
+		// exists in BOTH graphs and no arrow is added by the change.
+		"mem/mem.go": `package mem
+
+type First struct{}
+
+func (f First) Get(k string) string { return k }
+`,
+	}
+	head := map[string]string{}
+	for k, v := range base {
+		head[k] = v
+	}
+	head["mem/mem.go"] = base["mem/mem.go"] + `
+type Second struct{}
+
+func (s Second) Get(k string) string { return k }
+`
+
+	gA := extractOrFail(t, base)
+	gB := extractOrFail(t, head)
+	d := delta.Compute(gA, gB)
+
+	// The implements edge already existed, so this is the "already coupled" case.
+	for _, e := range d.EdgesAdded {
+		if e.Kind == "implements" {
+			t.Fatalf("an implements edge was added; not the already-coupled case: %+v", d.EdgesAdded)
+		}
+	}
+	if len(d.Contracts) == 0 {
+		t.Fatalf("no contract change reported, so the axis would be pointless: %+v", d)
+	}
+
+	touched := touchedPackages(d)
+	// mem is marked by the surface axis anyway — Second is exported.
+	if !touched["example.com/ctr/mem"] {
+		t.Errorf("mem not marked touched: %+v", touched)
+	}
+	// store is the one only this axis can mark.
+	if !touched["example.com/ctr/store"] {
+		t.Errorf("store (the interface owner) not marked touched; its clauses would be "+
+			"silently skipped even though its contract gained a member: contracts = %+v, touched = %+v",
+			d.Contracts, touched)
+	}
+}

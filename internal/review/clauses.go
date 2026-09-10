@@ -31,10 +31,14 @@ func (c ClauseRow) Bound() bool { return c.BoundTest != "" }
 // sides of an interface whose implementer set changed.
 //
 // An edge endpoint counts because a clause on the far side of a new dependency is
-// exactly the kind of promise a reviewer needs reminding of. Contract membership
-// counts because it is an independent axis: an unexported type gaining a method
-// that satisfies an interface changes no surface and adds no arrow when the
-// coarse implements edge already existed, yet a contract just gained a member.
+// exactly the kind of promise a reviewer needs reminding of.
+//
+// Contract membership counts for the sake of the INTERFACE's package. A new
+// implementer is an exported type, so the surface axis already marks the package
+// declaring it — but nothing marks the package declaring the interface, and that
+// is where the contract's clauses live. When the implements edge between the two
+// already existed, no arrow is added either, so this axis is the only thing that
+// attributes the change to the interface owner.
 //
 // d.ContractViolations is deliberately excluded. It requires --allow and reports
 // STANDING violations rather than new ones, so keying "touched" off it would
