@@ -20,9 +20,10 @@
 // public boundary, a planned extension point). The tool never says "smell".
 //
 // Usage:
-//   consumes <module-dir> <pkg-pattern> [--json]
-//   e.g.  consumes ../inference-sim ./...
-//         consumes ../inference-sim ./... --json > consumes.json
+//
+//	consumes <module-dir> <pkg-pattern> [--json]
+//	e.g.  consumes ../inference-sim ./...
+//	      consumes ../inference-sim ./... --json > consumes.json
 //
 // Human summary on stdout by default; --json emits machine-readable facts.
 // Deterministic: same module state in, byte-identical output out.
@@ -54,8 +55,8 @@ type ifaceEntry struct {
 }
 
 type ifaceFact struct {
-	FQ                    string        `json:"interface"`    // module-relative pkg.Name
-	Pkg                   string        `json:"pkg"`          // declaring package (module-relative)
+	FQ                    string        `json:"interface"` // module-relative pkg.Name
+	Pkg                   string        `json:"pkg"`       // declaring package (module-relative)
 	Name                  string        `json:"name"`
 	Methods               []string      `json:"methods"`      // signatures
 	Implementers          []string      `json:"implementers"` // module-relative fq
