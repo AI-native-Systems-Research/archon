@@ -221,7 +221,7 @@ func writeClauseTable(b *strings.Builder, rows []ClauseRow) {
 			unbound++
 		}
 	}
-	fmt.Fprintf(b, "### Contract clauses implicated (%d, %d without evidence)\n\n", len(rows), unbound)
+	fmt.Fprintf(b, "### Contract clauses implicated (%d, %d with no bound test)\n\n", len(rows), unbound)
 	b.WriteString("| Package | Clause | Promise | Declared evidence | Bound test |\n")
 	b.WriteString("|---|---|---|---|---|\n")
 	for _, r := range rows {

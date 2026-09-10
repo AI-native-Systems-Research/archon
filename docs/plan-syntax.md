@@ -85,7 +85,7 @@ With `--plan`, `pr-review` lists the clauses declared on every package the chang
 touched, so a reviewer sees which promises are implicated:
 
 ```
-### Contract clauses implicated (2, 1 without evidence)
+### Contract clauses implicated (2, 1 with no bound test)
 
 | Package | Clause | Promise | Declared evidence | Bound test |
 |---|---|---|---|---|
@@ -94,8 +94,12 @@ touched, so a reviewer sees which promises are implicated:
 ```
 
 A clause line is `<ID> <prose> [<class>: <detail>]`. The class annotation is the
-**trailing** bracket group, so a bracket inside the prose (`queue[0] stays
-ordered`) does not truncate the promise.
+bracket group at the **end of the line**, so a bracket earlier in the prose is
+preserved — `queue[0] stays ordered` survives intact. The flip side: prose that
+itself *ends* in a bracket group is read as the annotation, so
+`BC-C3 ordering holds for queue[0]` yields the promise `ordering holds for queue`
+and a class of `0`. Put the annotation last, or reword so the prose does not end
+in `]`.
 
 **How a test is matched.** By name only: clause `BC-C2` looks for a test called
 `TestBC_C2` (dashes become underscores) in the same package. A test named

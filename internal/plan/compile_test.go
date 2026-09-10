@@ -179,6 +179,9 @@ func TestParseContractEntry(t *testing.T) {
 			"BC-C3", "queue[0] stays ordered", "evidenced: fuzz"},
 		// Same, with no annotation to anchor on.
 		{"BC-C3 queue[0] stays ordered", "BC-C3", "queue[0] stays ordered", ""},
+		// Documented limitation: prose that itself ends in a bracket group is
+		// indistinguishable from an annotation, so it is read as one.
+		{"BC-C3 ordering holds for queue[0]", "BC-C3", "ordering holds for queue", "0"},
 		// Unterminated annotation: kept as prose rather than silently dropped.
 		{"BC-C6 unterminated [evidenced: fuzz",
 			"BC-C6", "unterminated [evidenced: fuzz", ""},

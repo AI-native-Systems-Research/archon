@@ -232,7 +232,7 @@ func TestClauseTableRendersPromiseAndGap(t *testing.T) {
 	})
 	out := b.String()
 
-	if !strings.Contains(out, "Contract clauses implicated (2, 1 without evidence)") {
+	if !strings.Contains(out, "Contract clauses implicated (2, 1 with no bound test)") {
 		t.Errorf("header wrong or missing\n---\n%s", out)
 	}
 	// Whole rows, not scattered substrings: a substring check cannot tell a
@@ -432,7 +432,7 @@ box example.com/cov/util
 	}
 
 	out := renderMarkdown(res)
-	if !strings.Contains(out, "Contract clauses implicated (2, 1 without evidence)") {
+	if !strings.Contains(out, "Contract clauses implicated (2, 1 with no bound test)") {
 		t.Errorf("header missing or miscounted\n---\n%s", out)
 	}
 	if !strings.Contains(out, "`TestBC_A1`") {

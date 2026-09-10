@@ -293,9 +293,12 @@ func parseContractEntry(l string) graph.Invariant {
 	// The annotation is a bracket group at the END of the line, so anchor on the
 	// trailing bracket rather than the first one. Anchoring on the first would
 	// truncate a promise that legitimately contains one — "queue[0] stays
-	// ordered" would become "queue" with a class of "0". A clause whose entire
-	// prose is a bracket group stays ambiguous and is read as an annotation;
-	// there is nothing to distinguish the two.
+	// ordered" would become "queue" with a class of "0".
+	//
+	// The remaining ambiguity is prose that ITSELF ends in a bracket group:
+	// "ordering holds for queue[0]" is read as promise + class, because nothing
+	// in the grammar distinguishes it from an annotation. Documented in
+	// docs/plan-syntax.md rather than guessed at.
 	if strings.HasSuffix(rest, "]") {
 		if start := strings.LastIndex(rest, "["); start >= 0 {
 			class = strings.TrimSpace(rest[start+1 : len(rest)-1])
