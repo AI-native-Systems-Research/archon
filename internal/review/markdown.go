@@ -298,6 +298,21 @@ func writePlanRatchetSection(b *strings.Builder, r *plan.RatchetResult) {
 	writeSurfaceDriftTable(b, r.Drift)
 }
 
+// maxDriftRows caps the drift table: standing drift on a large plan would
+// otherwise crowd out the rest of the review bundle.
+const maxDriftRows = 10
+
+// sigCell renders a signature inside a code span. A backtick in the value would
+// end the span early, so any is stripped; signatures never legitimately contain
+// one.
+func sigCell(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "—"
+	}
+	return "`" + strings.ReplaceAll(s, "`", "") + "`"
+}
+
 // writeSurfaceDriftTable reports declared entities whose signature is not the one
 // that shipped. Distance can be 0 — the structure is realized — while the plan
 // still misdescribes the code, and the plan is what a reader trusts.
@@ -309,9 +324,19 @@ func writeSurfaceDriftTable(b *strings.Builder, drift []plan.SurfaceDrift) {
 		"Does not affect the distance above.\n\n", len(drift))
 	b.WriteString("| Package | Entity | Plan declares | Code has |\n")
 	b.WriteString("|---|---|---|---|\n")
-	for _, d := range drift {
+	shown := drift
+	if len(shown) > maxDriftRows {
+		shown = shown[:maxDriftRows]
+	}
+	for _, d := range shown {
+		// Signatures go in code spans: they are full of "*" and "_", and two
+		// pointer types in one row would otherwise render as italics and silently
+		// mangle the very text a reviewer is comparing.
 		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s |\n",
-			shortID(d.Package), d.Entity, cellText(d.Declared), cellText(d.Actual))
+			shortID(d.Package), d.Entity, sigCell(d.Declared), sigCell(d.Actual))
+	}
+	if len(drift) > len(shown) {
+		fmt.Fprintf(b, "\n_… and %d more._\n", len(drift)-len(shown))
 	}
 	b.WriteString("\n")
 }

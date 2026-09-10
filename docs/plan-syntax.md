@@ -324,19 +324,42 @@ surface drift (1) — declared signature is not what shipped:
     code: func(parts ...string) string
 ```
 
-`pr-review --plan` prints the same as a table under the distance ratchet.
+`pr-review --plan` prints the same as a table under the distance ratchet, listing
+only the drift that PR **introduced** (drift already present in the base branch is
+not the PR's doing).
 
 Drift is **not** added to `dist`, so `dist = 0` keeps meaning "structure realized"
-and a parameter rename cannot fail a merge gate. Two rules keep the report quiet
-enough to be worth reading:
+and no merge gate can fail on it.
 
-- Signatures are compared after normalizing the `func` prefix and whitespace, so
-  the plan's `(s string) string` and extraction's `func(s string) string` agree.
-- A signature missing on **either** side means "not recorded", not "different" —
-  a hand-written or older graph JSON carries names with no signature at all.
+### What drift compares — and what it does not
 
-A parameter rename does show as drift. That is intended: the plan and the code
-disagree, and updating the plan is the cheap fix.
+Signature *text* cannot be compared directly. A plan states what its author typed;
+extraction reports the `go/types` rendering. They differ in ways that carry no
+meaning, and all of these are perfect matches:
+
+| Plan declares | Code has |
+|---|---|
+| `(s string) string` | `func(s string) string` |
+| `(token string) (*User, error)` | `func(token string) (*example.com/m/user.User, error)` |
+| `(a, b string) string` | `func(a string, b string) string` |
+| `(BlockKey, ReqCtx) LookupResult` | `func(k BlockKey, c ReqCtx) LookupResult` |
+| `(x T) T` | `func[T any](x T) T` |
+
+So drift compares the **shape** of a signature — parameter count, result count,
+and whether the last parameter is variadic — and ignores type spelling and
+parameter names entirely.
+
+**Detected:** a change in parameter count, result count, or variadicity. That is
+the class of change #41 is about, including its motivating case
+(`Format(greeting string)` shipped as `Format(names ...string)`).
+
+**Not detected:** a same-shape type change — `Do(s string) string` shipped as
+`Do(s int) string`. Comparing type names is what makes the report mostly-false, so
+this is a deliberate trade: fewer findings, no false ones.
+
+A signature missing on **either** side means "not recorded", not "different", so
+it is skipped. A plan can declare a bare type (`Config`) for which extraction
+emits no signature at all; those never drift.
 
 ---
 

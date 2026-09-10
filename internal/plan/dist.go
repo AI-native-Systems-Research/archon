@@ -83,6 +83,9 @@ func Dist(plan, actual *graph.Graph) DistResult {
 					Detail:  fmt.Sprintf("hole in both but surface mismatch: declared %d, actual %d", len(pp.Surface), len(ap.Surface)),
 				})
 			}
+			// Plan-vs-plan is the easy case for drift: both sides are author-typed,
+			// so the comparison is symmetric.
+			res.Drift = append(res.Drift, surfaceDrift(pp.Path, pp.Surface, ap.Surface)...)
 			continue
 		}
 		// Plan-vs-code: package exists but has no files (still unfilled)
@@ -114,14 +117,19 @@ func Dist(plan, actual *graph.Graph) DistResult {
 		if pp.Hole {
 			continue
 		}
-		if _, exists := actualPkgs[pp.Path]; !exists {
+		ap, exists := actualPkgs[pp.Path]
+		if !exists {
 			res.C2++
 			res.Unmet = append(res.Unmet, Unmet{
 				Class:   "C2",
 				Package: pp.Path,
 				Detail:  "declared box absent from actual",
 			})
+			continue
 		}
+		// A box with a declared surface is treated as FIXED by review's surface
+		// policy, so a stale signature matters here as much as on a hole.
+		res.Drift = append(res.Drift, surfaceDrift(pp.Path, pp.Surface, ap.Surface)...)
 	}
 
 	// C3: absent declared arrows (edges in plan not present in actual)
@@ -173,6 +181,14 @@ func Dist(plan, actual *graph.Graph) DistResult {
 		}
 		return res.Unmet[i].Package < res.Unmet[j].Package
 	})
+	// Sorted here rather than per package: Dist must not depend on the caller
+	// having sorted plan.Packages, since output is guaranteed byte-identical.
+	sort.Slice(res.Drift, func(i, j int) bool {
+		if res.Drift[i].Package != res.Drift[j].Package {
+			return res.Drift[i].Package < res.Drift[j].Package
+		}
+		return res.Drift[i].Entity < res.Drift[j].Entity
+	})
 	return res
 }
 
@@ -210,31 +226,131 @@ func pairKey(e graph.Edge) string {
 	return e.From + " -> " + e.To
 }
 
-// normalizeSig puts the two sources of a signature into one shape before they are
-// compared. A plan states what its author typed — "(s string) string" — while
-// extraction reports the go/types rendering, "func(s string) string". Comparing
-// those raw makes every declared entity look drifted, including a perfect match,
-// so the leading "func" and any whitespace differences are removed first.
+// sigShape is the comparable skeleton of a signature: how many parameters, how
+// many results, and whether the last parameter is variadic.
 //
-// Parameter NAMES are deliberately left in. A rename is genuine plan-vs-code
-// divergence worth seeing, and since drift is reported rather than counted it
-// cannot break a build.
-func normalizeSig(s string) string {
-	s = strings.TrimPrefix(strings.TrimSpace(s), "func")
-	return strings.Join(strings.Fields(s), " ")
+// Comparing signature TEXT cannot work here. A plan states what its author typed
+// while extraction reports the go/types rendering, and they differ in at least
+// four ways that carry no meaning:
+//
+//	plan "(token string) (*User, error)"  code "func(token string) (*pkg/user.User, error)"
+//	plan "(a, b string) string"           code "func(a string, b string) string"
+//	plan "(BlockKey, ReqCtx) Result"      code "func(k BlockKey, c ReqCtx) Result"
+//	plan "(x T) T"                        code "func[T any](x T) T"
+//
+// Every one of those is a perfect match reported as drift, and the third is how
+// demo/flow3-blis-design/kv-offload.archon is written throughout. A report whose
+// rows are mostly false is a report nobody reads, so the comparison ignores type
+// spelling and parameter names entirely.
+//
+// The cost is stated rather than hidden: a change with the same arity, variadicity
+// and result count — string to int, say — is NOT detected. What is detected is the
+// class of change #41 is about, where the parameter shape moved.
+type sigShape struct {
+	params   int
+	results  int
+	variadic bool
+}
+
+// shapeOf parses a signature into its skeleton. ok is false when no parameter
+// list can be found, in which case the signature is not comparable and drift is
+// not reported.
+func shapeOf(sig string) (sigShape, bool) {
+	s := strings.TrimPrefix(strings.TrimSpace(sig), "func")
+	s = strings.TrimSpace(s)
+	// Generic type-parameter list, e.g. "[T any](x T) T".
+	if strings.HasPrefix(s, "[") {
+		if end := matchingBracket(s, 0, '[', ']'); end > 0 {
+			s = strings.TrimSpace(s[end+1:])
+		}
+	}
+	if !strings.HasPrefix(s, "(") {
+		return sigShape{}, false
+	}
+	closeIdx := matchingBracket(s, 0, '(', ')')
+	if closeIdx < 0 {
+		return sigShape{}, false
+	}
+	params := strings.TrimSpace(s[1:closeIdx])
+	results := strings.TrimSpace(s[closeIdx+1:])
+
+	shape := sigShape{
+		params:   countTopLevel(params),
+		variadic: strings.Contains(params, "..."),
+	}
+	switch {
+	case results == "":
+		shape.results = 0
+	case strings.HasPrefix(results, "("):
+		if end := matchingBracket(results, 0, '(', ')'); end > 0 {
+			shape.results = countTopLevel(strings.TrimSpace(results[1:end]))
+		} else {
+			return sigShape{}, false
+		}
+	default:
+		shape.results = 1
+	}
+	return shape, true
+}
+
+// matchingBracket returns the index of the bracket closing the one at start, or
+// -1 if unbalanced. Nested parens, brackets and braces are tracked so a func-typed
+// parameter or a map type does not confuse the scan.
+func matchingBracket(s string, start int, open, close byte) int {
+	if start >= len(s) || s[start] != open {
+		return -1
+	}
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+			if depth == 0 {
+				if s[i] != close {
+					return -1
+				}
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// countTopLevel counts comma-separated entries at nesting depth zero. Grouped
+// parameters count once each ("a, b string" is two), which is what makes the
+// plan's grouped form agree with the expanded rendering.
+func countTopLevel(s string) int {
+	if strings.TrimSpace(s) == "" {
+		return 0
+	}
+	n, depth := 1, 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // surfaceDrift reports declared entities that exist under the right name but with
-// a different signature.
+// a different parameter/result shape.
 //
-// A missing signature on either side means "not recorded", NOT "different": a
-// hand-written or older graph JSON can carry names with no sig at all, and
-// treating that as drift would report divergence for every such fixture. So both
-// sides must state a signature before they can disagree.
+// A signature missing on EITHER side means "not recorded", not "different": a
+// hand-written or older graph JSON carries names with no signature at all, and the
+// extractor emits none for a bare type (Kind "type"), so those can never drift.
+// Both sides must state a signature before they can disagree.
+//
+// Callers append to a shared slice; ordering is normalized once in Dist.
 func surfaceDrift(pkgPath string, declared, actual []graph.Symbol) []SurfaceDrift {
-	if len(declared) == 0 || len(actual) == 0 {
-		return nil
-	}
 	actualSigs := make(map[string]string, len(actual))
 	for _, s := range actual {
 		actualSigs[s.Name] = s.Sig
@@ -248,7 +364,12 @@ func surfaceDrift(pkgPath string, declared, actual []graph.Symbol) []SurfaceDrif
 		if d.Sig == "" || got == "" {
 			continue
 		}
-		if normalizeSig(d.Sig) != normalizeSig(got) {
+		declShape, ok1 := shapeOf(d.Sig)
+		gotShape, ok2 := shapeOf(got)
+		if !ok1 || !ok2 {
+			continue // not comparable — never guess
+		}
+		if declShape != gotShape {
 			out = append(out, SurfaceDrift{
 				Package:  pkgPath,
 				Entity:   d.Name,
@@ -257,7 +378,6 @@ func surfaceDrift(pkgPath string, declared, actual []graph.Symbol) []SurfaceDrif
 			})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Entity < out[j].Entity })
 	return out
 }
 
