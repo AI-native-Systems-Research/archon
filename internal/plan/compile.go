@@ -286,16 +286,23 @@ func parseContractEntry(l string) graph.Invariant {
 		name = l[:idx]
 	}
 	class := ""
+	// The prose runs from after the name up to the class annotation, or to end of
+	// line when there is none. Kept so review can print the promise itself rather
+	// than a bare ID the reader has to go look up in the plan.
+	statement := strings.TrimSpace(l[len(name):])
 	if start := strings.Index(l, "["); start >= 0 {
 		if end := strings.Index(l[start:], "]"); end >= 0 {
 			class = strings.TrimSpace(l[start+1 : start+end])
+		}
+		if start >= len(name) {
+			statement = strings.TrimSpace(l[len(name):start])
 		}
 	}
 	// Hash is repurposed for plan-sourced invariants to store the class
 	// annotation. Plan invariants have no function body, so Hash is never
 	// used as a content digest for them. Code-extracted invariants use Hash
 	// as a digest and never set it from a class annotation.
-	return graph.Invariant{Name: name, File: "plan", Hash: class}
+	return graph.Invariant{Name: name, File: "plan", Hash: class, Statement: statement}
 }
 
 func lastSeg(path string) string {

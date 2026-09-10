@@ -52,6 +52,12 @@ type Invariant struct {
 	File string `json:"file"` // base filename it lives in
 	Hash string `json:"hash"` // short digest of the normalized function, to detect modification
 
+	// Statement is the human-readable promise, set only for plan-sourced clauses
+	// (File == "plan"), whose .archon source states it in prose. Code-extracted
+	// invariants are functions rather than prose and leave it empty, so the
+	// omitempty tag keeps extract output byte-identical.
+	Statement string `json:"statement,omitempty"`
+
 	// Guards and Exercises bind the test to the contract it protects, inferred
 	// from the types the test references (via type info). Guards are the
 	// interface (contract) nodes it exercises ("pkgpath.Interface"); Exercises

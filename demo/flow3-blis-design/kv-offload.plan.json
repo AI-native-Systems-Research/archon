@@ -52,17 +52,20 @@
         {
           "name": "BC-K1",
           "file": "plan",
-          "hash": "evidenced: metamorphic_test"
+          "hash": "evidenced: metamorphic_test",
+          "statement": "one hash function serves GPU CPU and all tiers"
         },
         {
           "name": "BC-K2",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "chunk keys chain hierarchically"
         },
         {
           "name": "BC-K3",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "Intern is injective and stable within a run"
         }
       ],
       "allow": [
@@ -86,17 +89,20 @@
         {
           "name": "BC-T1",
           "file": "plan",
-          "hash": "evidenced: differential_test"
+          "hash": "evidenced: differential_test",
+          "statement": "unresolved request re-examined at next StepEvent"
         },
         {
           "name": "BC-T2",
           "file": "plan",
-          "hash": "evidenced: metamorphic_test"
+          "hash": "evidenced: metamorphic_test",
+          "statement": "offload TTFT is a whole multiple of step time"
         },
         {
           "name": "BC-T3",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "no request defers forever"
         }
       ],
       "allow": [
@@ -135,22 +141,26 @@
         {
           "name": "BC-G1",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "every vLLM knob is representable or fails loudly"
         },
         {
           "name": "BC-G2",
           "file": "plan",
-          "hash": "evidenced: differential_test"
+          "hash": "evidenced: differential_test",
+          "statement": "defaults equal vLLM defaults knob for knob"
         },
         {
           "name": "BC-G3",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "validated at construction"
         },
         {
           "name": "BC-G5",
           "file": "plan",
-          "hash": "evidenced: metamorphic_test"
+          "hash": "evidenced: metamorphic_test",
+          "statement": "byte-identical output when offload disabled"
         }
       ],
       "allow": [
@@ -203,27 +213,32 @@
         {
           "name": "BC-C1",
           "file": "plan",
-          "hash": "evidenced: differential_test"
+          "hash": "evidenced: differential_test",
+          "statement": "only tier 0 exchanges blocks with GPU"
         },
         {
           "name": "BC-C2",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "per tier allocated + free = capacity always"
         },
         {
           "name": "BC-C3",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "ref_cnt is a state not just a count"
         },
         {
           "name": "BC-C4",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "a block with ref_cnt != 0 is never evicted"
         },
         {
           "name": "BC-C5",
           "file": "plan",
-          "hash": "evidenced: mutation_test"
+          "hash": "evidenced: mutation_test",
+          "statement": "PrepareStore fails iff evictable count exceeded"
         }
       ],
       "allow": [
@@ -258,22 +273,26 @@
         {
           "name": "BC-S1",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "at most n_read + n_write jobs in service"
         },
         {
           "name": "BC-S2",
           "file": "plan",
-          "hash": "evidenced: metamorphic_test"
+          "hash": "evidenced: metamorphic_test",
+          "statement": "read-priority servers take reads first"
         },
         {
           "name": "BC-S3",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "service_time = base + bytes/bandwidth"
         },
         {
           "name": "BC-S4",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "completion order is deterministic"
         }
       ],
       "allow": [
