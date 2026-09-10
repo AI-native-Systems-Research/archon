@@ -47,17 +47,20 @@
         {
           "name": "BC-C1",
           "file": "plan",
-          "hash": "evidenced: differential_test"
+          "hash": "evidenced: differential_test",
+          "statement": "only tier 0 exchanges blocks with GPU"
         },
         {
           "name": "BC-C2",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "allocated + free = capacity, always"
         },
         {
           "name": "BC-C4",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "a block with ref_cnt != 0 is never evicted"
         }
       ],
       "allow": [
@@ -91,12 +94,14 @@
         {
           "name": "BC-S1",
           "file": "plan",
-          "hash": "evidenced: property_test"
+          "hash": "evidenced: property_test",
+          "statement": "at most n_read + n_write jobs in service"
         },
         {
           "name": "BC-S2",
           "file": "plan",
-          "hash": "evidenced: metamorphic_test"
+          "hash": "evidenced: metamorphic_test",
+          "statement": "read-priority servers take reads first"
         }
       ],
       "allow": [

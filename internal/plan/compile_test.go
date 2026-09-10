@@ -157,3 +157,44 @@ func containsSubstr(s, sub string) bool {
 	}
 	return false
 }
+
+// parseContractEntry splits a contract line into ID, prose, and class
+// annotation. Nothing else pinned this: neutralizing the prose extraction
+// entirely left the whole unit suite green, caught only by a demo golden.
+func TestParseContractEntry(t *testing.T) {
+	cases := []struct {
+		line, name, statement, class string
+	}{
+		{"BC-C2 allocated + free = capacity [evidenced: property_test]",
+			"BC-C2", "allocated + free = capacity", "evidenced: property_test"},
+		// No prose.
+		{"BC-C2 [evidenced: fuzz]", "BC-C2", "", "evidenced: fuzz"},
+		// Bare ID, no space.
+		{"BC-C2", "BC-C2", "", ""},
+		// Prose with no annotation.
+		{"BC-C2 allocated + free = capacity", "BC-C2", "allocated + free = capacity", ""},
+		// A bracket inside the prose must not truncate it: the annotation is the
+		// TRAILING bracket group, not the first one.
+		{"BC-C3 queue[0] stays ordered [evidenced: fuzz]",
+			"BC-C3", "queue[0] stays ordered", "evidenced: fuzz"},
+		// Same, with no annotation to anchor on.
+		{"BC-C3 queue[0] stays ordered", "BC-C3", "queue[0] stays ordered", ""},
+		// Documented limitation: prose that itself ends in a bracket group is
+		// indistinguishable from an annotation, so it is read as one.
+		{"BC-C3 ordering holds for queue[0]", "BC-C3", "ordering holds for queue", "0"},
+		// Unterminated annotation: kept as prose rather than silently dropped.
+		{"BC-C6 unterminated [evidenced: fuzz",
+			"BC-C6", "unterminated [evidenced: fuzz", ""},
+	}
+	for _, tc := range cases {
+		got := parseContractEntry(tc.line)
+		if got.Name != tc.name || got.Statement != tc.statement || got.Hash != tc.class {
+			t.Errorf("parseContractEntry(%q)\n  got  name=%q statement=%q class=%q\n  want name=%q statement=%q class=%q",
+				tc.line, got.Name, got.Statement, got.Hash, tc.name, tc.statement, tc.class)
+		}
+		if got.File != "plan" {
+			t.Errorf("parseContractEntry(%q): File = %q, want \"plan\" — the discriminator review relies on",
+				tc.line, got.File)
+		}
+	}
+}

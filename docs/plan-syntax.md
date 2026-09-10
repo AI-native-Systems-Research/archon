@@ -75,9 +75,42 @@ hole github.com/myorg/myrepo/internal/auth {
 |---------|----------|-----------------|
 | `surface:` | Yes | Exported functions/types the package will provide |
 | `allow:` | Yes | What this package is permitted to import |
-| `contract:` | No | Behavioral promises (stored as metadata) |
+| `contract:` | No | Behavioral promises, reported in PR review (see below) |
 | `evidence:` | No | What kind of test proves each contract clause |
 | `cites:` | No | References to top-level invariants |
+
+#### Contract clauses in PR review
+
+With `--plan`, `pr-review` lists the clauses declared on every package the change
+touched, so a reviewer sees which promises are implicated:
+
+```
+### Contract clauses implicated (2, 1 with no bound test)
+
+| Package | Clause | Promise | Declared evidence | Bound test |
+|---|---|---|---|---|
+| `tierchain` | **BC-C1** | only tier 0 exchanges blocks with GPU | evidenced: differential_test | `TestBC_C1` |
+| `tierchain` | **BC-C2** | allocated + free = capacity, always | evidenced: property_test | — none found |
+```
+
+A clause line is `<ID> <prose> [<class>: <detail>]`. The class annotation is the
+bracket group at the **end of the line**, so a bracket earlier in the prose is
+preserved — `queue[0] stays ordered` survives intact. The flip side: prose that
+itself *ends* in a bracket group is read as the annotation, so
+`BC-C3 ordering holds for queue[0]` yields the promise `ordering holds for queue`
+and a class of `0`. Put the annotation last, or reword so the prose does not end
+in `]`.
+
+**How a test is matched.** By name only: clause `BC-C2` looks for a test called
+`TestBC_C2` (dashes become underscores) in the same package. A test named
+`TestCacheConservesCapacity`, or one living in a different package, reports
+**— none found** even though the clause may be genuinely tested. Name the test
+after the clause if you want the link picked up.
+
+**Nothing is verified.** A bound test is one found by name — archon does not check
+that it ran, passed, or asserts anything relevant. An unbound clause is a gap to
+close, not a build failure: clauses never affect the verdict, the plan distance,
+or the exit code.
 
 ### 2. `box` — an existing package the plan depends on
 

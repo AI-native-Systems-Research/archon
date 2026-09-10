@@ -286,16 +286,31 @@ func parseContractEntry(l string) graph.Invariant {
 		name = l[:idx]
 	}
 	class := ""
-	if start := strings.Index(l, "["); start >= 0 {
-		if end := strings.Index(l[start:], "]"); end >= 0 {
-			class = strings.TrimSpace(l[start+1 : start+end])
+	// Everything after the name is prose, then optionally a class annotation.
+	// Kept so review can print the promise itself rather than a bare ID the
+	// reader has to go look up in the plan.
+	rest := strings.TrimSpace(l[len(name):])
+	// The annotation is a bracket group at the END of the line, so anchor on the
+	// trailing bracket rather than the first one. Anchoring on the first would
+	// truncate a promise that legitimately contains one — "queue[0] stays
+	// ordered" would become "queue" with a class of "0".
+	//
+	// The remaining ambiguity is prose that ITSELF ends in a bracket group:
+	// "ordering holds for queue[0]" is read as promise + class, because nothing
+	// in the grammar distinguishes it from an annotation. Documented in
+	// docs/plan-syntax.md rather than guessed at.
+	if strings.HasSuffix(rest, "]") {
+		if start := strings.LastIndex(rest, "["); start >= 0 {
+			class = strings.TrimSpace(rest[start+1 : len(rest)-1])
+			rest = strings.TrimSpace(rest[:start])
 		}
 	}
+	statement := rest
 	// Hash is repurposed for plan-sourced invariants to store the class
 	// annotation. Plan invariants have no function body, so Hash is never
 	// used as a content digest for them. Code-extracted invariants use Hash
 	// as a digest and never set it from a class annotation.
-	return graph.Invariant{Name: name, File: "plan", Hash: class}
+	return graph.Invariant{Name: name, File: "plan", Hash: class, Statement: statement}
 }
 
 func lastSeg(path string) string {

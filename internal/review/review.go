@@ -128,6 +128,11 @@ type Result struct {
 	PlanRatchet  *plan.RatchetResult     `json:"planRatchet,omitempty"`
 	PlanClassify *plan.ClassifyResult    `json:"planClassify,omitempty"`
 
+	// Clauses lists plan-declared contract clauses on the packages this change
+	// touched, with their evidence binding. Present only with --plan; a report,
+	// not a gate — nothing here affects Verdict.
+	Clauses []ClauseRow `json:"clauses,omitempty"`
+
 	// Higher-altitude views (computed here).
 	Components ComponentView `json:"components"`
 	Witnesses  []WitnessRow  `json:"witnesses,omitempty"`
@@ -202,6 +207,7 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 		res.PlanRatchet = &r
 		c := plan.Classify(opts.PlanGraph, gA, gB)
 		res.PlanClassify = &c
+		res.Clauses = ClauseReport(opts.PlanGraph, gB, d)
 		// Auto-derive surface policy from plan's holes if not explicitly set
 		if opts.SurfacePolicy == nil {
 			policy := surfacePolicyFromPlan(opts.PlanGraph)
