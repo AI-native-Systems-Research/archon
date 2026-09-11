@@ -380,6 +380,16 @@ func cmdDelta(args []string) {
 			status = "REGRESSION"
 		}
 		planSuffix = fmt.Sprintf("\nPlan distance: %d → %d (%s)\n", r.Before, r.After, status)
+		// Third consumer of Ratchet, and it discarded the drift too — the same
+		// compute-then-throw-away that let a stale declared signature stay invisible
+		// in the first place.
+		if len(r.Drift) > 0 {
+			planSuffix += fmt.Sprintf("Surface drift introduced (%d):\n", len(r.Drift))
+			for _, dr := range r.Drift {
+				planSuffix += fmt.Sprintf("  %s %s\n    plan: %s\n    code: %s\n",
+					dr.Package, dr.Entity, dr.Declared, dr.Actual)
+			}
+		}
 	}
 
 	if summaryOut {

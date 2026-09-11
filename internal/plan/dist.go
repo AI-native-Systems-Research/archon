@@ -127,8 +127,10 @@ func Dist(plan, actual *graph.Graph) DistResult {
 			})
 			continue
 		}
-		// A box with a declared surface is treated as FIXED by review's surface
-		// policy, so a stale signature matters here as much as on a hole.
+		// A box carrying a declared surface. Unreachable from a compiled .archon —
+		// parseBox has no block form, so `box X { surface: ... }` is a parse error —
+		// but plan dist also accepts hand-written or hand-edited plan JSON, and a
+		// stale signature on a fixed surface is exactly what #41 is about.
 		res.Drift = append(res.Drift, surfaceDrift(pp.Path, pp.Surface, ap.Surface)...)
 	}
 
@@ -273,10 +275,14 @@ func shapeOf(sig string) (sigShape, bool) {
 	}
 	params := strings.TrimSpace(s[1:closeIdx])
 	results := strings.TrimSpace(s[closeIdx+1:])
+	// parseSurfaceEntry's grammar also allows "Name(args) -> Result", and without
+	// stripping the arrow a tuple result falls through to the single-result branch
+	// and reports drift for a perfect match.
+	results = strings.TrimSpace(strings.TrimPrefix(results, "->"))
 
 	shape := sigShape{
 		params:   countTopLevel(params),
-		variadic: strings.Contains(params, "..."),
+		variadic: lastParamVariadic(params),
 	}
 	switch {
 	case results == "":
@@ -291,6 +297,43 @@ func shapeOf(sig string) (sigShape, bool) {
 		shape.results = 1
 	}
 	return shape, true
+}
+
+// lastParamVariadic reports whether the LAST top-level parameter is variadic.
+//
+// A substring test over the whole list is wrong: in "f func(...int) error" the
+// "..." belongs to that parameter's own type, so scoring the signature variadic
+// makes it shape-equal to "fns ...func(int) error" and hides a real arity change.
+// The variadic bit is the only thing distinguishing "(s string)" from
+// "(...string)", so its precision carries weight.
+func lastParamVariadic(params string) bool {
+	last, depth := params, 0
+	for i := 0; i < len(params); i++ {
+		switch params[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				last = params[i+1:]
+			}
+		}
+	}
+	depth = 0
+	for i := 0; i < len(last); i++ {
+		switch last[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case '.':
+			if depth == 0 && strings.HasPrefix(last[i:], "...") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // matchingBracket returns the index of the bracket closing the one at start, or

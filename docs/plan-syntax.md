@@ -324,9 +324,9 @@ surface drift (1) — declared signature is not what shipped:
     code: func(parts ...string) string
 ```
 
-`pr-review --plan` prints the same as a table under the distance ratchet, listing
-only the drift that PR **introduced** (drift already present in the base branch is
-not the PR's doing).
+`pr-review --plan` prints the same as a table under the distance ratchet, and
+`delta --plan` prints it inline. Both list only the drift that change
+**introduced** — drift already present in the base branch is not its doing.
 
 Drift is **not** added to `dist`, so `dist = 0` keeps meaning "structure realized"
 and no merge gate can fail on it.
@@ -346,8 +346,9 @@ meaning, and all of these are perfect matches:
 | `(x T) T` | `func[T any](x T) T` |
 
 So drift compares the **shape** of a signature — parameter count, result count,
-and whether the last parameter is variadic — and ignores type spelling and
-parameter names entirely.
+and whether the last top-level parameter is variadic — and ignores type spelling
+and parameter names entirely. A `...` nested inside a parameter's own type
+(`fn func(...int) error`) belongs to that type, not to this signature's arity.
 
 **Detected:** a change in parameter count, result count, or variadicity. That is
 the class of change #41 is about, including its motivating case
@@ -359,7 +360,11 @@ this is a deliberate trade: fewer findings, no false ones.
 
 A signature missing on **either** side means "not recorded", not "different", so
 it is skipped. A plan can declare a bare type (`Config`) for which extraction
-emits no signature at all; those never drift.
+emits no signature at all; those never drift. A signature that cannot be parsed
+into a shape is likewise skipped rather than guessed at.
+
+Both result forms are understood: `Name(args) ReturnType` and the
+`Name(args) -> ReturnType` form the parser also accepts.
 
 ---
 

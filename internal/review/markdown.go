@@ -302,15 +302,15 @@ func writePlanRatchetSection(b *strings.Builder, r *plan.RatchetResult) {
 // otherwise crowd out the rest of the review bundle.
 const maxDriftRows = 10
 
-// sigCell renders a signature inside a code span. A backtick in the value would
-// end the span early, so any is stripped; signatures never legitimately contain
-// one.
+// sigCell renders a signature inside a code span.
+//
+// A raw pipe ends a table cell even inside a code span, and the extractor really
+// does emit them — a generic constraint renders as "interface{~int | ~string}" —
+// so the value goes through tableCell rather than reimplementing the rule. A
+// backtick would close the span early; those cannot occur in types.TypeString
+// output but a plan is author-typed, so any is dropped.
 func sigCell(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "—"
-	}
-	return "`" + strings.ReplaceAll(s, "`", "") + "`"
+	return "`" + tableCell(strings.ReplaceAll(strings.TrimSpace(s), "`", "")) + "`"
 }
 
 // writeSurfaceDriftTable reports declared entities whose signature is not the one

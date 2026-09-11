@@ -252,6 +252,15 @@ func TestNoDriftAcrossRealisticRenderings(t *testing.T) {
 		{"multiple results", "() (int, error)", "func() (int, error)"},
 		{"no results", "(s string)", "func(s string)"},
 		{"map type containing a comma", "(m map[string]int) int", "func(m map[string]int) int"},
+		// parseSurfaceEntry's grammar also allows an arrow before the result.
+		{"arrow result form, single", "() -> string", "func() string"},
+		{"arrow result form, tuple", "(t string) -> (*User, error)",
+			"func(t string) (*example.com/m/user.User, error)"},
+		// A "..." inside a parameter's own type is part of that type.
+		{"nested variadic in a func-typed param",
+			"(fn func(...int) error) error", "func(fn func(...int) error) error"},
+		{"generic constraint containing a pipe",
+			"(x T) (T, error)", "func[T interface{~int | ~string}](x T) (T, error)"},
 	}
 	for _, tc := range cases {
 		res := Dist(filledHolePlan(tc.declared), filledActual(tc.actual))
@@ -269,6 +278,11 @@ func TestDriftDetectedWhenShapeDiffers(t *testing.T) {
 		{"arity", "(s string) string", "func(a, b string) string"},
 		{"result count", "(s string) string", "func(s string) (string, error)"},
 		{"gained a result", "(s string)", "func(s string) error"},
+		// The false negative a whole-string "..." test produced: one callback
+		// parameter becoming a variadic slice of callbacks is an arity change, and
+		// the nested "..." must not mask it.
+		{"single callback -> variadic callbacks",
+			"(fn func(...int) error) error", "func(fns ...func(int) error) error"},
 	}
 	for _, tc := range cases {
 		res := Dist(filledHolePlan(tc.declared), filledActual(tc.actual))

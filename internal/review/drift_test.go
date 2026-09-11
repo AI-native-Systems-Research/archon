@@ -83,3 +83,34 @@ func TestSurfaceDriftTableCapsRows(t *testing.T) {
 		t.Errorf("header shows the capped count instead of the total:\n%s", out)
 	}
 }
+
+// A raw pipe ends a table cell even inside a code span, and the extractor emits
+// them for real: a generic constraint renders as "interface{~int | ~string}".
+// Without escaping, GFM splits the row into extra columns and mangles the exact
+// text a reviewer is there to compare.
+func TestSurfaceDriftTableEscapesPipeInSignature(t *testing.T) {
+	var b strings.Builder
+	writeSurfaceDriftTable(&b, []plan.SurfaceDrift{{
+		Package:  "example.com/m/pkg",
+		Entity:   "Constrained",
+		Declared: "(x T) T",
+		Actual:   "func[T interface{~int | ~string}](x T) (T, error)",
+	}})
+	out := b.String()
+
+	if strings.Contains(out, "~int | ~string") {
+		t.Errorf("unescaped pipe left in a table cell:\n%s", out)
+	}
+	if !strings.Contains(out, `~int \| ~string`) {
+		t.Errorf("pipe not escaped as tableCell does it:\n%s", out)
+	}
+	// Every rendered row must still have exactly 4 columns.
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "| `pkg`") {
+			continue
+		}
+		if n := strings.Count(line, "|") - strings.Count(line, `\|`); n != 5 {
+			t.Errorf("row has %d unescaped pipes, want 5 (4 columns):\n  %s", n, line)
+		}
+	}
+}
