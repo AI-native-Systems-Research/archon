@@ -367,6 +367,12 @@ func cmdDelta(args []string) {
 		d.CheckContract(b, loadAllow(allowPath))
 	}
 	if jsonOut {
+		// --json emits the delta object only; the plan comparison is not part of
+		// that schema. Say so rather than letting --plan look like it ran.
+		if deltaPlanPath != "" {
+			fmt.Fprintln(os.Stderr, "warning: --plan is ignored with --json; "+
+				"plan distance and surface drift are only reported in the text output")
+		}
 		printJSON(d)
 		return
 	}

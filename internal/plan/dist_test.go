@@ -359,8 +359,10 @@ func lastSegOf(p string) string {
 	return p
 }
 
-// A box (non-hole) with a declared surface is treated as FIXED by review's
-// surface policy, so a stale signature there matters as much as on a hole.
+// A box (non-hole) carrying a declared surface. Unreachable from a compiled
+// .archon — parseBox has no block form — but plan dist also accepts hand-written
+// or hand-edited plan JSON, and a stale signature on a fixed surface is exactly
+// what #41 is about.
 func TestDriftOnNonHoleBoxWithDeclaredSurface(t *testing.T) {
 	p := &graph.Graph{Module: "example.com/y", Packages: []graph.Package{
 		{Path: "example.com/y/pkg", Name: "pkg", Internal: true, Hole: false,

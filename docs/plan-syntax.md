@@ -327,6 +327,8 @@ surface drift (1) — declared signature is not what shipped:
 `pr-review --plan` prints the same as a table under the distance ratchet, and
 `delta --plan` prints it inline. Both list only the drift that change
 **introduced** — drift already present in the base branch is not its doing.
+(`delta --json` emits the delta object alone, so `--plan` does not apply there and
+warns if combined.)
 
 Drift is **not** added to `dist`, so `dist = 0` keeps meaning "structure realized"
 and no merge gate can fail on it.

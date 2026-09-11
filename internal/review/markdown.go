@@ -310,7 +310,11 @@ const maxDriftRows = 10
 // backtick would close the span early; those cannot occur in types.TypeString
 // output but a plan is author-typed, so any is dropped.
 func sigCell(s string) string {
-	return "`" + tableCell(strings.ReplaceAll(strings.TrimSpace(s), "`", "")) + "`"
+	s = strings.ReplaceAll(strings.TrimSpace(s), "`", "")
+	if s == "" {
+		return "—" // an empty code span would render as literal backticks
+	}
+	return "`" + tableCell(s) + "`"
 }
 
 // writeSurfaceDriftTable reports declared entities whose signature is not the one
