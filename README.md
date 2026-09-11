@@ -365,6 +365,27 @@ it deliberately does not.
 
 ---
 
+## Contract clauses in review
+
+A hole's `contract:` clauses are reported for every package a PR touches, so a
+reviewer sees which promises are implicated and which have nothing behind them:
+
+```
+### Contract clauses implicated (2, 1 with no bound test)
+
+| Package | Clause | Promise | Declared evidence | Bound test |
+|---|---|---|---|---|
+| `tierchain` | **BC-C1** | only tier 0 exchanges blocks with GPU | evidenced: differential_test | `TestBC_C1` |
+| `tierchain` | **BC-C2** | allocated + free = capacity, always | evidenced: property_test | — none found |
+```
+
+A test is matched by name only — `BC-C2` looks for `TestBC_C2` in the same package
+— and nothing is verified: archon does not check that it ran or passed. An unbound
+clause is a gap to close, never a build failure. Clauses do not affect the verdict,
+`dist`, or the exit code.
+
+---
+
 ## Plan verdicts
 
 When `--plan` is used, archon classifies the PR's relationship to the plan:
