@@ -202,6 +202,81 @@ Draw the same delta as a picture (added = green, removed = red, grey = context):
 top-level keys: commitA, commitB, emptyAtPackageAltitude, invariants
 ```
 
+### plan — declare the architecture before the code exists
+
+A `.archon` file states the packages you intend to build (`hole`), the ones you
+depend on (`box`), the dependencies that must exist (`arrow`), and the promises
+each package makes (`contract`). Full grammar: [docs/plan-syntax.md](docs/plan-syntax.md).
+
+```sh
+./archon-go plan compile --stats kv-offload.archon > kv-offload.plan.json
+```
+
+```
+5 clauses: 0 checked, 5 evidenced, 0 attested:external, 0 attested:design
+```
+
+The JSON is the same graph format `extract` emits, so every other command accepts
+it. The tally on stderr is the epistemic ladder: how much of the plan is *checked*
+versus merely *asserted*.
+
+```sh
+./archon-go plan dist kv-offload.plan.json $R
+```
+
+```
+dist(P,G) = 2
+  unfilled holes (C1): 1
+  absent boxes   (C2): 0
+  absent arrows  (C3): 1
+  disallowed     (C4): 0
+
+  [C1] hole declared, package absent in actual
+  [C3] declared arrow .../sim/kv/transfer -> .../sim (import) absent
+```
+
+One number for "how far is the code from the plan". Ratchet it in CI: if `dist`
+goes up, the change moved away from the declared design. `dist = 0` means the
+*structure* matches — signature divergence is reported separately as **surface
+drift** (see `plan dist`'s drift section and `pr-review --plan`).
+
+```sh
+./archon-go plan slice kv-offload.plan.json github.com/inference-sim/sim/kv/transfer
+```
+
+```markdown
+# github.com/inference-sim/sim/kv/transfer
+
+## Surface
+
+- `ActiveJobs(TierIndex, Direction) int`
+- `Poll(now int64) []JobId`
+- `Submit(TransferJob) JobId`
+
+## Allow
+
+- `import github.com/inference-sim/sim`
+```
+
+One hole as a work order — hand it to a teammate or an agent as the spec to
+implement, instead of prose in an issue.
+
+```sh
+./archon-go plan render kv-offload.plan.json
+```
+
+```
+graph LR
+  n0["sim"]
+  n1["cluster"]
+  n2["hash"]
+  n3(["tierchain"])
+  n4(["transfer"])
+```
+
+Mermaid for a GitHub issue or PR. Holes are stadium-shaped and dashed; existing
+boxes are solid.
+
 ### evidence — do the contract tests actually cover the interfaces
 
 ```sh

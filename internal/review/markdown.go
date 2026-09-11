@@ -295,6 +295,54 @@ func writePlanRatchetSection(b *strings.Builder, r *plan.RatchetResult) {
 		status = "REGRESSION"
 	}
 	fmt.Fprintf(b, "**dist(P,G): %d → %d** — %s\n\n", r.Before, r.After, status)
+	writeSurfaceDriftTable(b, r.Drift)
+}
+
+// maxDriftRows caps the drift table: standing drift on a large plan would
+// otherwise crowd out the rest of the review bundle.
+const maxDriftRows = 10
+
+// sigCell renders a signature inside a code span.
+//
+// A raw pipe ends a table cell even inside a code span, and the extractor really
+// does emit them — a generic constraint renders as "interface{~int | ~string}" —
+// so the value goes through tableCell rather than reimplementing the rule. A
+// backtick would close the span early; those cannot occur in types.TypeString
+// output but a plan is author-typed, so any is dropped.
+func sigCell(s string) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "`", "")
+	if s == "" {
+		return "—" // an empty code span would render as literal backticks
+	}
+	return "`" + tableCell(s) + "`"
+}
+
+// writeSurfaceDriftTable reports declared entities whose signature is not the one
+// that shipped. Distance can be 0 — the structure is realized — while the plan
+// still misdescribes the code, and the plan is what a reader trusts.
+func writeSurfaceDriftTable(b *strings.Builder, drift []plan.SurfaceDrift) {
+	if len(drift) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "**Surface drift (%d)** — declared signature is not what shipped. "+
+		"Does not affect the distance above.\n\n", len(drift))
+	b.WriteString("| Package | Entity | Plan declares | Code has |\n")
+	b.WriteString("|---|---|---|---|\n")
+	shown := drift
+	if len(shown) > maxDriftRows {
+		shown = shown[:maxDriftRows]
+	}
+	for _, d := range shown {
+		// Signatures go in code spans: they are full of "*" and "_", and two
+		// pointer types in one row would otherwise render as italics and silently
+		// mangle the very text a reviewer is comparing.
+		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s |\n",
+			shortID(d.Package), d.Entity, sigCell(d.Declared), sigCell(d.Actual))
+	}
+	if len(drift) > len(shown) {
+		fmt.Fprintf(b, "\n_… and %d more._\n", len(drift)-len(shown))
+	}
+	b.WriteString("\n")
 }
 
 func writePlanClassifySection(b *strings.Builder, c *plan.ClassifyResult) {

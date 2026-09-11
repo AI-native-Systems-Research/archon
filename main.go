@@ -367,6 +367,12 @@ func cmdDelta(args []string) {
 		d.CheckContract(b, loadAllow(allowPath))
 	}
 	if jsonOut {
+		// --json emits the delta object only; the plan comparison is not part of
+		// that schema. Say so rather than letting --plan look like it ran.
+		if deltaPlanPath != "" {
+			fmt.Fprintln(os.Stderr, "warning: --plan is ignored with --json; "+
+				"plan distance and surface drift are only reported in the text output")
+		}
 		printJSON(d)
 		return
 	}
@@ -380,6 +386,16 @@ func cmdDelta(args []string) {
 			status = "REGRESSION"
 		}
 		planSuffix = fmt.Sprintf("\nPlan distance: %d → %d (%s)\n", r.Before, r.After, status)
+		// Third consumer of Ratchet, and it discarded the drift too — the same
+		// compute-then-throw-away that let a stale declared signature stay invisible
+		// in the first place.
+		if len(r.Drift) > 0 {
+			planSuffix += fmt.Sprintf("Surface drift introduced (%d):\n", len(r.Drift))
+			for _, dr := range r.Drift {
+				planSuffix += fmt.Sprintf("  %s %s\n    plan: %s\n    code: %s\n",
+					dr.Package, dr.Entity, dr.Declared, dr.Actual)
+			}
+		}
 	}
 
 	if summaryOut {
@@ -616,6 +632,15 @@ func cmdPlanDist(args []string) {
 		fmt.Fprintln(os.Stdout)
 		for _, u := range res.Unmet {
 			fmt.Fprintf(os.Stdout, "  [%s] %s\n", u.Class, u.Detail)
+		}
+	}
+	// Drift is not part of Total, so it gets its own section: the structure is
+	// realized, and the plan still does not describe what shipped.
+	if len(res.Drift) > 0 {
+		fmt.Fprintf(os.Stdout, "\nsurface drift (%d) — declared signature is not what shipped:\n", len(res.Drift))
+		for _, d := range res.Drift {
+			fmt.Fprintf(os.Stdout, "  %s %s\n    plan: %s\n    code: %s\n",
+				d.Package, d.Entity, d.Declared, d.Actual)
 		}
 	}
 }

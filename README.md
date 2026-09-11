@@ -334,7 +334,55 @@ Four block types — see [docs/plan-syntax.md](docs/plan-syntax.md) for the full
 | C3 | Absent arrow — declared dependency is missing |
 | C4 | Disallowed arrow — dependency exists but plan forbids it |
 
-`dist = 0` means the code fully realizes the plan.
+`dist = 0` means the code realizes the plan's **structure** — every declared
+package, arrow and entity name is where the plan says it should be.
+
+It does not mean the plan still describes the code. Those four classes compare
+entity *names*, so a hole declared `Format(greeting string) string` can ship as
+`Format(names ...string) string` and still score 0. That is reported separately, as
+**surface drift**:
+
+```
+dist(P,G) = 0
+  unfilled holes (C1): 0
+  ...
+
+surface drift (1) — declared signature is not what shipped:
+  github.com/x/y/pkg Format
+    plan: (greeting string) string
+    code: func(names ...string) string
+```
+
+Drift is never added to `dist`, so no merge gate can fail on a parameter rename.
+`pr-review --plan` renders it as a table and `delta --plan` prints it inline; both
+report only the drift a change *introduced*.
+
+Comparison is by signature **shape** — parameter count, result count, variadicity —
+never by type spelling, because a plan states what its author typed while
+extraction reports the `go/types` rendering. See
+[docs/plan-syntax.md](docs/plan-syntax.md) for exactly what that catches and what
+it deliberately does not.
+
+---
+
+## Contract clauses in review
+
+A hole's `contract:` clauses are reported for every package a PR touches, so a
+reviewer sees which promises are implicated and which have nothing behind them:
+
+```
+### Contract clauses implicated (2, 1 with no bound test)
+
+| Package | Clause | Promise | Declared evidence | Bound test |
+|---|---|---|---|---|
+| `tierchain` | **BC-C1** | only tier 0 exchanges blocks with GPU | evidenced: differential_test | `TestBC_C1` |
+| `tierchain` | **BC-C2** | allocated + free = capacity, always | evidenced: property_test | — none found |
+```
+
+A test is matched by name only — `BC-C2` looks for `TestBC_C2` in the same package
+— and nothing is verified: archon does not check that it ran or passed. An unbound
+clause is a gap to close, never a build failure. Clauses do not affect the verdict,
+`dist`, or the exit code.
 
 ---
 
