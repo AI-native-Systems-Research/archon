@@ -4,8 +4,8 @@
 //
 //	full          every in-module function, clustered by package.
 //	delta-scoped  pass --since <ref>; the tool diffs <ref> against the working
-//	              tree (tracked files only — a brand-new untracked file is not seen)
-//	              tree, marks the functions whose bodies overlap changed lines,
+//	              tree (tracked files only — a brand-new untracked file is not
+//	              seen), marks the functions whose bodies overlap changed lines,
 //	              and draws only those plus their callers/callees out to --depth
 //	              hops (default 1). Changed functions are highlighted.
 //
@@ -77,6 +77,10 @@ func main() {
 		if err != nil {
 			fail("%s: %q is not a number", flag, s)
 		}
+		if n < 0 {
+			fail("%s: %d is negative; the graph label would claim an expansion that "+
+				"never happens", flag, n)
+		}
 		return n
 	}
 	for i := 3; i < len(os.Args); i++ {
@@ -87,6 +91,9 @@ func main() {
 			i++
 		case strings.HasPrefix(a, "--since="):
 			sinceRef = strings.TrimPrefix(a, "--since=")
+			if sinceRef == "" {
+				fail("--since= needs a value (an unset shell variable?)")
+			}
 		case a == "--depth":
 			depth = atoi(needValue(i, a), a)
 			i++
@@ -97,6 +104,9 @@ func main() {
 			i++
 		case strings.HasPrefix(a, "--mode="):
 			modeStr = strings.TrimPrefix(a, "--mode=")
+			if modeStr == "" {
+				fail("--mode= needs a value (an unset shell variable?)")
+			}
 		default:
 			fail("unknown argument %q (want --mode, --since or --depth)", a)
 		}
@@ -115,22 +125,27 @@ func main() {
 	}
 
 	if len(g.IllTyped) > 0 {
-		fmt.Fprintf(os.Stderr, "warning: %d matched package(s) did not type-check.\n", len(g.IllTyped))
-		if mode != callgraph.Static {
-			fmt.Fprintf(os.Stderr, "  go/ssa builds nothing for those, so mode=%s sees no call sites "+
-				"and no implementers in them: the graph below is INCOMPLETE.\n", mode)
-		} else {
-			fmt.Fprintln(os.Stderr, "  calls to their undefined symbols are missing from the graph below.")
+		own := g.OwnErrors()
+		fmt.Fprintf(os.Stderr, "warning: %d package(s) failed to type-check", own)
+		if n := len(g.IllTyped) - own; n > 0 {
+			fmt.Fprintf(os.Stderr, ", and %d more were flagged because an import of theirs did", n)
 		}
-		// Own errors first: packages.IllTyped is transitive, so most entries are
-		// merely importers of a broken package. Truncating without ordering can hide
-		// every package that actually has an error.
+		fmt.Fprintln(os.Stderr, ".")
+		if mode != callgraph.Static {
+			fmt.Fprintf(os.Stderr, "  go/ssa builds nothing for any of them, so mode=%s sees no call "+
+				"sites and no implementers in them: the graph below is INCOMPLETE.\n", mode)
+		} else {
+			fmt.Fprintln(os.Stderr, "  calls to symbols the failing package(s) could not define are "+
+				"missing from the graph below.")
+		}
+		// IllTyped is ordered causes-first, so truncation drops importers rather
+		// than the errors a reader needs.
 		for i, e := range g.IllTyped {
 			if i == 8 {
 				fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(g.IllTyped)-i)
 				break
 			}
-			fmt.Fprintf(os.Stderr, "  %s\n", e)
+			fmt.Fprintf(os.Stderr, "  %s: %s\n", e.Path, e.Msg)
 		}
 	}
 
@@ -159,8 +174,8 @@ func main() {
 			if !ok {
 				continue
 			}
-			for _, r := range ivs {
-				if f.Lo <= r.hi && r.lo <= f.Hi {
+			for _, span := range ivs {
+				if f.Lo <= span.hi && span.lo <= f.Hi {
 					changed[f.ID] = true
 				}
 			}
@@ -239,12 +254,26 @@ func gitChangedRanges(dir, ref string) (map[string][]iv, bool) {
 	}
 	// Every flag here neutralises a config setting that would otherwise change the
 	// path format and silently yield a zero-change delta:
-	//   diff.relative       -> paths relative to dir, not the repo root (--no-relative)
-	//   diff.mnemonicprefix  -> "w/" instead of "b/"      (--dst-prefix)
-	//   diff.noprefix        -> no prefix at all          (--dst-prefix)
-	//   core.quotePath       -> non-ASCII escaped as \303\251 and the path quoted
-	cmd := exec.Command("git", "-C", dir, "-c", "core.quotePath=false", "diff",
-		"--unified=0", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", ref, "--", "*.go")
+	//   diff.relative        -> paths relative to dir, not the repo root
+	//   diff.mnemonicprefix   -> "w/" instead of "b/"
+	//   diff.noprefix         -> no prefix at all
+	//   core.quotePath        -> non-ASCII escaped as \303\251 and the path quoted.
+	//                            Belt and braces: the parser C-unquotes anyway, so
+	//                            removing this pin does not fail any test. It is kept
+	//                            because a filename that is not valid UTF-8 cannot be
+	//                            recovered by unquoting, only avoided by not escaping.
+	//   diff.external / GIT_EXTERNAL_DIFF / .gitattributes -diff
+	//                         -> replaces the output format entirely, so nothing
+	//                            parses (--no-ext-diff, --no-textconv, --text)
+	//
+	// diff.relative is set with -c rather than --no-relative on purpose: that flag
+	// only exists from git 2.28, so using it would make --since fatal on Ubuntu
+	// 20.04 (2.25) and RHEL 8 (2.27). An unknown -c key is ignored, and versions
+	// that lack it default to non-relative anyway, so -c is correct everywhere.
+	cmd := exec.Command("git", "-C", dir,
+		"-c", "core.quotePath=false", "-c", "diff.relative=false",
+		"diff", "--unified=0", "--no-ext-diff", "--no-textconv", "--text",
+		"--src-prefix=a/", "--dst-prefix=b/", ref, "--", "*.go")
 	b, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
@@ -256,16 +285,28 @@ func gitChangedRanges(dir, ref string) (map[string][]iv, bool) {
 		}
 		return out, false
 	}
+	sawFileHeader := false
 	hunk := regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	cur := ""
 	for sc.Scan() {
 		line := sc.Text()
+		if strings.HasPrefix(line, "diff --git ") {
+			sawFileHeader = true
+		}
 		if strings.HasPrefix(line, "+++ ") {
 			p := strings.TrimPrefix(line, "+++ ")
-			// git appends a literal TAB when the path contains a space.
+			// git appends a literal TAB when the path contains a space, and C-quotes
+			// the whole thing when it contains a quote, backslash or tab.
 			p = strings.TrimSuffix(p, "\t")
+			if unq, err := strconv.Unquote(p); err == nil {
+				p = unq
+			}
+			if p == "/dev/null" {
+				cur = "" // deletion: no new-side file to attribute hunks to
+				continue
+			}
 			p = strings.TrimPrefix(p, "b/")
 			cur = p
 			continue
@@ -284,6 +325,28 @@ func gitChangedRanges(dir, ref string) (map[string][]iv, bool) {
 			}
 			key := resolve(filepath.Join(root, cur))
 			out[key] = append(out[key], iv{start, start + cnt - 1})
+		}
+	}
+	// A diff we could not parse must not be reported as "nothing changed". git has
+	// many ways to reformat this output — an external differ, a quoting scheme we
+	// did not anticipate — and each yields zero hunks from a non-empty diff. Pinning
+	// the knobs we know about cannot cover the ones we do not; this can.
+	//
+	// It catches a diff that produced NO usable hunks, and a hunk naming a file that
+	// is not on disk. It does not catch a path that resolves to a real file the
+	// extractor names differently, so a filename containing a quote, backslash or
+	// tab may still be skipped silently.
+	if sawFileHeader && len(out) == 0 {
+		fmt.Fprintln(os.Stderr, "git reported changed .go files but produced no parsable hunks; "+
+			"the diff format is not what this tool expects (an external differ, or .gitattributes "+
+			"marking .go as binary?)")
+		return out, false
+	}
+	// Likewise a hunk key that does not exist on disk means the path was mangled.
+	for key := range out {
+		if _, err := os.Stat(key); err != nil {
+			fmt.Fprintf(os.Stderr, "diff names a file this tool could not locate: %s\n", key)
+			return out, false
 		}
 	}
 	return out, true

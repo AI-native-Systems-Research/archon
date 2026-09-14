@@ -50,6 +50,30 @@ func TestChangedFileMatchingIsNotBySuffix(t *testing.T) {
 // --since HEAD sees exactly those edits as uncommitted.
 func gitRepo(t *testing.T, files, after map[string]string) string {
 	t.Helper()
+	return gitRepoAt(t, "", files, after)
+}
+
+// gitRepoAt puts the module under sub/ inside the repository. git reports diff
+// paths relative to the repo ROOT, so only a nested module exercises diff.relative
+// and the root-joining logic.
+func gitRepoAt(t *testing.T, sub string, files, after map[string]string) string {
+	t.Helper()
+	nest := func(m map[string]string) map[string]string {
+		if sub == "" || m == nil {
+			return m
+		}
+		out := make(map[string]string, len(m))
+		for k, v := range m {
+			out[filepath.Join(sub, k)] = v
+		}
+		return out
+	}
+	root := gitRepoRoot(t, nest(files), nest(after))
+	return filepath.Join(root, sub)
+}
+
+func gitRepoRoot(t *testing.T, files, after map[string]string) string {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -82,6 +106,16 @@ func gitRepo(t *testing.T, files, after map[string]string) string {
 	}
 	write(after)
 	return dir
+}
+
+// gitConfig sets a config key on the repo, isolated from ambient config.
+func gitConfig(t *testing.T, dir, key, val string) {
+	t.Helper()
+	c := exec.Command("git", "-C", dir, "config", key, val)
+	c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("git config %s=%s: %v\n%s", key, val, err, out)
+	}
 }
 
 // run invokes the built command and returns stdout, stderr.
@@ -206,7 +240,7 @@ func TestIllTypedPackageWarns(t *testing.T) {
 
 	_, stderr := run(t, buildCmd(t), dir, "--mode=cha")
 
-	if !strings.Contains(stderr, "did not type-check") {
+	if !strings.Contains(stderr, "failed to type-check") {
 		t.Errorf("no warning about the ill-typed package: %s", stderr)
 	}
 	if !strings.Contains(stderr, "INCOMPLETE") {
@@ -231,25 +265,50 @@ func TestSinceIsImmuneToGitPathConfig(t *testing.T) {
 		{"diff.relative", "true"},
 		{"diff.mnemonicprefix", "true"},
 		{"diff.noprefix", "true"},
+		// Replaces the output format wholesale, which no path-format pin can cover.
+		{"diff.external", "/usr/bin/true"},
 	} {
 		name := "default"
 		if cfg != nil {
 			name = cfg[0]
 		}
 		t.Run(name, func(t *testing.T) {
-			dir := gitRepo(t, files, after)
+			// Nested module: diff.relative has nothing to make relative when the
+			// module IS the repo root, which is why the previous version of this
+			// subtest passed against the unfixed binary.
+			dir := gitRepoAt(t, "sub", files, after)
 			if cfg != nil {
-				c := exec.Command("git", "-C", dir, "config", cfg[0], cfg[1])
-				c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
-				if out, err := c.CombinedOutput(); err != nil {
-					t.Fatalf("git config: %v\n%s", err, out)
-				}
+				gitConfig(t, dir, cfg[0], cfg[1])
 			}
 			_, stderr := run(t, buildCmd(t), dir, "--since", "HEAD")
 			if !strings.Contains(stderr, "1 changed fn") {
 				t.Errorf("%s: expected 1 changed function, got: %s", name, strings.TrimSpace(stderr))
 			}
 		})
+	}
+}
+
+// A .gitattributes marking .go as binary makes git print "Binary files ... differ"
+// with no hunks. --text overrides that, so the delta still works. Pinned because
+// without --text this silently reported nothing changed.
+//
+// The .gitattributes file must sit at the repo root, above the module, which is
+// also why gitRepoAt exists.
+func TestGitattributesBinaryDoesNotBreakSince(t *testing.T) {
+	dir := gitRepoAt(t, "sub", map[string]string{
+		"go.mod": "module example.com/p\n\ngo 1.26\n",
+		"p/a.go": "package p\n\nfunc A() { B() }\n\nfunc B() {}\n",
+	}, map[string]string{
+		"p/a.go": "package p\n\nfunc A() { B(); B() }\n\nfunc B() {}\n",
+	})
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), ".gitattributes"),
+		[]byte("*.go -diff\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr := run(t, buildCmd(t), dir, "--since", "HEAD")
+	if !strings.Contains(stderr, "1 changed fn") {
+		t.Errorf("a .gitattributes marking .go binary broke the delta: %s", strings.TrimSpace(stderr))
 	}
 }
 
@@ -263,17 +322,21 @@ func TestSinceHandlesAwkwardFilenames(t *testing.T) {
 			"p/\u00e9 unicode.go": "package p\n\nfunc Accented() {}\n",
 		},
 		map[string]string{
-			"p/my file.go": "package p\n\nfunc Spaced() { _ = 1 }\n",
+			"p/my file.go":        "package p\n\nfunc Spaced() { _ = 1 }\n",
+			"p/\u00e9 unicode.go": "package p\n\nfunc Accented() { _ = 1 }\n",
+			"p/qu\"ote.go":        "package p\n\nfunc Quoted() { _ = 1 }\n",
 		})
 
 	stdout, stderr := run(t, buildCmd(t), dir, "--since", "HEAD")
 
-	if !strings.Contains(stderr, "1 changed fn") {
-		t.Errorf("a changed file whose name contains a space was not matched: %s",
-			strings.TrimSpace(stderr))
+	if !strings.Contains(stderr, "2 changed fn") {
+		t.Errorf("awkward filenames were not matched: %s", strings.TrimSpace(stderr))
 	}
-	if !strings.Contains(stdout, `label="p.Spaced"`) {
-		t.Errorf("the changed function is missing:\n%s", stdout)
+	// A space needs the trailing-TAB trim; non-ASCII needs core.quotePath=false.
+	for _, want := range []string{`label="p.Spaced"`, `label="p.Accented"`} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("missing %s:\n%s", want, stdout)
+		}
 	}
 }
 
@@ -286,6 +349,7 @@ func TestSinceFailureExitsNonZero(t *testing.T) {
 	}, nil)
 
 	cmd := exec.Command(buildCmd(t), dir, "./...", "--since", "nosuchref")
+	cmd.Env = append(os.Environ(), "LC_ALL=C") // git's diagnosis is translated
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("an unresolvable --since ref exited 0:\n%s", out)
@@ -316,10 +380,24 @@ func TestMalformedFlagsAreRejected(t *testing.T) {
 		{"--depth"},        // no value
 		{"--depth", "abc"}, // not a number
 		{"--dept=2"},       // typo
+		{"--mode="},        // empty value, e.g. --mode=$UNSET
+		{"--since="},       // empty value: asked for a delta, would get a full graph
+		{"--depth", "-3"},  // negative: the label would claim an expansion
 	} {
 		out, err := exec.Command(bin, append([]string{dir, "./..."}, args...)...).CombinedOutput()
 		if err == nil {
 			t.Errorf("%v was accepted; it must not silently fall back: %s", args, out)
 		}
 	}
+}
+
+// TestMain removes the directory buildCmd created; it cannot use t.TempDir()
+// because the binary is shared across tests, and without this every go test run
+// leaves ~8MB behind.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if builtBin != "" {
+		os.RemoveAll(filepath.Dir(builtBin))
+	}
+	os.Exit(code)
 }

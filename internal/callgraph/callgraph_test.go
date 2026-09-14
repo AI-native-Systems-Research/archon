@@ -501,12 +501,52 @@ func TestIllTypedPackagesAreReported(t *testing.T) {
 	}
 	found := false
 	for _, e := range g.IllTyped {
-		if strings.Contains(e, "broken") {
+		if strings.Contains(e.Path, "broken") {
 			found = true
+			if !e.Own {
+				t.Errorf("the package with the actual error is not marked Own: %+v", e)
+			}
 		}
 	}
 	if !found {
 		t.Errorf("IllTyped does not name the broken package: %+v", g.IllTyped)
+	}
+}
+
+// packages.IllTyped is transitive: importers of a broken package are flagged with
+// no errors of their own. They usually outnumber the causes, so an alphabetical
+// list truncates away the only lines worth reading. Causes must come first.
+func TestIllTypedOrdersCausesBeforeImporters(t *testing.T) {
+	files := map[string]string{
+		"go.mod":               "module example.com/cg\n\ngo 1.26\n",
+		"zzbroken/zzbroken.go": "package zzbroken\n\nfunc B() { thisDoesNotExist() }\n",
+	}
+	// Importers sort alphabetically BEFORE the cause, which is the trap.
+	for _, n := range []string{"a01", "a02", "a03", "a04", "a05"} {
+		files[n+"/"+n+".go"] = "package " + n + "\n\nimport \"example.com/cg/zzbroken\"\n\nvar _ = zzbroken.B\n"
+	}
+	dir := t.TempDir()
+	for name, src := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g, err := Build(dir, "./...", CHA)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(g.IllTyped) < 2 {
+		t.Fatalf("expected the cause and its importers, got %+v", g.IllTyped)
+	}
+	if !g.IllTyped[0].Own || !strings.Contains(g.IllTyped[0].Path, "zzbroken") {
+		t.Errorf("the actual cause is not first, so truncation would hide it: %+v", g.IllTyped)
+	}
+	if got := g.OwnErrors(); got != 1 {
+		t.Errorf("OwnErrors() = %d, want 1 — the count must not be inflated by importers", got)
 	}
 }
 

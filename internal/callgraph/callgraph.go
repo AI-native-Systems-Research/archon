@@ -113,13 +113,18 @@ type Graph struct {
 	Funcs []Func
 	Edges []Edge
 
-	// IllTyped names matched packages that did not type-check, with the first
-	// error for each. They are the reason a graph can be quietly incomplete: SSA
-	// builds nothing for such a package, so in CHA or RTA mode it contributes no
-	// call sites and none of its types count as implementers — while the AST walk
-	// still lists its functions as nodes. The result looks complete. Callers must
-	// surface this; Build will not pretend the graph is whole.
-	IllTyped []string
+	// IllTyped names matched packages that did not type-check. They are the reason
+	// a graph can be quietly incomplete: SSA builds nothing for such a package, so
+	// in CHA or RTA mode it contributes no call sites and none of its types count
+	// as implementers — while the AST walk still lists its functions as nodes. The
+	// result looks complete. Callers must surface this; Build will not pretend the
+	// graph is whole.
+	//
+	// Own-error packages come first, because packages.IllTyped is TRANSITIVE: a
+	// package whose import fails is flagged with no errors of its own, so importers
+	// usually outnumber causes and truncating an alphabetical list hides every
+	// actual error.
+	IllTyped []IllTypedPkg
 }
 
 // Build loads the module at dir matching pattern and returns its call graph.
@@ -184,22 +189,52 @@ func (g *Graph) sort() {
 	})
 }
 
-// illTypedPackages lists matched packages that failed to type-check, each with its
-// first error. Sorted, since packages.Load order is not part of the contract.
-func illTypedPackages(pkgs []*packages.Package) []string {
-	var out []string
+// IllTypedPkg is one package that failed to type-check.
+type IllTypedPkg struct {
+	Path string
+	Msg  string
+	// Own is true when the package has errors of its own, false when it was only
+	// flagged because something it imports failed. Only Own packages have a cause
+	// worth reading.
+	Own bool
+}
+
+// illTypedPackages lists matched packages that failed to type-check, causes first.
+func illTypedPackages(pkgs []*packages.Package) []IllTypedPkg {
+	var out []IllTypedPkg
 	for _, p := range pkgs {
 		if !p.IllTyped && len(p.Errors) == 0 {
 			continue
 		}
-		msg := "did not type-check"
-		if len(p.Errors) > 0 {
-			msg = p.Errors[0].Msg
+		e := IllTypedPkg{Path: p.PkgPath, Own: len(p.Errors) > 0}
+		if e.Own {
+			e.Msg = p.Errors[0].Msg
+		} else {
+			e.Msg = "an import did not type-check"
 		}
-		out = append(out, fmt.Sprintf("%s: %s", p.PkgPath, msg))
+		out = append(out, e)
 	}
-	sort.Strings(out)
+	// Causes before importers, then by path. Truncating the other way round drops
+	// exactly the lines a reader needs.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Own != out[j].Own {
+			return out[i].Own
+		}
+		return out[i].Path < out[j].Path
+	})
 	return out
+}
+
+// OwnErrors counts packages with errors of their own, as opposed to those flagged
+// only because an import failed.
+func (g *Graph) OwnErrors() int {
+	n := 0
+	for _, e := range g.IllTyped {
+		if e.Own {
+			n++
+		}
+	}
+	return n
 }
 
 // declaredFuncs finds every function with a body in the root packages. Those are
@@ -347,7 +382,7 @@ func staticEdges(pkgs []*packages.Package, ids map[*types.Func]string) map[Edge]
 // reader recognises.
 // staticSeen is read-only: it is consulted so a dispatched edge is not added for a
 // pair already recorded as a direct call.
-func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, staticSeen map[Edge]bool, illTyped []string, mode Mode) (map[Edge]bool, error) {
+func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, staticSeen map[Edge]bool, illTyped []IllTypedPkg, mode Mode) (map[Edge]bool, error) {
 	prog, _ := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
 
@@ -375,7 +410,8 @@ func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, static
 			// suggesting cha would be doubly wrong, since cha is equally blind to it.
 			if len(illTyped) > 0 {
 				return nil, fmt.Errorf("mode rta found no main package, and %d matched package(s) "+
-					"did not type-check so no SSA was built for them (first: %s)", len(illTyped), illTyped[0])
+					"did not type-check so no SSA was built for them (first: %s: %s)",
+					len(illTyped), illTyped[0].Path, illTyped[0].Msg)
 			}
 			return nil, fmt.Errorf("mode rta needs a main package; none found (use cha for a library)")
 		}
