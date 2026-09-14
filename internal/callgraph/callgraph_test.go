@@ -74,6 +74,7 @@ func TestInterfaceCallsBecomeEdges(t *testing.T) {
 		"app.CallHelper -> app.Helper",
 		"app.CallStoreHelper -> store.Helper",
 		"app.Direct -> store.Mem.Get",
+		"app.Mixed -> store.Mem.Get",
 	}
 	if got, want := sorted(edgeLines(static)), wantStatic; strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("static edges:\n got %v\nwant %v", got, want)
@@ -93,6 +94,15 @@ func TestInterfaceCallsBecomeEdges(t *testing.T) {
 	got := sorted(dispatchLines(cha))
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("cha dispatch edges:\n got %v\nwant %v", got, want)
+	}
+
+	// app.Mixed is deliberately absent from that list: dispatch reaches the same
+	// pair as its direct call, and relabelling the edge would hide the direct
+	// call behind a dashed arrow.
+	for _, l := range dispatchLines(cha) {
+		if strings.HasPrefix(l, "app.Mixed ->") {
+			t.Errorf("a direct call was relabelled as an interface call: %s", l)
+		}
 	}
 }
 
@@ -178,7 +188,9 @@ func TestUnresolvedCallSitesArePinpointed(t *testing.T) {
 		// The method value in app.MethodValue: dispatched through Store.Get
 		// inside the bound wrapper go/ssa made for it, which has no syntax and
 		// so no position — the wrapper's name is the handle.
-		if strings.Contains(d, "store.Store.Get") && strings.Contains(d, "$bound") {
+		// Named by the function that takes the method value, not by the package
+		// the interface happens to be declared in.
+		if d == "store.Store.Get as a method value in app.MethodValue" {
 			methodValue = true
 		}
 		// The closure in app.Registered does have syntax, so this one is
@@ -199,9 +211,15 @@ func TestUnresolvedCallSitesArePinpointed(t *testing.T) {
 // the standard library, where it is noise. Only the packages asked for count.
 func TestUnresolvedIgnoresDependencies(t *testing.T) {
 	g := build(t, "iface", callgraph.CHA)
+	fixture := map[string]bool{"app": true, "store": true, "apply": true, "hidden": true}
 	for _, d := range g.Unresolved {
-		if !strings.Contains(d, "example.com/iface") && !strings.Contains(d, "testdata/iface") {
-			t.Errorf("site outside the packages asked for: %s", d)
+		// Every entry opens with the dispatched method, pkg.Iface.Method.
+		i := strings.Index(d, ".")
+		if i < 0 || !fixture[d[:i]] {
+			t.Errorf("site dispatching an interface from outside the module: %s", d)
+		}
+		if strings.Contains(d, " at ") && !strings.Contains(d, "testdata/iface") {
+			t.Errorf("site in a file outside the module: %s", d)
 		}
 	}
 }
@@ -364,5 +382,20 @@ func TestParseMode(t *testing.T) {
 	}
 	if _, err := callgraph.ParseMode("vta"); err == nil {
 		t.Error("ParseMode(\"vta\"): want an error, got none")
+	}
+}
+
+// BenchmarkBuild measures each mode over this repository, so the cost of
+// resolving dispatch is re-measured rather than quoted from a commit message.
+// Run with: go test -bench Build -benchtime 3x ./internal/callgraph/
+func BenchmarkBuild(b *testing.B) {
+	for _, mode := range []callgraph.Mode{callgraph.Static, callgraph.CHA, callgraph.RTA} {
+		b.Run(mode.String(), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				if _, err := callgraph.Build("../..", "./...", mode); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

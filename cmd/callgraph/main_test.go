@@ -19,11 +19,15 @@ func buildTool(t *testing.T) string {
 	return bin
 }
 
-// run returns stdout, stderr and the exit code of one invocation against this
-// repository, whose root is two levels up from this package.
+// run invokes the tool against this repository, whose root is two levels up.
 func run(t *testing.T, bin string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, append([]string{"../..", "./internal/graph/..."}, args...)...)
+	return runIn(t, bin, "../..", "./internal/graph/...", args...)
+}
+
+func runIn(t *testing.T, bin, dir, pattern string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, append([]string{dir, pattern}, args...)...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -86,6 +90,51 @@ func TestModeFlag(t *testing.T) {
 		}
 		if !strings.Contains(stderr, ", cha]") {
 			t.Errorf("the summary does not name the mode: %q", stderr)
+		}
+		// internal/graph makes no interface calls, so the only thing dashed here
+		// is the legend key. The edges themselves are checked below against a
+		// module that has some.
+		if !strings.Contains(stdout, "calls through an interface") {
+			t.Error("the legend has no key for the dashed edges")
+		}
+	})
+
+	t.Run("an interface call is drawn dashed, with its witness", func(t *testing.T) {
+		stdout, stderr, code := runIn(t, bin, "../../internal/callgraph/testdata/iface", "./...", "--mode=cha")
+		if code != 0 {
+			t.Fatalf("exit code %d; stderr %q", code, stderr)
+		}
+		// A reader of the artifact has to be able to tell an interface call from
+		// a direct one, and to see which method was dispatched.
+		if !strings.Contains(stdout, "style=dashed") {
+			t.Error("no dashed edge")
+		}
+		if !strings.Contains(stdout, `tooltip="dispatched through store.Store.Get"`) {
+			t.Error("a dashed edge does not name the method it dispatched")
+		}
+	})
+
+	t.Run("static draws no dashed edge and no key for one", func(t *testing.T) {
+		stdout, _, code := run(t, bin)
+		if code != 0 {
+			t.Fatal(code)
+		}
+		if strings.Contains(stdout, "style=dashed") || strings.Contains(stdout, "calls through an interface") {
+			t.Error("static mode resolves no dispatch, so it must draw none")
+		}
+	})
+
+	t.Run("a package that does not type-check is reported", func(t *testing.T) {
+		_, stderr, _ := runIn(t, bin, "../../internal/callgraph/testdata/illtyped", "./...", "--mode=cha")
+		if !strings.Contains(stderr, "did not type-check") || !strings.Contains(stderr, "cause ") {
+			t.Errorf("the warning is not wired up: %q", stderr)
+		}
+	})
+
+	t.Run("interface calls that produced no edge are reported", func(t *testing.T) {
+		_, stderr, _ := runIn(t, bin, "../../internal/callgraph/testdata/iface", "./...", "--mode=cha")
+		if !strings.Contains(stderr, "produced no edge") || !strings.Contains(stderr, "method value") {
+			t.Errorf("the report is not wired up: %q", stderr)
 		}
 	})
 

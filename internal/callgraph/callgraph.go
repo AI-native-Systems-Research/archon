@@ -39,6 +39,7 @@ import (
 	"go/ast"
 	"go/types"
 	"sort"
+	"strings"
 
 	xcallgraph "golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/callgraph/cha"
@@ -139,13 +140,12 @@ func Build(dir, pattern string, mode Mode) (*Graph, error) {
 		return nil, err
 	}
 	g := staticEdges(pkgs)
-	var noSSA []string
 	if mode != Static {
-		if noSSA, err = g.addDispatchEdges(pkgs, mode); err != nil {
+		if err := g.addDispatchEdges(pkgs, mode); err != nil {
 			return nil, err
 		}
 	}
-	g.IllTyped = illTyped(pkgs, noSSA)
+	g.IllTyped = illTyped(pkgs)
 	g.assignIDs() // last: it needs the final contents of Defined
 	return g, nil
 }
@@ -280,6 +280,15 @@ func shortLabel(f *types.Func) string {
 			recv = n.Obj().Name()
 		}
 	}
+	if pkg == "" {
+		// A universe-scope type, in practice the builtin error interface. Only
+		// reachable for a method named as a witness, never for a declared
+		// function, which always has a package.
+		if recv != "" {
+			return fmt.Sprintf("%s.%s", recv, f.Name())
+		}
+		return f.Name()
+	}
 	if recv != "" {
 		return fmt.Sprintf("%s.%s.%s", pkg, recv, f.Name())
 	}
@@ -288,24 +297,17 @@ func shortLabel(f *types.Func) string {
 
 // addDispatchEdges adds an edge for every interface call site whose caller and
 // possible callee are both in-module.
-// It returns the paths of the packages SSA could not build, which is a stronger
-// signal than packages.IllTyped: AllPackages also skips a package that has no
-// type information at all.
-func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string, error) {
+func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 	asked := map[string]bool{}
 	for _, p := range pkgs {
 		asked[p.PkgPath] = true
 	}
 
-	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
+	// The second return says which packages got no SSA package. It is
+	// discarded because ssautil skips exactly the packages with no type
+	// information or an ill-typed one, and illTyped already reports those.
+	prog, _ := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
-
-	var noSSA []string
-	for i, sp := range ssaPkgs {
-		if sp == nil {
-			noSSA = append(noSSA, pkgs[i].PkgPath)
-		}
-	}
 
 	var cg *xcallgraph.Graph
 	switch mode {
@@ -314,11 +316,11 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string,
 	case RTA:
 		roots := rtaRoots(prog)
 		if len(roots) == 0 {
-			return nil, fmt.Errorf("mode=rta needs an entry point: no main package among the matched packages; use mode=cha for a library")
+			return fmt.Errorf("mode=rta needs an entry point: no main package among the loaded packages; use mode=cha for a library")
 		}
 		cg = rta.Analyze(roots, true).CallGraph
 	default:
-		return nil, fmt.Errorf("addDispatchEdges: mode %s resolves no dispatch", mode)
+		return fmt.Errorf("addDispatchEdges: mode %s resolves no dispatch", mode)
 	}
 
 	unresolved := map[string]bool{}
@@ -333,10 +335,10 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string,
 		from, to := declaredFunc(e.Caller.Func), declaredFunc(e.Callee.Func)
 		if from == nil || !g.Defined[from] {
 			// The call site is real but there is no function with a body to
-			// draw it from. Worth recording when it is in a package we were
-			// asked about; in a dependency it is noise.
-			if asked[sitePkg(e.Caller.Func, from)] {
-				unresolved[describeSite(prog, e)] = true
+			// draw it from. Worth recording when it belongs to a package we
+			// were asked about; in a dependency it is noise.
+			if d, ok := describeSite(cg, prog, asked, e, from); ok {
+				unresolved[d] = true
 			}
 			return nil
 		}
@@ -345,9 +347,16 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string,
 		}
 		ed := Edge{from, to}
 		w := shortLabel(call.Method)
-		// Several call sites can produce one edge; take the lowest name so the
-		// witness does not depend on visit order.
-		if cur, ok := g.Edges[ed]; !ok || cur == "" || w < cur {
+		switch cur, ok := g.Edges[ed]; {
+		case !ok:
+			g.Edges[ed] = w
+		case cur == "":
+			// The same pair is already reached by a direct call. Leave it
+			// alone: the arrow is there either way, and calling it dispatch
+			// would hide the direct call behind a dashed edge.
+		case w < cur:
+			// Several call sites can produce one edge; take the lowest name so
+			// the witness does not depend on visit order.
 			g.Edges[ed] = w
 		}
 		return nil
@@ -356,7 +365,7 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string,
 		g.Unresolved = append(g.Unresolved, d)
 	}
 	sort.Strings(g.Unresolved)
-	return noSSA, err
+	return err
 }
 
 // rtaRoots returns the entry points of every main package: both main and the
@@ -364,6 +373,9 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string,
 // prometheus and cobra does its work in init and nothing reaches it from main.
 func rtaRoots(prog *ssa.Program) []*ssa.Function {
 	mains := ssautil.MainPackages(prog.AllPackages())
+	// prog.AllPackages is map-backed. RTA's result does not depend on the order
+	// of its roots, so like the sort in illTyped this is not observable in any
+	// output I can produce; it is here so that it cannot become observable.
 	sort.Slice(mains, func(i, j int) bool { return mains[i].Pkg.Path() < mains[j].Pkg.Path() })
 	var roots []*ssa.Function
 	for _, m := range mains {
@@ -376,20 +388,44 @@ func rtaRoots(prog *ssa.Program) []*ssa.Function {
 	return roots
 }
 
-// describeSite says what was dispatched and, where SSA has one, where. A
-// synthesised wrapper carries no position, so it is named instead: the $bound
-// suffix is what a method value looks like.
-func describeSite(prog *ssa.Program, e *xcallgraph.Edge) string {
+// describeSite says what was dispatched and where, and reports whether the site
+// belongs to a package that was asked for.
+//
+// A wrapper go/ssa synthesises for a method value has neither syntax nor a
+// package of its own, and its object is the interface method — so the interface's
+// package is the wrong thing to attribute it to, being where the interface is
+// declared rather than where the method value was taken. Those are named by the
+// functions that take them, which is what the reader has to go and look at.
+func describeSite(cg *xcallgraph.Graph, prog *ssa.Program, asked map[string]bool, e *xcallgraph.Edge, from *types.Func) (string, bool) {
 	what := shortLabel(e.Site.Common().Method)
 	if pos := prog.Fset.Position(e.Site.Pos()); pos.IsValid() {
-		return fmt.Sprintf("%s at %s:%d", what, pos.Filename, pos.Line)
+		if !asked[sitePkg(e.Caller.Func, from)] {
+			return "", false
+		}
+		return fmt.Sprintf("%s at %s:%d", what, pos.Filename, pos.Line), true
 	}
-	return fmt.Sprintf("%s in %s", what, e.Caller.Func.String())
+	takers := map[string]bool{}
+	if n := cg.Nodes[e.Caller.Func]; n != nil {
+		for _, in := range n.In {
+			taker := declaredFunc(in.Caller.Func)
+			if taker == nil || taker.Pkg() == nil || !asked[taker.Pkg().Path()] {
+				continue
+			}
+			takers[shortLabel(taker)] = true
+		}
+	}
+	if len(takers) == 0 {
+		return "", false
+	}
+	names := make([]string, 0, len(takers))
+	for n := range takers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return fmt.Sprintf("%s as a method value in %s", what, strings.Join(names, ", ")), true
 }
 
-// sitePkg names the package a call site belongs to, for a caller that could not
-// be traced to a declaration. A synthesised wrapper has no ssa.Package but its
-// object is the interface method, which does have one.
+// sitePkg names the package a call site with syntax belongs to.
 func sitePkg(fn *ssa.Function, from *types.Func) string {
 	if from != nil && from.Pkg() != nil {
 		return from.Pkg().Path()
@@ -419,18 +455,16 @@ func declaredFunc(fn *ssa.Function) *types.Func {
 // the package someone can fix. An importer is only reported when it is one of
 // the packages asked for: naming every dependency that merely inherited the
 // problem buries the one that caused it.
-func illTyped(pkgs []*packages.Package, noSSA []string) []IllTypedPkg {
+func illTyped(pkgs []*packages.Package) []IllTypedPkg {
 	asked := map[string]bool{}
 	for _, p := range pkgs {
 		asked[p.PkgPath] = true
 	}
-	reported := map[string]bool{}
 	var causes, importers []IllTypedPkg
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		if !p.IllTyped {
 			return
 		}
-		reported[p.PkgPath] = true
 		it := IllTypedPkg{Path: p.PkgPath}
 		if len(p.Errors) > 0 {
 			it.Cause = true
@@ -445,15 +479,6 @@ func illTyped(pkgs []*packages.Package, noSSA []string) []IllTypedPkg {
 			importers = append(importers, it)
 		}
 	})
-	// Belt and braces: a package SSA refused to build that go/types did not call
-	// ill-typed would have no type information at all. No input in this repo
-	// reaches this, and it exists so that the assumption fails loudly rather
-	// than by under-reporting.
-	for _, path := range noSSA {
-		if !reported[path] {
-			causes = append(causes, IllTypedPkg{Path: path, Cause: true, Err: "no type information, so no SSA was built"})
-		}
-	}
 	// packages.Visit already walks imports in sorted order, so these sorts are
 	// not observable on any input I could construct — they are here so the
 	// report does not depend on that being true of a postorder walk over

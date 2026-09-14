@@ -49,6 +49,14 @@ func Direct(m store.Mem) { m.Get("concrete") }
 // CallStoreHelper calls across packages by qualifier.
 func CallStoreHelper() int { return store.Helper() }
 
+// Mixed reaches store.Mem.Get both directly and through the interface. The edge
+// is a direct call that dispatch also happens to reach, so drawing it as an
+// interface call would hide the direct one.
+func Mixed(m store.Mem, s store.Store) {
+	m.Get("direct")
+	s.Get("dispatched")
+}
+
 // WriteTo dispatches through a standard-library interface, so the callees CHA
 // offers for this site include every implementation of io.Writer in the program,
 // nearly all of them outside this module.
