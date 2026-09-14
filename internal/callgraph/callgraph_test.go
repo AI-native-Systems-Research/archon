@@ -673,15 +673,18 @@ func main() { println(api.ServeAll()) }
 // --- Modes and errors ---
 
 func TestParseMode(t *testing.T) {
-	for in, want := range map[string]Mode{"": Static, "static": Static, "cha": CHA, "rta": RTA} {
+	for in, want := range map[string]Mode{"static": Static, "cha": CHA, "rta": RTA} {
 		got, err := ParseMode(in)
 		if err != nil || got != want {
 			t.Errorf("ParseMode(%q) = %v, %v; want %v, nil", in, got, err, want)
 		}
 	}
-	// An unknown mode must fail rather than quietly analysing less.
-	if _, err := ParseMode("vta"); err == nil {
-		t.Error("ParseMode(\"vta\") succeeded; want an error naming the valid modes")
+	// An unknown mode must fail rather than quietly analysing less — and that
+	// includes the empty string, which is what "--mode $UNSET" produces.
+	for _, bad := range []string{"vta", "", "CHA", "Static"} {
+		if _, err := ParseMode(bad); err == nil {
+			t.Errorf("ParseMode(%q) succeeded; want an error naming the valid modes", bad)
+		}
 	}
 }
 

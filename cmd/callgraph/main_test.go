@@ -134,6 +134,7 @@ func run(t *testing.T, bin, dir string, args ...string) (string, string) {
 var (
 	buildOnce sync.Once
 	builtBin  string
+	buildDir  string // recorded separately: on a build failure builtBin stays empty
 	buildErr  error
 )
 
@@ -147,6 +148,7 @@ func buildCmd(t *testing.T) string {
 			buildErr = err
 			return
 		}
+		buildDir = dir
 		bin := filepath.Join(dir, "callgraph")
 		if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 			buildErr = fmt.Errorf("build: %v\n%s", err, out)
@@ -320,6 +322,10 @@ func TestSinceHandlesAwkwardFilenames(t *testing.T) {
 			"go.mod":              "module example.com/p\n\ngo 1.26\n",
 			"p/my file.go":        "package p\n\nfunc Spaced() {}\n",
 			"p/\u00e9 unicode.go": "package p\n\nfunc Accented() {}\n",
+			// Must be in the COMMITTED set, not only in the post-commit map: an
+			// untracked file never appears in git diff, so the quoted-path branch
+			// went unexercised twice before this.
+			"p/qu\"ote.go": "package p\n\nfunc Quoted() {}\n",
 		},
 		map[string]string{
 			"p/my file.go":        "package p\n\nfunc Spaced() { _ = 1 }\n",
@@ -329,11 +335,13 @@ func TestSinceHandlesAwkwardFilenames(t *testing.T) {
 
 	stdout, stderr := run(t, buildCmd(t), dir, "--since", "HEAD")
 
-	if !strings.Contains(stderr, "2 changed fn") {
+	if !strings.Contains(stderr, "3 changed fn") {
 		t.Errorf("awkward filenames were not matched: %s", strings.TrimSpace(stderr))
 	}
-	// A space needs the trailing-TAB trim; non-ASCII needs core.quotePath=false.
-	for _, want := range []string{`label="p.Spaced"`, `label="p.Accented"`} {
+	// A space needs the trailing-TAB trim; a quote needs the C-unquote. Both files
+	// must be TRACKED — in the previous version the quoted one lived only in the
+	// post-commit map, so it was untracked and never reached a diff at all.
+	for _, want := range []string{`label="p.Spaced"`, `label="p.Accented"`, `label="p.Quoted"`} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("missing %s:\n%s", want, stdout)
 		}
@@ -383,6 +391,12 @@ func TestMalformedFlagsAreRejected(t *testing.T) {
 		{"--mode="},        // empty value, e.g. --mode=$UNSET
 		{"--since="},       // empty value: asked for a delta, would get a full graph
 		{"--depth", "-3"},  // negative: the label would claim an expansion
+		// The space-separated empty forms are what "--since $UNSET" actually
+		// produces, and they stayed broken after only the "=" forms were guarded.
+		// --since "" was the worst of them: a full graph, exit 0, for a user who
+		// asked for a delta.
+		{"--since", ""},
+		{"--mode", ""},
 	} {
 		out, err := exec.Command(bin, append([]string{dir, "./..."}, args...)...).CombinedOutput()
 		if err == nil {
@@ -396,8 +410,125 @@ func TestMalformedFlagsAreRejected(t *testing.T) {
 // leaves ~8MB behind.
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if builtBin != "" {
-		os.RemoveAll(filepath.Dir(builtBin))
+	if buildDir != "" {
+		os.RemoveAll(buildDir)
 	}
 	os.Exit(code)
+}
+
+// A diff can legitimately contain file headers and no new-side hunk: a deletion, a
+// mode change, a rename with no edit, an added empty file. For every one of them
+// "no function changed" is the correct answer, and an earlier version of this tool
+// exited 1 on all four.
+func TestNoHunkDiffsAreNotFailures(t *testing.T) {
+	base := map[string]string{
+		"go.mod": "module example.com/p\n\ngo 1.26\n",
+		"p/a.go": "package p\n\nfunc A() { B() }\n\nfunc B() {}\n",
+		"p/c.go": "package p\n\nfunc C() {}\n",
+	}
+	cases := map[string]func(t *testing.T, dir string){
+		"deletion": func(t *testing.T, dir string) {
+			if err := os.Remove(filepath.Join(dir, "p/c.go")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"mode change": func(t *testing.T, dir string) {
+			if err := os.Chmod(filepath.Join(dir, "p/c.go"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"rename without edit": func(t *testing.T, dir string) {
+			c := exec.Command("git", "-C", dir, "mv", "p/c.go", "p/renamed.go")
+			c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("git mv: %v\n%s", err, out)
+			}
+		},
+		"added empty file": func(t *testing.T, dir string) {
+			p := filepath.Join(dir, "p/new.go")
+			if err := os.WriteFile(p, []byte("package p\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := exec.Command("git", "-C", dir, "add", "p/new.go")
+			c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("git add: %v\n%s", err, out)
+			}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := gitRepo(t, base, nil)
+			mutate(t, dir)
+			cmd := exec.Command(buildCmd(t), dir, "./...", "--since", "HEAD")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("exited non-zero on a diff with no new-side hunk:\n%s", out)
+			}
+			if !strings.Contains(string(out), "0 changed fn") {
+				t.Errorf("expected 0 changed functions, got: %s", firstLine(string(out)))
+			}
+		})
+	}
+}
+
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.HasPrefix(l, "callgraph:") {
+			return l
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
+// With --unified=0 an ADDED source line beginning with "++ " renders as "+++ ...",
+// which is legal Go inside a raw string literal. Honouring it as a file header
+// re-attributed every following hunk to a path that does not exist.
+func TestAddedLineCannotForgeAFileHeader(t *testing.T) {
+	dir := gitRepo(t,
+		map[string]string{
+			"go.mod": "module example.com/p\n\ngo 1.26\n",
+			"p/a.go": "package p\n\nvar patch = `\n`\n\nfunc A() { B() }\n\nfunc B() {}\n",
+		},
+		map[string]string{
+			// The added lines inside the raw string look exactly like diff headers.
+			"p/a.go": "package p\n\nvar patch = `\n+++ b/nonexistent.go\n@@ -1 +1 @@\n`\n\nfunc A() { B(); B() }\n\nfunc B() {}\n",
+		})
+
+	cmd := exec.Command(buildCmd(t), dir, "./...", "--since", "HEAD")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("a forged header in file content broke the run:\n%s", out)
+	}
+	if strings.Contains(string(out), "nonexistent.go") {
+		t.Errorf("content was parsed as a file header:\n%s", out)
+	}
+	// The real change must still be attributed.
+	if !strings.Contains(string(out), `label="p.A"`) {
+		t.Errorf("the genuine change was lost to the forged header:\n%s", out)
+	}
+}
+
+// The cause of a type error can sit outside the matched set — a dependency, or a
+// package the pattern misses. Then every entry is an importer, and "0 package(s)
+// failed to type-check, and 3 more..." is incoherent.
+func TestIllTypedWithNoOwnErrorReadsCoherently(t *testing.T) {
+	dir := gitRepo(t, map[string]string{
+		"go.mod":      "module example.com/p\n\ngo 1.26\n",
+		"broken/b.go": "package broken\n\nfunc B() { nope() }\n",
+		"a/a.go":      "package a\n\nimport \"example.com/p/broken\"\n\nvar _ = broken.B\n",
+	}, nil)
+
+	// Match only the importer, so the cause is outside the pattern.
+	cmd := exec.Command(buildCmd(t), dir, "./a/...", "--mode=cha")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed:\n%s", out)
+	}
+	if strings.Contains(string(out), "0 package(s) failed") {
+		t.Errorf("incoherent count when no package has its own error:\n%s", out)
+	}
+	if !strings.Contains(string(out), "outside the matched set") {
+		t.Errorf("did not explain that the cause is not among the matched packages:\n%s", out)
+	}
 }

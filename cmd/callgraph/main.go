@@ -70,6 +70,12 @@ func main() {
 		if i+1 >= len(os.Args) {
 			fail("%s needs a value", flag)
 		}
+		// An empty value is the "--since $UNSET" accident, and it is worse than a
+		// missing flag: --since "" silently produced a FULL graph with exit 0 when
+		// the user asked for a delta.
+		if os.Args[i+1] == "" {
+			fail("%s needs a non-empty value (an unset shell variable?)", flag)
+		}
 		return os.Args[i+1]
 	}
 	atoi := func(s, flag string) int {
@@ -126,17 +132,25 @@ func main() {
 
 	if len(g.IllTyped) > 0 {
 		own := g.OwnErrors()
-		fmt.Fprintf(os.Stderr, "warning: %d package(s) failed to type-check", own)
-		if n := len(g.IllTyped) - own; n > 0 {
-			fmt.Fprintf(os.Stderr, ", and %d more were flagged because an import of theirs did", n)
+		switch {
+		case own == 0:
+			// The cause is outside the matched set: a dependency, or a package the
+			// pattern missed. Saying "0 failed" would be incoherent.
+			fmt.Fprintf(os.Stderr, "warning: %d package(s) could not be type-checked because "+
+				"something they import failed; the cause is outside the matched set.\n", len(g.IllTyped))
+		default:
+			fmt.Fprintf(os.Stderr, "warning: %d package(s) failed to type-check", own)
+			if n := len(g.IllTyped) - own; n > 0 {
+				fmt.Fprintf(os.Stderr, ", and %d more were flagged because an import of theirs did", n)
+			}
+			fmt.Fprintln(os.Stderr, ".")
 		}
-		fmt.Fprintln(os.Stderr, ".")
 		if mode != callgraph.Static {
 			fmt.Fprintf(os.Stderr, "  go/ssa builds nothing for any of them, so mode=%s sees no call "+
 				"sites and no implementers in them: the graph below is INCOMPLETE.\n", mode)
 		} else {
-			fmt.Fprintln(os.Stderr, "  calls to symbols the failing package(s) could not define are "+
-				"missing from the graph below.")
+			fmt.Fprintln(os.Stderr, "  calls to symbols that could not be resolved are missing "+
+				"from the graph below.")
 		}
 		// IllTyped is ordered causes-first, so truncation drops importers rather
 		// than the errors a reader needs.
@@ -285,7 +299,7 @@ func gitChangedRanges(dir, ref string) (map[string][]iv, bool) {
 		}
 		return out, false
 	}
-	sawFileHeader := false
+	inHeader := false
 	hunk := regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
@@ -293,9 +307,15 @@ func gitChangedRanges(dir, ref string) (map[string][]iv, bool) {
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.HasPrefix(line, "diff --git ") {
-			sawFileHeader = true
+			inHeader = true
+			cur = ""
+			continue
 		}
-		if strings.HasPrefix(line, "+++ ") {
+		// Only honour "+++ " in header position. With --unified=0 an ADDED source
+		// line beginning with "++ " renders as "+++ ...", which is legal Go inside a
+		// raw string or an embedded patch fixture — and would otherwise re-attribute
+		// every following hunk to a forged path.
+		if inHeader && strings.HasPrefix(line, "+++ ") {
 			p := strings.TrimPrefix(line, "+++ ")
 			// git appends a literal TAB when the path contains a space, and C-quotes
 			// the whole thing when it contains a quote, backslash or tab.
@@ -312,6 +332,7 @@ func gitChangedRanges(dir, ref string) (map[string][]iv, bool) {
 			continue
 		}
 		if m := hunk.FindStringSubmatch(line); m != nil {
+			inHeader = false
 			start, _ := strconv.Atoi(m[1])
 			cnt := 1
 			if m[2] != "" {
@@ -327,22 +348,14 @@ func gitChangedRanges(dir, ref string) (map[string][]iv, bool) {
 			out[key] = append(out[key], iv{start, start + cnt - 1})
 		}
 	}
-	// A diff we could not parse must not be reported as "nothing changed". git has
-	// many ways to reformat this output — an external differ, a quoting scheme we
-	// did not anticipate — and each yields zero hunks from a non-empty diff. Pinning
-	// the knobs we know about cannot cover the ones we do not; this can.
+	// A hunk naming a file that is not on disk means the path was mangled — an
+	// output format we cannot read. Better to say so than report "nothing changed".
+	// (Quotes, backslashes and tabs in a filename DO work, via the C-unquote above.)
 	//
-	// It catches a diff that produced NO usable hunks, and a hunk naming a file that
-	// is not on disk. It does not catch a path that resolves to a real file the
-	// extractor names differently, so a filename containing a quote, backslash or
-	// tab may still be skipped silently.
-	if sawFileHeader && len(out) == 0 {
-		fmt.Fprintln(os.Stderr, "git reported changed .go files but produced no parsable hunks; "+
-			"the diff format is not what this tool expects (an external differ, or .gitattributes "+
-			"marking .go as binary?)")
-		return out, false
-	}
-	// Likewise a hunk key that does not exist on disk means the path was mangled.
+	// Deliberately NOT "headers seen but no hunks parsed": a deletion, a mode
+	// change, a rename with no edit and a newly added empty file all produce
+	// headers with no new-side hunk, and for every one of them "no function
+	// changed" is the correct answer.
 	for key := range out {
 		if _, err := os.Stat(key); err != nil {
 			fmt.Fprintf(os.Stderr, "diff names a file this tool could not locate: %s\n", key)

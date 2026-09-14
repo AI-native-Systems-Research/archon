@@ -72,7 +72,7 @@ func (m Mode) String() string {
 // a silent fallback to Static, which would misreport a graph as complete.
 func ParseMode(s string) (Mode, error) {
 	switch s {
-	case "", "static":
+	case "static":
 		return Static, nil
 	case "cha":
 		return CHA, nil
@@ -206,8 +206,12 @@ func illTypedPackages(pkgs []*packages.Package) []IllTypedPkg {
 		if !p.IllTyped && len(p.Errors) == 0 {
 			continue
 		}
-		e := IllTypedPkg{Path: p.PkgPath, Own: len(p.Errors) > 0}
-		if e.Own {
+		e := IllTypedPkg{Path: p.PkgPath}
+		// Own means "has an error of its own", so report the first real one. A
+		// ListError ("no Go files", "build constraints exclude all Go files") is not
+		// a type error but is still the package's own problem, so it counts.
+		if len(p.Errors) > 0 {
+			e.Own = true
 			e.Msg = p.Errors[0].Msg
 		} else {
 			e.Msg = "an import did not type-check"
