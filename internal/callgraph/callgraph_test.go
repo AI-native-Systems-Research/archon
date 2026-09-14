@@ -227,12 +227,26 @@ func TestUnresolvedCallSitesArePinpointed(t *testing.T) {
 		t.Errorf("taker.Take takes the method value but is not named in %v", g.Unresolved)
 	}
 
+	// A method expression (Store.Get) is a thunk rather than a bound wrapper, and
+	// a thunk binds no receiver, so it is referenced as a plain function value
+	// and not through a closure. Missing it dropped the dispatch from the graph
+	// and from this list at the same time.
+	var namesExpression bool
+	for _, d := range g.Unresolved {
+		if d == "store.Store.Get as a method expression in taker.Expr" {
+			namesExpression = true
+		}
+	}
+	if !namesExpression {
+		t.Errorf("the method expression in taker.Expr is missing from %v", g.Unresolved)
+	}
+
 	// taker.Held is taken in a variable initializer, so the function that takes
 	// it is the synthetic package initializer and the package is all there is
 	// to name. Naming it still beats dropping the site.
 	var namesInitializer bool
 	for _, d := range g.Unresolved {
-		if strings.Contains(d, "taker.init") {
+		if strings.Contains(d, "the taker package initializer") {
 			namesInitializer = true
 		}
 	}

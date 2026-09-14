@@ -207,7 +207,7 @@ func reportUnresolved(cg *callgraph.Graph) {
 	if len(cg.Unresolved) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "callgraph: %d unresolved interface dispatches (no function with a body to draw the edge from; one line can cover several sites):\n",
+	fmt.Fprintf(os.Stderr, "callgraph: %d distinct unresolved interface dispatches (no function with a body to draw the edge from; a line covering more than one site says so):\n",
 		len(cg.Unresolved))
 	const maxShown = 10
 	for i, d := range cg.Unresolved {

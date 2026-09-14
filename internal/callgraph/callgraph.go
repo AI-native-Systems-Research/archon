@@ -324,8 +324,11 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		return fmt.Errorf("addDispatchEdges: mode %s resolves no dispatch", mode)
 	}
 
-	takers := methodValueTakers(prog)
-	unresolved := map[string]bool{}
+	takers := wrapperTakers(prog)
+	// Keyed by call site, not by edge: one site offers one edge per candidate
+	// implementation, so counting edges overstates it. A value method and the
+	// pointer wrapper for it are two candidates for the same call.
+	unresolved := map[string]map[ssa.CallInstruction]bool{}
 	err := xcallgraph.GraphVisitEdges(cg, func(e *xcallgraph.Edge) error {
 		if e.Site == nil {
 			return nil
@@ -340,7 +343,10 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 			// draw it from. Worth recording when it belongs to a package we
 			// were asked about; in a dependency it is noise.
 			if d, ok := describeSite(takers, prog, asked, e, from); ok {
-				unresolved[d] = true
+				if unresolved[d] == nil {
+					unresolved[d] = map[ssa.CallInstruction]bool{}
+				}
+				unresolved[d][e.Site] = true
 			}
 			return nil
 		}
@@ -363,7 +369,12 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		}
 		return nil
 	})
-	for d := range unresolved {
+	for d, sites := range unresolved {
+		if len(sites) > 1 {
+			// One description can cover several call sites; say how many rather
+			// than letting the list undercount them.
+			d = fmt.Sprintf("%s (%d sites)", d, len(sites))
+		}
 		g.Unresolved = append(g.Unresolved, d)
 	}
 	sort.Strings(g.Unresolved)
@@ -390,30 +401,51 @@ func rtaRoots(prog *ssa.Program) []*ssa.Function {
 	return roots
 }
 
-// methodValueTakers maps each wrapper go/ssa synthesises for a method value to
-// the functions that take one.
+// wrapperTakers maps each wrapper go/ssa synthesises to the functions that
+// reference it, which is where the reader has to look when the dispatch inside
+// that wrapper cannot be attributed.
 //
-// The wrapper is the operand of a MakeClosure, so the function containing that
-// instruction took the value, by construction. Its *callers* are a different set
-// and the wrong one: under CHA a call to a function value resolves by signature,
-// so the callers include functions that contain no method value at all.
-func methodValueTakers(prog *ssa.Program) map[*ssa.Function][]*ssa.Function {
+// The reference, not the call: under CHA a call to a function value resolves by
+// signature, so the functions that *call* a wrapper include functions that
+// contain no such reference at all.
+//
+// Two kinds are referenced, in two different ways. A method value (s.Get) binds
+// a receiver, so its wrapper can only appear as the operand of a MakeClosure. A
+// method expression (Store.Get) binds nothing, so its thunk appears as a plain
+// function value anywhere an operand can.
+//
+// A promoted method — the wrapper for an embedded interface — is deliberately
+// not covered. Its wrapper holds a second copy of the invoke, but go/ssa also
+// emits one at the real call site, so that edge is in the graph and reporting it
+// would claim a loss that did not happen.
+func wrapperTakers(prog *ssa.Program) map[*ssa.Function][]*ssa.Function {
 	takers := map[*ssa.Function][]*ssa.Function{}
 	for fn := range ssautil.AllFunctions(prog) {
 		for _, b := range fn.Blocks {
 			for _, instr := range b.Instrs {
-				mc, ok := instr.(*ssa.MakeClosure)
-				if !ok {
+				if mc, ok := instr.(*ssa.MakeClosure); ok {
+					if w, ok := mc.Fn.(*ssa.Function); ok {
+						takers[w] = append(takers[w], fn)
+					}
 					continue
 				}
-				if w, ok := mc.Fn.(*ssa.Function); ok {
-					takers[w] = append(takers[w], fn)
+				for _, op := range instr.Operands(nil) {
+					if op == nil {
+						continue
+					}
+					if w, ok := (*op).(*ssa.Function); ok && isThunk(w) {
+						takers[w] = append(takers[w], fn)
+					}
 				}
 			}
 		}
 	}
 	return takers
 }
+
+// isThunk reports whether fn is the function go/ssa synthesises for a method
+// expression. The marker is the description makeThunk writes, "thunk for ...".
+func isThunk(fn *ssa.Function) bool { return strings.HasPrefix(fn.Synthetic, "thunk") }
 
 // describeSite says what was dispatched and where, and reports whether the site
 // belongs to a package that was asked for.
@@ -438,8 +470,8 @@ func describeSite(takers map[*ssa.Function][]*ssa.Function, prog *ssa.Program, a
 		}
 	}
 	if len(names) == 0 {
-		// Every taker is outside the packages asked for, so the site belongs to
-		// somebody else's code.
+		// Nothing in the packages asked for references this wrapper, so the
+		// dispatch belongs to somebody else's code.
 		return "", false
 	}
 	sorted := make([]string, 0, len(names))
@@ -447,7 +479,11 @@ func describeSite(takers map[*ssa.Function][]*ssa.Function, prog *ssa.Program, a
 		sorted = append(sorted, n)
 	}
 	sort.Strings(sorted)
-	return fmt.Sprintf("%s as a method value in %s", what, strings.Join(sorted, ", ")), true
+	kind := "as a method value"
+	if isThunk(e.Caller.Func) {
+		kind = "as a method expression"
+	}
+	return fmt.Sprintf("%s %s in %s", what, kind, strings.Join(sorted, ", ")), true
 }
 
 // takerName names the function that took a method value, when it is one of the
@@ -456,11 +492,12 @@ func takerName(fn *ssa.Function, asked map[string]bool) (string, bool) {
 	if f := declaredFunc(fn); f != nil && f.Pkg() != nil && asked[f.Pkg().Path()] {
 		return shortLabel(f), true
 	}
-	// Taken in a package-level variable initializer, which sits under a
+	// Referenced from a package-level variable initializer, which sits under a
 	// synthetic initializer with no object of its own. The package is still an
-	// answer, and a better one than dropping the site.
+	// answer, and a better one than dropping the site. Not spelled pkg.init,
+	// which would read as a declared func init.
 	if fn.Pkg != nil && asked[fn.Pkg.Pkg.Path()] {
-		return fn.Pkg.Pkg.Name() + ".init", true
+		return "the " + fn.Pkg.Pkg.Name() + " package initializer", true
 	}
 	return "", false
 }

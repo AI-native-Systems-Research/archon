@@ -23,3 +23,8 @@ func Unrelated(f func(string) []byte) { f("unrelated") }
 var held store.Store = store.Mem{}
 
 var Held = held.Get
+
+// Expr takes a method expression rather than a method value. go/ssa synthesises
+// a thunk for it, and a thunk binds no receiver, so it is referenced as a plain
+// function value rather than through a closure.
+func Expr() func(store.Store, string) []byte { return store.Store.Get }
