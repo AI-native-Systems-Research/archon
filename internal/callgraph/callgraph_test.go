@@ -91,6 +91,19 @@ func TestInterfaceCallsBecomeEdges(t *testing.T) {
 		// witness is the lower of the two names so it cannot depend on which
 		// site was visited first.
 		"app.Two -> store.Mem.Get [via store.Getter.Get]",
+		// promote.Wrap embeds the narrower store.Store and is used through the
+		// wider promote.ReadCloser, so go/ssa emits this dispatch only inside
+		// the wrapper it synthesises for the promoted method. Drawing it from
+		// the wrapper is impossible — the wrapper has no declaration — so it is
+		// drawn from whoever reaches the wrapper, and without that it is lost
+		// from the graph entirely.
+		"promote.Use -> promote.Wrap.Close [via promote.ReadCloser.Close]",
+		"promote.Use -> store.Mem.Get [via store.Store.Get]",
+		// Two levels of embedding: promote.Outer embeds the wider interface that
+		// promote.Wrap satisfies, so this dispatch is two synthesised frames
+		// away from any declaration.
+		"promote.UseNested -> promote.Outer.Extra [via promote.Wider.Extra]",
+		"promote.UseNested -> store.Mem.Get [via store.Store.Get]",
 	}
 	got := sorted(dispatchLines(cha))
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -259,7 +272,7 @@ func TestUnresolvedCallSitesArePinpointed(t *testing.T) {
 // the standard library, where it is noise. Only the packages asked for count.
 func TestUnresolvedIgnoresDependencies(t *testing.T) {
 	g := build(t, "iface", callgraph.CHA)
-	fixture := map[string]bool{"app": true, "store": true, "apply": true, "hidden": true, "taker": true}
+	fixture := map[string]bool{"app": true, "store": true, "apply": true, "hidden": true, "taker": true, "promote": true}
 	for _, d := range g.Unresolved {
 		// Every entry opens with the dispatched method, pkg.Iface.Method.
 		i := strings.Index(d, ".")

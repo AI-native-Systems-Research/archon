@@ -338,6 +338,27 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 			return nil
 		}
 		from, to := declaredFunc(e.Caller.Func), declaredFunc(e.Callee.Func)
+
+		// An embedded interface promotes its methods through a wrapper, and when
+		// the interface at the call site is wider than the embedded one, go/ssa
+		// emits the dispatch ONLY inside that wrapper. The wrapper has no
+		// declaration, so drawing the edge from it is impossible and dropping it
+		// loses a call through an interface — the thing this package exists to
+		// resolve. Draw it from whoever reaches the wrapper instead.
+		if (from == nil || !g.Defined[from]) && isPromotionWrapper(e.Caller.Func) && to != nil && g.Defined[to] {
+			promoted := false
+			for _, caller := range g.callersThroughWrappers(cg, e.Caller.Func, map[*ssa.Function]bool{}) {
+				if !g.Defined[caller] {
+					continue
+				}
+				promoted = true
+				g.witness(Edge{caller, to}, shortLabel(call.Method))
+			}
+			if promoted {
+				return nil
+			}
+		}
+
 		if from == nil || !g.Defined[from] {
 			// The call site is real but there is no function with a body to
 			// draw it from. Worth recording when it belongs to a package we
@@ -353,20 +374,7 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		if to == nil || !g.Defined[to] {
 			return nil // callee is outside the module
 		}
-		ed := Edge{from, to}
-		w := shortLabel(call.Method)
-		switch cur, ok := g.Edges[ed]; {
-		case !ok:
-			g.Edges[ed] = w
-		case cur == "":
-			// The same pair is already reached by a direct call. Leave it
-			// alone: the arrow is there either way, and calling it dispatch
-			// would hide the direct call behind a dashed edge.
-		case w < cur:
-			// Several call sites can produce one edge; take the lowest name so
-			// the witness does not depend on visit order.
-			g.Edges[ed] = w
-		}
+		g.witness(Edge{from, to}, shortLabel(call.Method))
 		return nil
 	})
 	for d, sites := range unresolved {
@@ -379,6 +387,23 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 	}
 	sort.Strings(g.Unresolved)
 	return err
+}
+
+// witness records a dispatch-resolved edge, keeping the dispatching method that
+// explains it.
+func (g *Graph) witness(ed Edge, w string) {
+	switch cur, ok := g.Edges[ed]; {
+	case !ok:
+		g.Edges[ed] = w
+	case cur == "":
+		// The same pair is already reached by a direct call. Leave it alone: the
+		// arrow is there either way, and calling it dispatch would hide the
+		// direct call behind a dashed edge.
+	case w < cur:
+		// Several call sites can produce one edge; take the lowest name so the
+		// witness does not depend on visit order.
+		g.Edges[ed] = w
+	}
 }
 
 // rtaRoots returns the entry points of every main package: both main and the
@@ -414,10 +439,9 @@ func rtaRoots(prog *ssa.Program) []*ssa.Function {
 // method expression (Store.Get) binds nothing, so its thunk appears as a plain
 // function value anywhere an operand can.
 //
-// A promoted method — the wrapper for an embedded interface — is deliberately
-// not covered. Its wrapper holds a second copy of the invoke, but go/ssa also
-// emits one at the real call site, so that edge is in the graph and reporting it
-// would claim a loss that did not happen.
+// A promoted method — the wrapper for an embedded interface — is not covered
+// here, because it is not a reference to a value: its dispatch is recovered as
+// an edge instead, drawn from whoever reaches the wrapper.
 func wrapperTakers(prog *ssa.Program) map[*ssa.Function][]*ssa.Function {
 	takers := map[*ssa.Function][]*ssa.Function{}
 	for fn := range ssautil.AllFunctions(prog) {
@@ -446,6 +470,52 @@ func wrapperTakers(prog *ssa.Program) map[*ssa.Function][]*ssa.Function {
 // isThunk reports whether fn is the function go/ssa synthesises for a method
 // expression. The marker is the description makeThunk writes, "thunk for ...".
 func isThunk(fn *ssa.Function) bool { return strings.HasPrefix(fn.Synthetic, "thunk") }
+
+// isPromotionWrapper reports whether fn is the wrapper go/ssa synthesises for a
+// method promoted from an embedded field, whose description is "wrapper for ...".
+func isPromotionWrapper(fn *ssa.Function) bool { return strings.HasPrefix(fn.Synthetic, "wrapper for") }
+
+// callersThroughWrappers returns the declared functions that reach fn, stepping
+// over any further synthesised frames on the way.
+//
+// Only invoke and static call sites are followed. A dynamic call to a function
+// value is resolved by signature, and that is not a dependency — following it is
+// what manufactures edges between unrelated packages.
+func (g *Graph) callersThroughWrappers(cg *xcallgraph.Graph, fn *ssa.Function, seen map[*ssa.Function]bool) []*types.Func {
+	if seen[fn] {
+		return nil
+	}
+	seen[fn] = true
+	node := cg.Nodes[fn]
+	if node == nil {
+		return nil
+	}
+	var out []*types.Func
+	for _, in := range node.In {
+		if in.Site == nil {
+			continue
+		}
+		// No fixture reaches a promotion wrapper through a function value, so
+		// removing this changes nothing measurable — but a dynamic call is
+		// resolved by signature, and following those is what put 327 invented
+		// edges on BLIS when the edge filter was relaxed the same way.
+		if c := in.Site.Common(); !c.IsInvoke() && c.StaticCallee() == nil {
+			continue
+		}
+		// A wrapper's own object is the interface method it promotes, which has
+		// no body — so "has a declaration" is not enough to stop here, and
+		// stopping anyway loses a dispatch promoted through two levels of
+		// embedding.
+		if f := declaredFunc(in.Caller.Func); f != nil && g.Defined[f] {
+			out = append(out, f)
+			continue
+		}
+		if isPromotionWrapper(in.Caller.Func) {
+			out = append(out, g.callersThroughWrappers(cg, in.Caller.Func, seen)...)
+		}
+	}
+	return out
+}
 
 // describeSite says what was dispatched and where, and reports whether the site
 // belongs to a package that was asked for.
