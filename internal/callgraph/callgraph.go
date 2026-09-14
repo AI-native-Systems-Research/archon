@@ -18,19 +18,20 @@
 //	        but it needs a whole program, so Build reports an error when the
 //	        pattern matches no main package.
 //
-// Only invoke-mode call sites are taken from the SSA call graph. CHA and RTA
-// also resolve a call made through a function value, and that is not dispatch:
-// having no points-to information they return every function in the program
-// whose signature matches, which manufactures edges between packages that never
-// reference each other.
+// Only invoke-mode call sites are taken from the SSA call graph. A call through
+// a function value is also resolved, and that is not dispatch: CHA returns every
+// function in the program whose signature matches, and RTA every address-taken
+// function of that signature it found reachable. Either way the result is edges
+// between packages that never reference each other.
 //
-// Two kinds of call stay out of reach. A method value (f := s.Get; f()) is
-// dispatched inside a wrapper that go/ssa synthesises, and a closure in a
-// package-level variable initializer sits under a synthetic package
-// initializer; neither has a declaration to attribute the call to. The static
-// walk does not see these either — a method value is not a call expression — so
-// the two halves agree rather than disagreeing, and Graph.Unattributed counts
-// them instead of letting them vanish quietly.
+// Two kinds of interface call stay out of reach, and Graph.Unresolved lists them
+// rather than letting them vanish. A method value (f := s.Get) is dispatched
+// inside a wrapper go/ssa synthesises, whose object is the interface method
+// itself — and an interface method has no body, so there is no implementation to
+// draw the edge from. A closure in a package-level variable initializer sits
+// under a synthetic package initializer, which has no object at all. The static
+// walk misses both as well, because in each case the callee it resolves is not a
+// function declared in the module, so the two halves agree.
 package callgraph
 
 import (
@@ -115,16 +116,20 @@ type Graph struct {
 	Pkg     map[*types.Func]string
 	Pos     map[*types.Func]Span
 	ID      map[*types.Func]string
-	Edges   map[Edge]bool
-	// Witness names the interface method dispatched at the call site that
-	// produced an edge. Only invoke-derived edges have one, so its presence
-	// also reports that an edge came from dispatch rather than a direct call.
-	Witness  map[Edge]string
+	// Edges maps a call to the interface method dispatched at the site that
+	// produced it, or to "" for a direct call. One map rather than a set plus a
+	// witness table, so an edge cannot carry a witness for an edge that is not
+	// there.
+	Edges    map[Edge]string
 	IllTyped []IllTypedPkg
-	// Unattributed counts interface call sites that were found but could not
-	// be placed, because neither endpoint traced back to a declaration. See
-	// the package doc for which calls those are.
-	Unattributed int
+	// Unresolved describes the interface call sites, in the packages that were
+	// asked for, which produced no edge because the caller could not be traced
+	// to a function with a body. Each entry names the method that was
+	// dispatched, with a position where there is one — a wrapper go/ssa
+	// synthesises has no syntax, so for a method value the wrapper's own name
+	// is the only handle. Empty in Static mode, which resolves no dispatch and
+	// so measures nothing.
+	Unresolved []string
 }
 
 // Build loads pattern from dir and returns its call graph.
@@ -141,7 +146,7 @@ func Build(dir, pattern string, mode Mode) (*Graph, error) {
 		}
 	}
 	g.IllTyped = illTyped(pkgs, noSSA)
-	g.assignIDs()
+	g.assignIDs() // last: it needs the final contents of Defined
 	return g, nil
 }
 
@@ -184,8 +189,7 @@ func staticEdges(pkgs []*packages.Package) *Graph {
 		Pkg:     map[*types.Func]string{},
 		Pos:     map[*types.Func]Span{},
 		ID:      map[*types.Func]string{},
-		Edges:   map[Edge]bool{},
-		Witness: map[Edge]string{},
+		Edges:   map[Edge]string{},
 	}
 	raw := map[Edge]bool{}
 
@@ -206,9 +210,10 @@ func staticEdges(pkgs []*packages.Package) *Graph {
 				}
 				g.Defined[obj] = true
 				g.Label[obj] = shortLabel(obj)
-				if obj.Pkg() != nil {
-					g.Pkg[obj] = obj.Pkg().Path()
-				}
+				// Unconditional: a function declared in a package that was
+				// type-checked always has one, and emitDOT's clustering relies
+				// on every function in Defined having an entry here.
+				g.Pkg[obj] = obj.Pkg().Path()
 				s := p.Fset.Position(fd.Pos())
 				e := p.Fset.Position(fd.End())
 				g.Pos[obj] = Span{s.Filename, s.Line, e.Line}
@@ -229,7 +234,7 @@ func staticEdges(pkgs []*packages.Package) *Graph {
 	// keep only edges whose callee is also in-module
 	for e := range raw {
 		if g.Defined[e.To] {
-			g.Edges[e] = true
+			g.Edges[e] = "" // a direct call has no dispatching method
 		}
 	}
 	return g
@@ -243,6 +248,11 @@ func calleeFunc(info *types.Info, fun ast.Expr) *types.Func {
 			return fn
 		}
 	case *ast.SelectorExpr:
+		// This branch is not known to be load-bearing: removing it changes no
+		// edge on the fixtures or on a 1400-edge module, because the branch
+		// below resolves the same calls. It is kept because this resolver is
+		// the pre-existing static path and this change is not the place to
+		// alter what static resolves.
 		if sel, ok := info.Selections[f]; ok {
 			if fn, ok := sel.Obj().(*types.Func); ok {
 				return fn
@@ -282,6 +292,11 @@ func shortLabel(f *types.Func) string {
 // signal than packages.IllTyped: AllPackages also skips a package that has no
 // type information at all.
 func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string, error) {
+	asked := map[string]bool{}
+	for _, p := range pkgs {
+		asked[p.PkgPath] = true
+	}
+
 	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
 
@@ -306,6 +321,7 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string,
 		return nil, fmt.Errorf("addDispatchEdges: mode %s resolves no dispatch", mode)
 	}
 
+	unresolved := map[string]bool{}
 	err := xcallgraph.GraphVisitEdges(cg, func(e *xcallgraph.Edge) error {
 		if e.Site == nil {
 			return nil
@@ -315,23 +331,31 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string,
 			return nil
 		}
 		from, to := declaredFunc(e.Caller.Func), declaredFunc(e.Callee.Func)
-		if from == nil || to == nil {
-			g.Unattributed++
+		if from == nil || !g.Defined[from] {
+			// The call site is real but there is no function with a body to
+			// draw it from. Worth recording when it is in a package we were
+			// asked about; in a dependency it is noise.
+			if asked[sitePkg(e.Caller.Func, from)] {
+				unresolved[describeSite(prog, e)] = true
+			}
 			return nil
 		}
-		if !g.Defined[from] || !g.Defined[to] {
-			return nil // out of module
+		if to == nil || !g.Defined[to] {
+			return nil // callee is outside the module
 		}
 		ed := Edge{from, to}
-		g.Edges[ed] = true
 		w := shortLabel(call.Method)
-		// Several call sites can produce one edge; take the lowest name so
-		// the witness does not depend on visit order.
-		if cur, ok := g.Witness[ed]; !ok || w < cur {
-			g.Witness[ed] = w
+		// Several call sites can produce one edge; take the lowest name so the
+		// witness does not depend on visit order.
+		if cur, ok := g.Edges[ed]; !ok || cur == "" || w < cur {
+			g.Edges[ed] = w
 		}
 		return nil
 	})
+	for d := range unresolved {
+		g.Unresolved = append(g.Unresolved, d)
+	}
+	sort.Strings(g.Unresolved)
 	return noSSA, err
 }
 
@@ -350,6 +374,30 @@ func rtaRoots(prog *ssa.Program) []*ssa.Function {
 		}
 	}
 	return roots
+}
+
+// describeSite says what was dispatched and, where SSA has one, where. A
+// synthesised wrapper carries no position, so it is named instead: the $bound
+// suffix is what a method value looks like.
+func describeSite(prog *ssa.Program, e *xcallgraph.Edge) string {
+	what := shortLabel(e.Site.Common().Method)
+	if pos := prog.Fset.Position(e.Site.Pos()); pos.IsValid() {
+		return fmt.Sprintf("%s at %s:%d", what, pos.Filename, pos.Line)
+	}
+	return fmt.Sprintf("%s in %s", what, e.Caller.Func.String())
+}
+
+// sitePkg names the package a call site belongs to, for a caller that could not
+// be traced to a declaration. A synthesised wrapper has no ssa.Package but its
+// object is the interface method, which does have one.
+func sitePkg(fn *ssa.Function, from *types.Func) string {
+	if from != nil && from.Pkg() != nil {
+		return from.Pkg().Path()
+	}
+	if fn.Pkg != nil {
+		return fn.Pkg.Pkg.Path()
+	}
+	return ""
 }
 
 // declaredFunc maps an SSA function to the declaration it belongs to. A
@@ -397,13 +445,19 @@ func illTyped(pkgs []*packages.Package, noSSA []string) []IllTypedPkg {
 			importers = append(importers, it)
 		}
 	})
-	// A package SSA refused to build that go/types did not call ill-typed has
-	// no type information at all, and nothing above would have mentioned it.
+	// Belt and braces: a package SSA refused to build that go/types did not call
+	// ill-typed would have no type information at all. No input in this repo
+	// reaches this, and it exists so that the assumption fails loudly rather
+	// than by under-reporting.
 	for _, path := range noSSA {
 		if !reported[path] {
 			causes = append(causes, IllTypedPkg{Path: path, Cause: true, Err: "no type information, so no SSA was built"})
 		}
 	}
+	// packages.Visit already walks imports in sorted order, so these sorts are
+	// not observable on any input I could construct — they are here so the
+	// report does not depend on that being true of a postorder walk over
+	// several roots.
 	sort.Slice(causes, func(i, j int) bool { return causes[i].Path < causes[j].Path })
 	sort.Slice(importers, func(i, j int) bool { return importers[i].Path < importers[j].Path })
 	return append(causes, importers...)

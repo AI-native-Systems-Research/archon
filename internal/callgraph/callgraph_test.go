@@ -26,7 +26,7 @@ func edgeLines(g *callgraph.Graph) []string {
 	var out []string
 	for _, e := range g.SortedEdges() {
 		line := fmt.Sprintf("%s -> %s", g.Label[e.From], g.Label[e.To])
-		if w := g.Witness[e]; w != "" {
+		if w := g.Edges[e]; w != "" {
 			line += " [via " + w + "]"
 		}
 		out = append(out, line)
@@ -157,19 +157,52 @@ func TestNothingLeavesTheModule(t *testing.T) {
 	}
 }
 
-// TestUnattributedCallSitesAreCounted: a method value is dispatched inside a
-// wrapper go/ssa synthesises, which has no declaration to attribute the call to,
-// so app.MethodValue produces no edge. The static walk misses it too, so the two
-// halves agree — but the graph has to say so rather than looking complete.
-func TestUnattributedCallSitesAreCounted(t *testing.T) {
+// TestUnresolvedCallSitesArePinpointed: a method value dispatches inside a
+// wrapper go/ssa synthesises whose object is the interface method, and an
+// interface method has no body, so there is no implementation to draw the edge
+// from and app.MethodValue gets no edge. The graph has to name that site rather
+// than look complete — by position, so that a count fed by unrelated dependency
+// initializers cannot stand in for it.
+func TestUnresolvedCallSitesArePinpointed(t *testing.T) {
 	g := build(t, "iface", callgraph.CHA)
+
 	for _, l := range edgeLines(g) {
 		if strings.HasPrefix(l, "app.MethodValue ->") {
-			t.Fatalf("unexpected edge %q: if this now resolves, count and doc need updating", l)
+			t.Fatalf("unexpected edge %q: if this resolves now, the docs need updating", l)
 		}
 	}
-	if g.Unattributed == 0 {
-		t.Error("the method value in app.MethodValue was dropped without being counted")
+
+	t.Logf("unresolved:\n  %s", strings.Join(g.Unresolved, "\n  "))
+	var methodValue, inInitializer bool
+	for _, d := range g.Unresolved {
+		// The method value in app.MethodValue: dispatched through Store.Get
+		// inside the bound wrapper go/ssa made for it, which has no syntax and
+		// so no position — the wrapper's name is the handle.
+		if strings.Contains(d, "store.Store.Get") && strings.Contains(d, "$bound") {
+			methodValue = true
+		}
+		// The closure in app.Registered does have syntax, so this one is
+		// reported with a file and a line.
+		if strings.Contains(d, "store.Store.Get at ") && strings.Contains(d, "app.go:") {
+			inInitializer = true
+		}
+	}
+	if !methodValue {
+		t.Errorf("the method value in app.MethodValue is missing from %v", g.Unresolved)
+	}
+	if !inInitializer {
+		t.Errorf("the closure in app.Registered is missing from %v", g.Unresolved)
+	}
+}
+
+// TestUnresolvedIgnoresDependencies: the same condition fires constantly inside
+// the standard library, where it is noise. Only the packages asked for count.
+func TestUnresolvedIgnoresDependencies(t *testing.T) {
+	g := build(t, "iface", callgraph.CHA)
+	for _, d := range g.Unresolved {
+		if !strings.Contains(d, "example.com/iface") && !strings.Contains(d, "testdata/iface") {
+			t.Errorf("site outside the packages asked for: %s", d)
+		}
 	}
 }
 
@@ -242,7 +275,8 @@ func TestRTARootsAtInitNotOnlyMain(t *testing.T) {
 }
 
 // TestRTANeedsAnEntryPoint: RTA works from the types reachable from main, so it
-// cannot analyse a library. CHA can, which is why CHA is the default.
+// cannot analyse a library. CHA can, which is why CHA is the mode that works
+// for a library.
 func TestRTANeedsAnEntryPoint(t *testing.T) {
 	_, err := callgraph.Build("testdata/iface", "./...", callgraph.RTA)
 	if err == nil {
@@ -265,18 +299,46 @@ func TestIllTypedPackagesAreReportedCausesFirst(t *testing.T) {
 	g := build(t, "illtyped", callgraph.CHA)
 	t.Logf("ill-typed: %+v", g.IllTyped)
 
-	if len(g.IllTyped) != 2 {
-		t.Fatalf("want the broken package and its importer, got %+v", g.IllTyped)
+	var got []string
+	for _, p := range g.IllTyped {
+		kind := "importer"
+		if p.Cause {
+			kind = "cause"
+		}
+		got = append(got, kind+" "+p.Path)
 	}
-	cause, importer := g.IllTyped[0], g.IllTyped[1]
-	if cause.Path != "example.com/illtyped/broken" || !cause.Cause {
-		t.Errorf("first entry should be the cause, got %+v", cause)
+	// Both causes first and sorted among themselves, then the importers.
+	want := []string{
+		"cause example.com/illtyped/broken",
+		"cause example.com/illtyped/broken2",
+		"importer example.com/illtyped/bystander",
+		"importer example.com/illtyped/importer",
 	}
-	if cause.Err == "" {
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("report order:\n got %v\nwant %v", got, want)
+	}
+	if g.IllTyped[0].Err == "" {
 		t.Error("a cause should carry the type error that explains it")
 	}
-	if importer.Path != "example.com/illtyped/importer" || importer.Cause {
-		t.Errorf("second entry should be the importer, got %+v", importer)
+}
+
+// TestIllTypedImportersAreOnlyReportedWhenAskedFor: being ill-typed is
+// transitive, so everything importing a broken package inherits it. Listing the
+// ones nobody asked about buries the package that actually has to be fixed.
+func TestIllTypedImportersAreOnlyReportedWhenAskedFor(t *testing.T) {
+	g, err := callgraph.Build("testdata/illtyped", "./importer/...", callgraph.CHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ill-typed: %+v", g.IllTyped)
+	for _, p := range g.IllTyped {
+		if p.Path == "example.com/illtyped/bystander" {
+			t.Error("bystander only inherited the problem and was not asked for, so it should not be reported")
+		}
+	}
+	// The causes are still reported, wherever they live.
+	if len(g.IllTyped) < 3 {
+		t.Errorf("want both causes and the importer asked for, got %+v", g.IllTyped)
 	}
 }
 

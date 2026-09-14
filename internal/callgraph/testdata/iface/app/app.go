@@ -5,6 +5,7 @@ package app
 
 import (
 	"fmt"
+	"io"
 
 	"example.com/iface/store"
 )
@@ -47,6 +48,17 @@ func Direct(m store.Mem) { m.Get("concrete") }
 
 // CallStoreHelper calls across packages by qualifier.
 func CallStoreHelper() int { return store.Helper() }
+
+// WriteTo dispatches through a standard-library interface, so the callees CHA
+// offers for this site include every implementation of io.Writer in the program,
+// nearly all of them outside this module.
+func WriteTo(w io.Writer) { w.Write(nil) }
+
+// Registered is a closure in a package-level variable initializer. It sits under
+// the synthetic package initializer, which has no object of its own, so the
+// interface call inside it has no declaration to be attributed to either. The
+// static walk never looks inside a variable initializer at all.
+var Registered = func(s store.Store) { s.Get("registered") }
 
 // OutOfModule calls something this module does not define. Nothing may leave the
 // module.

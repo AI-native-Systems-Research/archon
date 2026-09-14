@@ -96,7 +96,7 @@ func main() {
 		os.Exit(1)
 	}
 	reportIllTyped(cg)
-	defined, label, pkgOf, pos, edges := cg.Defined, cg.Label, cg.Pkg, cg.Pos, cg.Edges
+	defined, pos, edges := cg.Defined, cg.Pos, cg.Edges
 
 	// delta scope: which functions did <ref>..worktree touch?
 	changed := map[*types.Func]bool{}
@@ -170,12 +170,9 @@ func main() {
 	fmt.Fprintf(os.Stderr, "callgraph: %d functions in module, %d visible, %d edges [%s]\n",
 		len(defined), len(visible), nEdges, mode)
 
-	if cg.Unattributed > 0 {
-		fmt.Fprintf(os.Stderr, "callgraph: %d interface call sites had no declaration to attribute them to (method values, closures in variable initializers)\n",
-			cg.Unattributed)
-	}
+	reportUnresolved(cg)
 
-	emitDOT(cg, visible, changed, label, pkgOf, sinceRef != "", sinceRef, depth)
+	emitDOT(cg, visible, changed, cgMode, sinceRef != "", sinceRef, depth)
 }
 
 // reportIllTyped prints what callgraph.IllTypedPkg documents: a package that did
@@ -198,6 +195,24 @@ func reportIllTyped(cg *callgraph.Graph) {
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "  importer %s\n", p.Path)
+	}
+}
+
+// reportUnresolved names the interface call sites that produced no edge, with
+// their positions, so they can be looked at rather than merely counted.
+func reportUnresolved(cg *callgraph.Graph) {
+	if len(cg.Unresolved) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "callgraph: %d interface call sites produced no edge (no function with a body to draw it from):\n",
+		len(cg.Unresolved))
+	const maxShown = 10
+	for i, d := range cg.Unresolved {
+		if i == maxShown {
+			fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(cg.Unresolved)-maxShown)
+			break
+		}
+		fmt.Fprintf(os.Stderr, "  %s\n", d)
 	}
 }
 
@@ -245,9 +260,10 @@ func sameFile(abs, rel string) bool {
 func emitDOT(
 	cg *callgraph.Graph,
 	visible, changed map[*types.Func]bool,
-	label, pkgOf map[*types.Func]string,
+	mode callgraph.Mode,
 	delta bool, sinceRef string, depth int,
 ) {
+	label, pkgOf := cg.Label, cg.Pkg
 	// group visible functions by package
 	byPkg := map[string][]*types.Func{}
 	for f := range visible {
@@ -262,16 +278,20 @@ func emitDOT(
 	fmt.Println("digraph callgraph {")
 	fmt.Println("  rankdir=LR;")
 	fmt.Println(`  labelloc="t"; fontname="Helvetica-Bold"; fontsize=18;`)
+	resolved := ""
+	if mode != callgraph.Static {
+		resolved = fmt.Sprintf(", %s: interface calls resolved", mode)
+	}
 	if delta {
-		fmt.Printf("  label=\"Function call graph (delta-scoped: since %s, depth %d)   arrow: A calls B\";\n", sinceRef, depth)
+		fmt.Printf("  label=\"Function call graph (delta-scoped: since %s, depth %d%s)   arrow: A calls B\";\n", sinceRef, depth, resolved)
 	} else {
-		fmt.Println(`  label="Function call graph (full)   arrow: A calls B; boxes = packages";`)
+		fmt.Printf("  label=\"Function call graph (full%s)   arrow: A calls B; boxes = packages\";\n", resolved)
 	}
 	fmt.Println(`  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#eef3fb", color="#4a6fa5"];`)
 	fmt.Println(`  edge [color="#666666", arrowsize=0.7];`)
 
-	// Not FullName: a package's init functions all share one, and two nodes
-	// with the same DOT id are one node.
+	// Not FullName, for the reason given at callgraph.assignIDs: two nodes with
+	// the same DOT id are one node.
 	id := func(f *types.Func) string { return cg.ID[f] }
 
 	for ci, p := range pkgs {
@@ -310,7 +330,7 @@ func emitDOT(
 		if changed[e.From] || changed[e.To] {
 			attrs = append(attrs, `color="#1a7f37"`, "penwidth=1.4")
 		}
-		if w := cg.Witness[e]; w != "" {
+		if w := cg.Edges[e]; w != "" {
 			attrs = append(attrs, "style=dashed", fmt.Sprintf("tooltip=%q", "dispatched through "+w))
 		}
 		style := ""
@@ -331,6 +351,10 @@ func emitDOT(
 	} else {
 		fmt.Println(`    Lq [label="another function", fillcolor="#eef3fb", color="#4a6fa5"];`)
 		fmt.Println(`    Lp -> Lq [label="  calls", color="#666666"];`)
+	}
+	if mode != callgraph.Static {
+		fmt.Println(`    Li [label="an implementation", fillcolor="#eef3fb", color="#4a6fa5"];`)
+		fmt.Println(`    Lp -> Li [label="  calls through an interface", color="#666666", style=dashed];`)
 	}
 	fmt.Println(`  }`)
 	fmt.Println("}")
