@@ -123,13 +123,13 @@ type Graph struct {
 	// there.
 	Edges    map[Edge]string
 	IllTyped []IllTypedPkg
-	// Unresolved describes the interface call sites, in the packages that were
+	// Unresolved describes the interface dispatches, in the packages that were
 	// asked for, which produced no edge because the caller could not be traced
-	// to a function with a body. Each entry names the method that was
-	// dispatched, with a position where there is one — a wrapper go/ssa
-	// synthesises has no syntax, so for a method value the wrapper's own name
-	// is the only handle. Empty in Static mode, which resolves no dispatch and
-	// so measures nothing.
+	// to a function with a body. Each entry names the method dispatched and
+	// where to look: a position when the call site has syntax, and otherwise the
+	// functions that took the method value. Entries are deduplicated, so there
+	// can be more sites than entries. Empty in Static mode, which resolves no
+	// dispatch and so measures nothing.
 	Unresolved []string
 }
 
@@ -303,9 +303,10 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		asked[p.PkgPath] = true
 	}
 
-	// The second return says which packages got no SSA package. It is
-	// discarded because ssautil skips exactly the packages with no type
-	// information or an ill-typed one, and illTyped already reports those.
+	// The second return says which of the initial packages got no SSA package.
+	// It is discarded because ssautil skips an initial package only when it has
+	// no type information or is ill-typed, and illTyped already reports every
+	// one of those as a cause or as an importer that was asked for.
 	prog, _ := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
 
@@ -323,6 +324,7 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		return fmt.Errorf("addDispatchEdges: mode %s resolves no dispatch", mode)
 	}
 
+	takers := methodValueTakers(prog)
 	unresolved := map[string]bool{}
 	err := xcallgraph.GraphVisitEdges(cg, func(e *xcallgraph.Edge) error {
 		if e.Site == nil {
@@ -337,7 +339,7 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 			// The call site is real but there is no function with a body to
 			// draw it from. Worth recording when it belongs to a package we
 			// were asked about; in a dependency it is noise.
-			if d, ok := describeSite(cg, prog, asked, e, from); ok {
+			if d, ok := describeSite(takers, prog, asked, e, from); ok {
 				unresolved[d] = true
 			}
 			return nil
@@ -388,15 +390,40 @@ func rtaRoots(prog *ssa.Program) []*ssa.Function {
 	return roots
 }
 
+// methodValueTakers maps each wrapper go/ssa synthesises for a method value to
+// the functions that take one.
+//
+// The wrapper is the operand of a MakeClosure, so the function containing that
+// instruction took the value, by construction. Its *callers* are a different set
+// and the wrong one: under CHA a call to a function value resolves by signature,
+// so the callers include functions that contain no method value at all.
+func methodValueTakers(prog *ssa.Program) map[*ssa.Function][]*ssa.Function {
+	takers := map[*ssa.Function][]*ssa.Function{}
+	for fn := range ssautil.AllFunctions(prog) {
+		for _, b := range fn.Blocks {
+			for _, instr := range b.Instrs {
+				mc, ok := instr.(*ssa.MakeClosure)
+				if !ok {
+					continue
+				}
+				if w, ok := mc.Fn.(*ssa.Function); ok {
+					takers[w] = append(takers[w], fn)
+				}
+			}
+		}
+	}
+	return takers
+}
+
 // describeSite says what was dispatched and where, and reports whether the site
 // belongs to a package that was asked for.
 //
 // A wrapper go/ssa synthesises for a method value has neither syntax nor a
 // package of its own, and its object is the interface method — so the interface's
 // package is the wrong thing to attribute it to, being where the interface is
-// declared rather than where the method value was taken. Those are named by the
-// functions that take them, which is what the reader has to go and look at.
-func describeSite(cg *xcallgraph.Graph, prog *ssa.Program, asked map[string]bool, e *xcallgraph.Edge, from *types.Func) (string, bool) {
+// declared and not where the value was taken. Those sites are named by the
+// functions that take them.
+func describeSite(takers map[*ssa.Function][]*ssa.Function, prog *ssa.Program, asked map[string]bool, e *xcallgraph.Edge, from *types.Func) (string, bool) {
 	what := shortLabel(e.Site.Common().Method)
 	if pos := prog.Fset.Position(e.Site.Pos()); pos.IsValid() {
 		if !asked[sitePkg(e.Caller.Func, from)] {
@@ -404,25 +431,38 @@ func describeSite(cg *xcallgraph.Graph, prog *ssa.Program, asked map[string]bool
 		}
 		return fmt.Sprintf("%s at %s:%d", what, pos.Filename, pos.Line), true
 	}
-	takers := map[string]bool{}
-	if n := cg.Nodes[e.Caller.Func]; n != nil {
-		for _, in := range n.In {
-			taker := declaredFunc(in.Caller.Func)
-			if taker == nil || taker.Pkg() == nil || !asked[taker.Pkg().Path()] {
-				continue
-			}
-			takers[shortLabel(taker)] = true
+	names := map[string]bool{}
+	for _, taker := range takers[e.Caller.Func] {
+		if n, ok := takerName(taker, asked); ok {
+			names[n] = true
 		}
 	}
-	if len(takers) == 0 {
+	if len(names) == 0 {
+		// Every taker is outside the packages asked for, so the site belongs to
+		// somebody else's code.
 		return "", false
 	}
-	names := make([]string, 0, len(takers))
-	for n := range takers {
-		names = append(names, n)
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
 	}
-	sort.Strings(names)
-	return fmt.Sprintf("%s as a method value in %s", what, strings.Join(names, ", ")), true
+	sort.Strings(sorted)
+	return fmt.Sprintf("%s as a method value in %s", what, strings.Join(sorted, ", ")), true
+}
+
+// takerName names the function that took a method value, when it is one of the
+// packages asked for.
+func takerName(fn *ssa.Function, asked map[string]bool) (string, bool) {
+	if f := declaredFunc(fn); f != nil && f.Pkg() != nil && asked[f.Pkg().Path()] {
+		return shortLabel(f), true
+	}
+	// Taken in a package-level variable initializer, which sits under a
+	// synthetic initializer with no object of its own. The package is still an
+	// answer, and a better one than dropping the site.
+	if fn.Pkg != nil && asked[fn.Pkg.Pkg.Path()] {
+		return fn.Pkg.Pkg.Name() + ".init", true
+	}
+	return "", false
 }
 
 // sitePkg names the package a call site with syntax belongs to.

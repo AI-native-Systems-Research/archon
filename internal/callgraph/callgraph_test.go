@@ -75,6 +75,7 @@ func TestInterfaceCallsBecomeEdges(t *testing.T) {
 		"app.CallStoreHelper -> store.Helper",
 		"app.Direct -> store.Mem.Get",
 		"app.Mixed -> store.Mem.Get",
+		"taker.Invoke -> taker.Take",
 	}
 	if got, want := sorted(edgeLines(static)), wantStatic; strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("static edges:\n got %v\nwant %v", got, want)
@@ -205,13 +206,46 @@ func TestUnresolvedCallSitesArePinpointed(t *testing.T) {
 	if !inInitializer {
 		t.Errorf("the closure in app.Registered is missing from %v", g.Unresolved)
 	}
+
+	// The taker, not the caller. taker.Take creates the method value;
+	// taker.Invoke only calls it and taker.Unrelated merely shares its
+	// signature, and under CHA a call to a function value resolves by
+	// signature — so attributing the site to the wrapper's callers names
+	// functions that contain no method value at all.
+	var namesTaker bool
+	for _, d := range g.Unresolved {
+		if d == "store.Store.Get as a method value in taker.Take" {
+			namesTaker = true
+		}
+		for _, notATaker := range []string{"taker.Invoke", "taker.Unrelated"} {
+			if strings.Contains(d, notATaker) {
+				t.Errorf("%s takes no method value, but %q says it does", notATaker, d)
+			}
+		}
+	}
+	if !namesTaker {
+		t.Errorf("taker.Take takes the method value but is not named in %v", g.Unresolved)
+	}
+
+	// taker.Held is taken in a variable initializer, so the function that takes
+	// it is the synthetic package initializer and the package is all there is
+	// to name. Naming it still beats dropping the site.
+	var namesInitializer bool
+	for _, d := range g.Unresolved {
+		if strings.Contains(d, "taker.init") {
+			namesInitializer = true
+		}
+	}
+	if !namesInitializer {
+		t.Errorf("the method value in taker's variable initializer is missing from %v", g.Unresolved)
+	}
 }
 
 // TestUnresolvedIgnoresDependencies: the same condition fires constantly inside
 // the standard library, where it is noise. Only the packages asked for count.
 func TestUnresolvedIgnoresDependencies(t *testing.T) {
 	g := build(t, "iface", callgraph.CHA)
-	fixture := map[string]bool{"app": true, "store": true, "apply": true, "hidden": true}
+	fixture := map[string]bool{"app": true, "store": true, "apply": true, "hidden": true, "taker": true}
 	for _, d := range g.Unresolved {
 		// Every entry opens with the dispatched method, pkg.Iface.Method.
 		i := strings.Index(d, ".")

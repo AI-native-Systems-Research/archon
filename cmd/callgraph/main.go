@@ -170,6 +170,9 @@ func main() {
 	fmt.Fprintf(os.Stderr, "callgraph: %d functions in module, %d visible, %d edges [%s]\n",
 		len(defined), len(visible), nEdges, mode)
 
+	if cgMode == callgraph.Static {
+		fmt.Fprintln(os.Stderr, "callgraph: static mode: calls through an interface are dropped; --mode=cha resolves them")
+	}
 	reportUnresolved(cg)
 
 	emitDOT(cg, visible, changed, cgMode, sinceRef != "", sinceRef, depth)
@@ -204,7 +207,7 @@ func reportUnresolved(cg *callgraph.Graph) {
 	if len(cg.Unresolved) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "callgraph: %d interface call sites produced no edge (no function with a body to draw it from):\n",
+	fmt.Fprintf(os.Stderr, "callgraph: %d unresolved interface dispatches (no function with a body to draw the edge from; one line can cover several sites):\n",
 		len(cg.Unresolved))
 	const maxShown = 10
 	for i, d := range cg.Unresolved {
