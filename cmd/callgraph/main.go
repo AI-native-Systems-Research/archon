@@ -4,6 +4,7 @@
 //
 //	full          every in-module function, clustered by package.
 //	delta-scoped  pass --since <ref>; the tool diffs <ref> against the working
+//	              tree (tracked files only — a brand-new untracked file is not seen)
 //	              tree, marks the functions whose bodies overlap changed lines,
 //	              and draws only those plus their callers/callees out to --depth
 //	              hops (default 1). Changed functions are highlighted.
@@ -34,6 +35,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -57,24 +59,46 @@ func main() {
 	sinceRef := ""
 	modeStr := "static"
 	depth := 1
+	// Anything unrecognised is an error. Ignoring it silently means "-mode=cha" or a
+	// value-less "--mode" analyses in static mode and reports a graph as if it were
+	// the one asked for, which is the failure this whole command is about.
+	fail := func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+		os.Exit(2)
+	}
+	needValue := func(i int, flag string) string {
+		if i+1 >= len(os.Args) {
+			fail("%s needs a value", flag)
+		}
+		return os.Args[i+1]
+	}
+	atoi := func(s, flag string) int {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			fail("%s: %q is not a number", flag, s)
+		}
+		return n
+	}
 	for i := 3; i < len(os.Args); i++ {
 		a := os.Args[i]
 		switch {
-		case a == "--since" && i+1 < len(os.Args):
-			sinceRef = os.Args[i+1]
+		case a == "--since":
+			sinceRef = needValue(i, a)
 			i++
 		case strings.HasPrefix(a, "--since="):
 			sinceRef = strings.TrimPrefix(a, "--since=")
-		case a == "--depth" && i+1 < len(os.Args):
-			depth, _ = strconv.Atoi(os.Args[i+1])
+		case a == "--depth":
+			depth = atoi(needValue(i, a), a)
 			i++
 		case strings.HasPrefix(a, "--depth="):
-			depth, _ = strconv.Atoi(strings.TrimPrefix(a, "--depth="))
-		case a == "--mode" && i+1 < len(os.Args):
-			modeStr = os.Args[i+1]
+			depth = atoi(strings.TrimPrefix(a, "--depth="), "--depth")
+		case a == "--mode":
+			modeStr = needValue(i, a)
 			i++
 		case strings.HasPrefix(a, "--mode="):
 			modeStr = strings.TrimPrefix(a, "--mode=")
+		default:
+			fail("unknown argument %q (want --mode, --since or --depth)", a)
 		}
 	}
 
@@ -95,9 +119,14 @@ func main() {
 		if mode != callgraph.Static {
 			fmt.Fprintf(os.Stderr, "  go/ssa builds nothing for those, so mode=%s sees no call sites "+
 				"and no implementers in them: the graph below is INCOMPLETE.\n", mode)
+		} else {
+			fmt.Fprintln(os.Stderr, "  calls to their undefined symbols are missing from the graph below.")
 		}
+		// Own errors first: packages.IllTyped is transitive, so most entries are
+		// merely importers of a broken package. Truncating without ordering can hide
+		// every package that actually has an error.
 		for i, e := range g.IllTyped {
-			if i == 5 {
+			if i == 8 {
 				fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(g.IllTyped)-i)
 				break
 			}
@@ -113,9 +142,20 @@ func main() {
 	// delta scope: which functions did <ref>..worktree touch?
 	changed := map[string]bool{}
 	if sinceRef != "" {
-		ranges := gitChangedRanges(dir, sinceRef)
+		ranges, ok := gitChangedRanges(dir, sinceRef)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "cannot compute the delta for --since %s; refusing to emit "+
+				"an empty graph as if nothing changed\n", sinceRef)
+			os.Exit(1)
+		}
+		resolved := map[string]string{}
 		for _, f := range g.Funcs {
-			ivs, ok := ranges[resolve(f.File)]
+			r, seen := resolved[f.File]
+			if !seen {
+				r = resolve(f.File)
+				resolved[f.File] = r
+			}
+			ivs, ok := ranges[r]
 			if !ok {
 				continue
 			}
@@ -190,18 +230,31 @@ func main() {
 // and matching those against a declaration's absolute path by suffix is wrong:
 // "other/p/x.go" ends with "p/x.go", so a hunk in one would mark functions in the
 // other as changed. Joining to the repo root makes the comparison exact.
-func gitChangedRanges(dir, ref string) map[string][]iv {
+func gitChangedRanges(dir, ref string) (map[string][]iv, bool) {
 	out := map[string][]iv{}
 	root := gitTopLevel(dir)
 	if root == "" {
 		fmt.Fprintln(os.Stderr, "not a git repository:", dir)
-		return out
+		return out, false
 	}
-	cmd := exec.Command("git", "-C", dir, "diff", "--unified=0", ref, "--", "*.go")
+	// Every flag here neutralises a config setting that would otherwise change the
+	// path format and silently yield a zero-change delta:
+	//   diff.relative       -> paths relative to dir, not the repo root (--no-relative)
+	//   diff.mnemonicprefix  -> "w/" instead of "b/"      (--dst-prefix)
+	//   diff.noprefix        -> no prefix at all          (--dst-prefix)
+	//   core.quotePath       -> non-ASCII escaped as \303\251 and the path quoted
+	cmd := exec.Command("git", "-C", dir, "-c", "core.quotePath=false", "diff",
+		"--unified=0", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", ref, "--", "*.go")
 	b, err := cmd.Output()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "git diff failed:", err)
-		return out
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			// git's own diagnosis ("unknown revision") is the useful part.
+			fmt.Fprintf(os.Stderr, "git diff failed: %v: %s\n", err, strings.TrimSpace(string(ee.Stderr)))
+		} else {
+			fmt.Fprintln(os.Stderr, "git diff failed:", err)
+		}
+		return out, false
 	}
 	hunk := regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 	sc := bufio.NewScanner(bytes.NewReader(b))
@@ -211,6 +264,8 @@ func gitChangedRanges(dir, ref string) map[string][]iv {
 		line := sc.Text()
 		if strings.HasPrefix(line, "+++ ") {
 			p := strings.TrimPrefix(line, "+++ ")
+			// git appends a literal TAB when the path contains a space.
+			p = strings.TrimSuffix(p, "\t")
 			p = strings.TrimPrefix(p, "b/")
 			cur = p
 			continue
@@ -231,7 +286,7 @@ func gitChangedRanges(dir, ref string) map[string][]iv {
 			out[key] = append(out[key], iv{start, start + cnt - 1})
 		}
 	}
-	return out
+	return out, true
 }
 
 // resolve normalizes a path for comparison. Symlinks are evaluated because a

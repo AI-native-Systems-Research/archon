@@ -211,6 +211,7 @@ func declaredFuncs(pkgs []*packages.Package) (map[*types.Func]string, []Func) {
 		obj  *types.Func
 		fn   Func
 		base string
+		col  int // start column: the only thing separating two decls on one line
 	}
 	var decls []decl
 	for _, p := range pkgs {
@@ -236,6 +237,7 @@ func declaredFuncs(pkgs []*packages.Package) (map[*types.Func]string, []Func) {
 				decls = append(decls, decl{
 					obj:  obj,
 					base: obj.FullName(),
+					col:  start.Column,
 					fn: Func{
 						Label: shortLabel(obj),
 						Pkg:   pkgPath,
@@ -269,10 +271,10 @@ func declaredFuncs(pkgs []*packages.Package) (map[*types.Func]string, []Func) {
 		if decls[i].fn.Lo != decls[j].fn.Lo {
 			return decls[i].fn.Lo < decls[j].fn.Lo
 		}
-		// `func init(){}; func init(){}` on one line is legal and ties everything
-		// above. sort.Slice is unstable, so break it on the end line to keep the
-		// numbering guaranteed rather than incidental.
-		return decls[i].fn.Hi < decls[j].fn.Hi
+		// `func init(){}; func init(){}` on one line is legal, and ties Lo AND Hi —
+		// both declarations start and end on that line. Column is what separates
+		// them, so sort.Slice being unstable no longer matters.
+		return decls[i].col < decls[j].col
 	})
 	count := map[string]int{}
 	for _, d := range decls {
