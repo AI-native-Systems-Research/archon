@@ -84,9 +84,11 @@ func ParseMode(s string) (Mode, error) {
 
 // Func is one in-module function that has a body.
 type Func struct {
-	// ID is types.Func.FullName(): stable across runs and unique, so it works as
-	// both a map key and a DOT node id.
-	ID    string // discriminated when FullName() repeats, e.g. "pkg.init#2"
+	// ID identifies the function: types.Func.FullName(), plus a "#N" suffix when
+	// that name repeats in a package (every func init() renders the same). Stable
+	// across runs, so it serves as both a map key and a DOT node id. "#" cannot
+	// occur in a Go identifier, so a suffixed id can never collide with a real name.
+	ID    string
 	Label string // pkg.Recv.Method, for display
 	Pkg   string
 	File  string
@@ -110,6 +112,14 @@ type Graph struct {
 	Mode  Mode
 	Funcs []Func
 	Edges []Edge
+
+	// IllTyped names matched packages that did not type-check, with the first
+	// error for each. They are the reason a graph can be quietly incomplete: SSA
+	// builds nothing for such a package, so in CHA or RTA mode it contributes no
+	// call sites and none of its types count as implementers — while the AST walk
+	// still lists its functions as nodes. The result looks complete. Callers must
+	// surface this; Build will not pretend the graph is whole.
+	IllTyped []string
 }
 
 // Build loads the module at dir matching pattern and returns its call graph.
@@ -127,6 +137,8 @@ func Build(dir, pattern string, mode Mode) (*Graph, error) {
 		return nil, fmt.Errorf("no packages matched %q in %s", pattern, dir)
 	}
 
+	illTyped := illTypedPackages(pkgs)
+
 	ids, funcs := declaredFuncs(pkgs)
 	// No error when a matched package has no function bodies: the original emitted
 	// a valid empty graph and exited 0, and callers rely on that.
@@ -137,7 +149,7 @@ func Build(dir, pattern string, mode Mode) (*Graph, error) {
 	}
 
 	if mode != Static {
-		iface, err := interfaceEdges(pkgs, ids, edges, mode)
+		iface, err := interfaceEdges(pkgs, ids, edges, illTyped, mode)
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +161,7 @@ func Build(dir, pattern string, mode Mode) (*Graph, error) {
 		}
 	}
 
-	g := &Graph{Mode: mode, Funcs: funcs}
+	g := &Graph{Mode: mode, Funcs: funcs, IllTyped: illTyped}
 	for e := range edges {
 		g.Edges = append(g.Edges, e)
 	}
@@ -170,6 +182,24 @@ func (g *Graph) sort() {
 		}
 		return g.Edges[i].Via < g.Edges[j].Via
 	})
+}
+
+// illTypedPackages lists matched packages that failed to type-check, each with its
+// first error. Sorted, since packages.Load order is not part of the contract.
+func illTypedPackages(pkgs []*packages.Package) []string {
+	var out []string
+	for _, p := range pkgs {
+		if !p.IllTyped && len(p.Errors) == 0 {
+			continue
+		}
+		msg := "did not type-check"
+		if len(p.Errors) > 0 {
+			msg = p.Errors[0].Msg
+		}
+		out = append(out, fmt.Sprintf("%s: %s", p.PkgPath, msg))
+	}
+	sort.Strings(out)
+	return out
 }
 
 // declaredFuncs finds every function with a body in the root packages. Those are
@@ -222,7 +252,13 @@ func declaredFuncs(pkgs []*packages.Package) (map[*types.Func]string, []Func) {
 	// as "pkg/path.init", and so does every func _(). Collapsing them would keep
 	// one declaration's position and discard the rest, which silently empties the
 	// --since view for any package that registers things in two init functions.
-	// Sort first so the discriminator is a function of the source, not map order.
+	//
+	// The sort makes the numbering an explicit function of (name, file, line). It
+	// is not load-bearing today — decls are collected into a slice in traversal
+	// order, and packages.Load already yields files alphabetically, so the two
+	// orders coincide and no fixture can tell them apart. It is here so the ids,
+	// which are DOT node names and --since keys, do not silently renumber if that
+	// undocumented loader ordering ever changes.
 	sort.Slice(decls, func(i, j int) bool {
 		if decls[i].base != decls[j].base {
 			return decls[i].base < decls[j].base
@@ -230,7 +266,13 @@ func declaredFuncs(pkgs []*packages.Package) (map[*types.Func]string, []Func) {
 		if decls[i].fn.File != decls[j].fn.File {
 			return decls[i].fn.File < decls[j].fn.File
 		}
-		return decls[i].fn.Lo < decls[j].fn.Lo
+		if decls[i].fn.Lo != decls[j].fn.Lo {
+			return decls[i].fn.Lo < decls[j].fn.Lo
+		}
+		// `func init(){}; func init(){}` on one line is legal and ties everything
+		// above. sort.Slice is unstable, so break it on the end line to keep the
+		// numbering guaranteed rather than incidental.
+		return decls[i].fn.Hi < decls[j].fn.Hi
 	})
 	count := map[string]int{}
 	for _, d := range decls {
@@ -301,7 +343,9 @@ func staticEdges(pkgs []*packages.Package, ids map[*types.Func]string) map[Edge]
 // but those are already covered by the static walk, and importing SSA's view of
 // them wholesale would drag in synthetic wrappers and init functions that no
 // reader recognises.
-func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, static map[Edge]bool, mode Mode) (map[Edge]bool, error) {
+// staticSeen is read-only: it is consulted so a dispatched edge is not added for a
+// pair already recorded as a direct call.
+func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, staticSeen map[Edge]bool, illTyped []string, mode Mode) (map[Edge]bool, error) {
 	prog, _ := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
 
@@ -324,6 +368,13 @@ func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, static
 			}
 		}
 		if len(roots) == 0 {
+			// An ill-typed main package has no SSA package either, so it is
+			// indistinguishable here from not existing. Saying "none found" and
+			// suggesting cha would be doubly wrong, since cha is equally blind to it.
+			if len(illTyped) > 0 {
+				return nil, fmt.Errorf("mode rta found no main package, and %d matched package(s) "+
+					"did not type-check so no SSA was built for them (first: %s)", len(illTyped), illTyped[0])
+			}
 			return nil, fmt.Errorf("mode rta needs a main package; none found (use cha for a library)")
 		}
 		cg = rta.Analyze(roots, true).CallGraph
@@ -343,7 +394,7 @@ func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, static
 		}
 		// Already recorded as a direct call: adding the dispatched variant would
 		// draw a second arrow between the same pair and double-count the edge.
-		if static[Edge{From: from, To: to}] {
+		if staticSeen[Edge{From: from, To: to}] {
 			return nil
 		}
 		via := ""
@@ -368,9 +419,13 @@ func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, static
 // already attributes direct calls inside literals to the enclosing FuncDecl. The
 // two halves have to agree.
 //
-// Synthetic thunks and wrappers have no parent, so they still resolve to nil and
-// stay out of the graph. Object() already yields the declaration for a generic
-// instantiation; verified on BLIS that an extra Origin() walk changes nothing.
+// Wrappers and bound thunks do NOT reach the walk at all: go/ssa sets their
+// object to the declared method, so Object() is non-nil. What keeps them out is
+// that ids holds only declarations with a body, so an interface-method wrapper
+// resolves to a body-less method and is dropped. A wrapper for a promoted concrete
+// method does resolve, to the embedded declaration, which is the useful answer.
+// Object() already yields the declaration for a generic instantiation; verified on
+// BLIS that an extra Origin() walk changes nothing.
 func declaredFunc(fn *ssa.Function) *types.Func {
 	for fn != nil {
 		if tf, ok := fn.Object().(*types.Func); ok && tf != nil {

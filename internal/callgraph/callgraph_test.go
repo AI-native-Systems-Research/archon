@@ -438,29 +438,75 @@ func B() {}
 	}
 }
 
-// IDs must be a function of the source, not of map iteration order.
-func TestDuplicateIDsAreAssignedDeterministically(t *testing.T) {
-	files := map[string]string{
+// Pins the numbering contract: which id lands on which declaration. Note this
+// cannot distinguish sorted order from traversal order — packages.Load yields files
+// alphabetically, so they coincide, and disabling the sort leaves this green. What
+// it does protect is the contract itself, since these ids are DOT node names and
+// --since keys: if numbering ever changed, every stored graph would renumber.
+func TestDuplicateIDNumberingFollowsFileAndLine(t *testing.T) {
+	// m.go's init sits on a later line than the others, so the expectation below
+	// pins line position as well as file order.
+	g := buildModule(t, Static, map[string]string{
 		"go.mod": "module example.com/cg\n\ngo 1.26\n",
 		"p/a.go": "package p\n\nfunc init() {}\n",
-		"p/b.go": "package p\n\nfunc init() {}\n",
-		"p/c.go": "package p\n\nfunc init() {}\n",
-	}
-	a := buildModule(t, Static, files)
-	b := buildModule(t, Static, files)
-	if len(a.Funcs) != len(b.Funcs) {
-		t.Fatalf("func counts differ: %d vs %d", len(a.Funcs), len(b.Funcs))
-	}
-	for i := range a.Funcs {
-		// Compare the basename: each build runs in its own temp dir, so absolute
-		// paths necessarily differ. What must be stable is which id maps to which
-		// source file.
-		if a.Funcs[i].ID != b.Funcs[i].ID ||
-			filepath.Base(a.Funcs[i].File) != filepath.Base(b.Funcs[i].File) {
-			t.Errorf("func %d differs between builds: %s@%s vs %s@%s", i,
-				a.Funcs[i].ID, filepath.Base(a.Funcs[i].File),
-				b.Funcs[i].ID, filepath.Base(b.Funcs[i].File))
+		"p/m.go": "package p\n\n// pad\n// pad\nfunc init() {}\n",
+		"p/z.go": "package p\n\nfunc init() {}\n",
+	})
+
+	got := map[string]string{} // id -> "basename:line"
+	for _, f := range g.Funcs {
+		if strings.Contains(f.ID, ".init") {
+			got[f.ID] = fmt.Sprintf("%s:%d", filepath.Base(f.File), f.Lo)
 		}
+	}
+	want := map[string]string{
+		"example.com/cg/p.init#1": "a.go:3",
+		"example.com/cg/p.init#2": "m.go:5",
+		"example.com/cg/p.init#3": "z.go:3",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d init ids, want %d: %+v", len(got), len(want), got)
+	}
+	for id, pos := range want {
+		if got[id] != pos {
+			t.Errorf("%s is at %q, want %q — numbering does not follow (file, line): %+v",
+				id, got[id], pos, got)
+		}
+	}
+}
+
+// An ill-typed package means go/ssa builds nothing for it, so CHA and RTA see no
+// call sites and no implementers in it while the AST walk still lists its
+// functions. Build must report that rather than return a quietly deflated graph.
+func TestIllTypedPackagesAreReported(t *testing.T) {
+	files := ifaceModule()
+	files["broken/broken.go"] = "package broken\n\nfunc B() { thisDoesNotExist() }\n"
+
+	dir := t.TempDir()
+	for name, src := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g, err := Build(dir, "./...", CHA)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(g.IllTyped) == 0 {
+		t.Fatalf("an ill-typed package was not reported; the graph would look complete")
+	}
+	found := false
+	for _, e := range g.IllTyped {
+		if strings.Contains(e, "broken") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("IllTyped does not name the broken package: %+v", g.IllTyped)
 	}
 }
 

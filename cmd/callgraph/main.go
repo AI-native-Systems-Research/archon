@@ -90,6 +90,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	if len(g.IllTyped) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: %d matched package(s) did not type-check.\n", len(g.IllTyped))
+		if mode != callgraph.Static {
+			fmt.Fprintf(os.Stderr, "  go/ssa builds nothing for those, so mode=%s sees no call sites "+
+				"and no implementers in them: the graph below is INCOMPLETE.\n", mode)
+		}
+		for i, e := range g.IllTyped {
+			if i == 5 {
+				fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(g.IllTyped)-i)
+				break
+			}
+			fmt.Fprintf(os.Stderr, "  %s\n", e)
+		}
+	}
+
 	byID := make(map[string]callgraph.Func, len(g.Funcs))
 	for _, f := range g.Funcs {
 		byID[f.ID] = f
@@ -100,14 +115,13 @@ func main() {
 	if sinceRef != "" {
 		ranges := gitChangedRanges(dir, sinceRef)
 		for _, f := range g.Funcs {
-			for file, ivs := range ranges {
-				if !sameFile(f.File, file) {
-					continue
-				}
-				for _, r := range ivs {
-					if f.Lo <= r.hi && r.lo <= f.Hi {
-						changed[f.ID] = true
-					}
+			ivs, ok := ranges[resolve(f.File)]
+			if !ok {
+				continue
+			}
+			for _, r := range ivs {
+				if f.Lo <= r.hi && r.lo <= f.Hi {
+					changed[f.ID] = true
 				}
 			}
 		}
@@ -169,10 +183,20 @@ func main() {
 	emitDOT(g, byID, visible, changed, sinceRef != "", sinceRef, depth)
 }
 
-// gitChangedRanges diffs ref against the working tree and returns, per file
-// (repo-relative path), the new-side line intervals that changed.
+// gitChangedRanges diffs ref against the working tree and returns, per ABSOLUTE
+// file path, the new-side line intervals that changed.
+//
+// Keys are absolute on purpose. git reports paths relative to the repository root,
+// and matching those against a declaration's absolute path by suffix is wrong:
+// "other/p/x.go" ends with "p/x.go", so a hunk in one would mark functions in the
+// other as changed. Joining to the repo root makes the comparison exact.
 func gitChangedRanges(dir, ref string) map[string][]iv {
 	out := map[string][]iv{}
+	root := gitTopLevel(dir)
+	if root == "" {
+		fmt.Fprintln(os.Stderr, "not a git repository:", dir)
+		return out
+	}
 	cmd := exec.Command("git", "-C", dir, "diff", "--unified=0", ref, "--", "*.go")
 	b, err := cmd.Output()
 	if err != nil {
@@ -200,14 +224,34 @@ func gitChangedRanges(dir, ref string) map[string][]iv {
 			if cnt == 0 {
 				cnt = 1
 			}
-			out[cur] = append(out[cur], iv{start, start + cnt - 1})
+			if cur == "" {
+				continue
+			}
+			key := resolve(filepath.Join(root, cur))
+			out[key] = append(out[key], iv{start, start + cnt - 1})
 		}
 	}
 	return out
 }
 
-func sameFile(abs, rel string) bool {
-	return strings.HasSuffix(filepath.ToSlash(abs), filepath.ToSlash(rel))
+// resolve normalizes a path for comparison. Symlinks are evaluated because a
+// module can sit under a symlinked root — /var vs /private/var on macOS — and git
+// and go/token then report the same file by different names.
+func resolve(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.ToSlash(r)
+	}
+	return filepath.ToSlash(filepath.Clean(p))
+}
+
+// gitTopLevel returns the absolute root of the repository containing dir, which is
+// what git reports diff paths relative to. Empty when dir is not in a repository.
+func gitTopLevel(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return resolve(strings.TrimSpace(string(out)))
 }
 
 func emitDOT(

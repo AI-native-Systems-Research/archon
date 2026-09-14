@@ -241,6 +241,20 @@ can follow: on BLIS, a Cobra CLI whose `main` is just `cmd.Execute()`, every com
 is a func value RTA cannot see through and it finds **one** edge. Never rely on it
 alone.
 
+**Check the warnings.** `go/ssa` builds nothing for a package that does not
+type-check, so in `cha` or `rta` mode such a package contributes no call sites and
+none of its types count as implementers — while its functions still appear as nodes.
+The graph would look complete, so the tool says so explicitly:
+
+```
+warning: 3 matched package(s) did not type-check.
+  go/ssa builds nothing for those, so mode=cha sees no call sites and no
+  implementers in them: the graph below is INCOMPLETE.
+```
+
+Any edge count from a tree with that warning is a floor, not a measurement. The
+figures above are from a checkout with zero ill-typed packages.
+
 These are **leaf** edges and are deliberately not folded into the package-level
 diagram. A caller reaching an implementation through an interface does not depend on
 it — that is what the interface is for — so drawing a package arrow would erase the
