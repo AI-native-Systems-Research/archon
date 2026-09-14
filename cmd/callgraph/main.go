@@ -77,6 +77,11 @@ func main() {
 			i++
 		case strings.HasPrefix(a, "--mode="):
 			modeArg = strings.TrimPrefix(a, "--mode=")
+		case strings.HasPrefix(a, "--mode"):
+			// Falling through here would silently give static, which is the
+			// graph with the interface calls missing.
+			fmt.Fprintf(os.Stderr, "bad flag %q: --mode takes a value, one of static, cha or rta\n", a)
+			os.Exit(2)
 		}
 	}
 	cgMode, err := callgraph.ParseMode(modeArg)
@@ -159,23 +164,29 @@ func main() {
 	if sinceRef != "" {
 		mode = fmt.Sprintf("delta since %s (%d changed fn, depth %d)", sinceRef, len(changed), depth)
 	}
+	if cgMode != callgraph.Static {
+		mode += ", " + cgMode.String()
+	}
 	fmt.Fprintf(os.Stderr, "callgraph: %d functions in module, %d visible, %d edges [%s]\n",
 		len(defined), len(visible), nEdges, mode)
+
+	if cg.Unattributed > 0 {
+		fmt.Fprintf(os.Stderr, "callgraph: %d interface call sites had no declaration to attribute them to (method values, closures in variable initializers)\n",
+			cg.Unattributed)
+	}
 
 	emitDOT(cg, visible, changed, label, pkgOf, sinceRef != "", sinceRef, depth)
 }
 
-// reportIllTyped warns about packages go/types could not fully check. It gets a
-// warning of its own because go/ssa builds no code for such a package: cha and
-// rta then see none of its call sites and none of the implementations it
-// declares, while its functions still appear as nodes, so the graph looks
-// complete. Causes come first — being ill-typed is transitive, so one broken
-// package is reported again by everything that imports it.
+// reportIllTyped prints what callgraph.IllTypedPkg documents: a package that did
+// not type-check contributes nodes but not all of its edges, so the graph looks
+// complete when it is not. Causes are listed before importers, so truncating the
+// list cannot hide the package that has to be fixed.
 func reportIllTyped(cg *callgraph.Graph) {
 	if len(cg.IllTyped) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "callgraph: %d ill-typed packages; edges within them are missing:\n", len(cg.IllTyped))
+	fmt.Fprintf(os.Stderr, "callgraph: %d packages did not type-check; calls inside them are missing:\n", len(cg.IllTyped))
 	const maxShown = 20
 	for i, p := range cg.IllTyped {
 		if i == maxShown {
@@ -288,8 +299,9 @@ func emitDOT(
 		fmt.Println("  }")
 	}
 
-	// SortedEdges, not the edge map: map order is not stable, and this output
-	// is compared byte for byte.
+	// SortedEdges, not the edge map: map order is not stable, so without this two
+	// runs on identical input differ everywhere and a real change cannot be
+	// spotted in the diff.
 	for _, e := range cg.SortedEdges() {
 		if !visible[e.From] || !visible[e.To] {
 			continue

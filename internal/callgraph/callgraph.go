@@ -9,18 +9,28 @@
 //	        interface method, and it has no body — are dropped.
 //	CHA     the static edges plus, for every interface call site, an edge to
 //	        each in-module method that could satisfy it. Class Hierarchy
-//	        Analysis computes the whole implements relation up front, which
-//	        makes it sound on partial programs: it needs no main, so it is
-//	        the mode that works for a library package.
+//	        Analysis assumes conservatively that every concrete type is put
+//	        into every interface it satisfies, which is what makes it sound on
+//	        a partial program: it needs no main, so it is the mode that works
+//	        for a library package.
 //	RTA     the static edges plus interface call sites resolved from the types
 //	        actually reachable from the entry points. More precise than CHA
 //	        but it needs a whole program, so Build reports an error when the
 //	        pattern matches no main package.
 //
-// Only invoke-mode call sites are taken from SSA. SSA also resolves calls made
-// through a function value, and those are not dispatch: it attributes them to
-// whatever function the value points at, which manufactures edges between
-// packages that never reference each other.
+// Only invoke-mode call sites are taken from the SSA call graph. CHA and RTA
+// also resolve a call made through a function value, and that is not dispatch:
+// having no points-to information they return every function in the program
+// whose signature matches, which manufactures edges between packages that never
+// reference each other.
+//
+// Two kinds of call stay out of reach. A method value (f := s.Get; f()) is
+// dispatched inside a wrapper that go/ssa synthesises, and a closure in a
+// package-level variable initializer sits under a synthetic package
+// initializer; neither has a declaration to attribute the call to. The static
+// walk does not see these either — a method value is not a call expression — so
+// the two halves agree rather than disagreeing, and Graph.Unattributed counts
+// them instead of letting them vanish quietly.
 package callgraph
 
 import (
@@ -82,8 +92,9 @@ type Edge struct{ From, To *types.Func }
 
 // IllTypedPkg is a package go/types could not fully check. It matters beyond
 // the usual "results may be incomplete": go/ssa builds no code at all for such
-// a package, so CHA and RTA see none of its call sites and none of the
-// implementations it declares, while its functions still appear as nodes.
+// a package (ssautil skips it), so CHA and RTA see none of its call sites and
+// none of the implementations it declares. If it is one of the packages asked
+// for, its functions still appear as nodes and the graph looks complete.
 type IllTypedPkg struct {
 	Path string
 	// Cause is true when this package has errors of its own. When it is
@@ -96,10 +107,8 @@ type IllTypedPkg struct {
 
 // Graph is a call graph over the functions of one module.
 //
-// Functions are identified by *types.Func. Use ID for anything that has to
-// name a function in output: types.Func.FullName is not unique — every
-// func init() in a package renders identically — so ID appends a discriminator
-// where it must to keep distinct functions distinct.
+// Functions are identified by *types.Func. Use ID for anything that has to name
+// a function in output, for the reason given at assignIDs.
 type Graph struct {
 	Defined map[*types.Func]bool // in-module functions we have a body for
 	Label   map[*types.Func]string
@@ -112,43 +121,56 @@ type Graph struct {
 	// also reports that an edge came from dispatch rather than a direct call.
 	Witness  map[Edge]string
 	IllTyped []IllTypedPkg
+	// Unattributed counts interface call sites that were found but could not
+	// be placed, because neither endpoint traced back to a declaration. See
+	// the package doc for which calls those are.
+	Unattributed int
 }
 
 // Build loads pattern from dir and returns its call graph.
 func Build(dir, pattern string, mode Mode) (*Graph, error) {
-	pkgs, err := load(dir, pattern, mode)
+	pkgs, err := load(dir, pattern)
 	if err != nil {
 		return nil, err
 	}
 	g := staticEdges(pkgs)
-	g.IllTyped = illTyped(pkgs)
+	var noSSA []string
 	if mode != Static {
-		if err := g.addDispatchEdges(pkgs, mode); err != nil {
+		if noSSA, err = g.addDispatchEdges(pkgs, mode); err != nil {
 			return nil, err
 		}
 	}
+	g.IllTyped = illTyped(pkgs, noSSA)
 	g.assignIDs()
 	return g, nil
 }
 
-// loadMode is the packages.Load mode of the static AST walk.
+// loadMode is the same for every builder: NeedDeps already brings the syntax and
+// type information of the dependencies, which is what ssautil.AllPackages needs
+// on top of what the AST walk needs.
 const loadMode = packages.NeedName | packages.NeedTypes | packages.NeedSyntax |
 	packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports |
 	packages.NeedFiles
 
-func load(dir, pattern string, mode Mode) ([]*packages.Package, error) {
-	m := loadMode
-	if mode != Static {
-		// ssautil.AllPackages needs the syntax and type info of every
-		// dependency, not just of the matched packages.
-		m |= packages.NeedCompiledGoFiles
-	}
-	pkgs, err := packages.Load(&packages.Config{Mode: m, Dir: dir}, pattern)
+func load(dir, pattern string) ([]*packages.Package, error) {
+	pkgs, err := packages.Load(&packages.Config{Mode: loadMode, Dir: dir}, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("load: %w", err)
 	}
-	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("no packages matched %s", pattern)
+	// A pattern that matches nothing does not come back as an empty slice: it
+	// comes back as one synthetic package carrying the go/list error. Without
+	// this the caller gets a valid, empty graph and a zero exit status.
+	syntax := 0
+	for _, p := range pkgs {
+		syntax += len(p.Syntax)
+	}
+	if syntax == 0 {
+		for _, p := range pkgs {
+			if len(p.Errors) > 0 {
+				return nil, fmt.Errorf("no Go packages matched: %s", p.Errors[0].Msg)
+			}
+		}
+		return nil, fmt.Errorf("no Go packages matched %s", pattern)
 	}
 	return pkgs, nil
 }
@@ -256,9 +278,19 @@ func shortLabel(f *types.Func) string {
 
 // addDispatchEdges adds an edge for every interface call site whose caller and
 // possible callee are both in-module.
-func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
-	prog, _ := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
+// It returns the paths of the packages SSA could not build, which is a stronger
+// signal than packages.IllTyped: AllPackages also skips a package that has no
+// type information at all.
+func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) ([]string, error) {
+	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
+
+	var noSSA []string
+	for i, sp := range ssaPkgs {
+		if sp == nil {
+			noSSA = append(noSSA, pkgs[i].PkgPath)
+		}
+	}
 
 	var cg *xcallgraph.Graph
 	switch mode {
@@ -267,14 +299,14 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 	case RTA:
 		roots := rtaRoots(prog)
 		if len(roots) == 0 {
-			return fmt.Errorf("mode=rta needs an entry point: no main package among the matched packages; use mode=cha for a library")
+			return nil, fmt.Errorf("mode=rta needs an entry point: no main package among the matched packages; use mode=cha for a library")
 		}
 		cg = rta.Analyze(roots, true).CallGraph
 	default:
-		return fmt.Errorf("addDispatchEdges: mode %s resolves no dispatch", mode)
+		return nil, fmt.Errorf("addDispatchEdges: mode %s resolves no dispatch", mode)
 	}
 
-	return xcallgraph.GraphVisitEdges(cg, func(e *xcallgraph.Edge) error {
+	err := xcallgraph.GraphVisitEdges(cg, func(e *xcallgraph.Edge) error {
 		if e.Site == nil {
 			return nil
 		}
@@ -283,8 +315,12 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 			return nil
 		}
 		from, to := declaredFunc(e.Caller.Func), declaredFunc(e.Callee.Func)
-		if from == nil || to == nil || !g.Defined[from] || !g.Defined[to] {
+		if from == nil || to == nil {
+			g.Unattributed++
 			return nil
+		}
+		if !g.Defined[from] || !g.Defined[to] {
+			return nil // out of module
 		}
 		ed := Edge{from, to}
 		g.Edges[ed] = true
@@ -296,6 +332,7 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		}
 		return nil
 	})
+	return noSSA, err
 }
 
 // rtaRoots returns the entry points of every main package: both main and the
@@ -329,32 +366,55 @@ func declaredFunc(fn *ssa.Function) *types.Func {
 	return nil
 }
 
-// illTyped reports the packages go/types could not fully check, causes first.
-func illTyped(pkgs []*packages.Package) []IllTypedPkg {
+// illTyped reports the packages go/types could not fully check, causes first. A
+// cause is reported wherever it is, including in a dependency, because that is
+// the package someone can fix. An importer is only reported when it is one of
+// the packages asked for: naming every dependency that merely inherited the
+// problem buries the one that caused it.
+func illTyped(pkgs []*packages.Package, noSSA []string) []IllTypedPkg {
+	asked := map[string]bool{}
+	for _, p := range pkgs {
+		asked[p.PkgPath] = true
+	}
+	reported := map[string]bool{}
 	var causes, importers []IllTypedPkg
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		if !p.IllTyped {
 			return
 		}
+		reported[p.PkgPath] = true
 		it := IllTypedPkg{Path: p.PkgPath}
 		if len(p.Errors) > 0 {
 			it.Cause = true
-			it.Err = p.Errors[0].Error()
+			it.Err = p.Errors[0].Msg
+			if n := len(p.Errors) - 1; n > 0 {
+				it.Err += fmt.Sprintf(" (and %d more)", n)
+			}
 			causes = append(causes, it)
 			return
 		}
-		importers = append(importers, it)
+		if asked[p.PkgPath] {
+			importers = append(importers, it)
+		}
 	})
+	// A package SSA refused to build that go/types did not call ill-typed has
+	// no type information at all, and nothing above would have mentioned it.
+	for _, path := range noSSA {
+		if !reported[path] {
+			causes = append(causes, IllTypedPkg{Path: path, Cause: true, Err: "no type information, so no SSA was built"})
+		}
+	}
 	sort.Slice(causes, func(i, j int) bool { return causes[i].Path < causes[j].Path })
 	sort.Slice(importers, func(i, j int) bool { return importers[i].Path < importers[j].Path })
 	return append(causes, importers...)
 }
 
 // assignIDs gives every function a name that is unique within the graph.
-// types.Func.FullName is not: a package's init functions all render as
-// <pkg>.init, and collapsing them would merge unrelated functions into one
-// node. Only colliding names get the #N suffix, so every other ID is the
-// FullName the graph has always used.
+// types.Func.FullName is not: every func init() in a package renders as
+// <pkg>.init, as does every func _(), and merging them into one node would
+// discard their positions and so empty any position-based selection. Only
+// colliding names get the #N suffix, ordered by position, so every other ID is
+// the FullName the graph has always used.
 func (g *Graph) assignIDs() {
 	byName := map[string][]*types.Func{}
 	for f := range g.Defined {
@@ -379,7 +439,9 @@ func (g *Graph) assignIDs() {
 }
 
 // SortedEdges returns the edges in a deterministic order. callgraph.Graph and
-// the edge set are both map-backed, so anything emitting them must sort first.
+// the edge set are both map-backed, so without this two runs on identical input
+// produce the same graph in a different order and every diff between them is
+// noise.
 func (g *Graph) SortedEdges() []Edge {
 	out := make([]Edge, 0, len(g.Edges))
 	for e := range g.Edges {

@@ -65,6 +65,19 @@ func TestInterfaceCallsBecomeEdges(t *testing.T) {
 	if got := dispatchLines(static); len(got) != 0 {
 		t.Errorf("static mode resolved dispatch, it must not: %v", got)
 	}
+	// Static mode is the behaviour this refactor has to preserve, so assert what
+	// it produces and not merely what it lacks. app.UseBox -> app.Box.Fill is
+	// absent because go/types resolves the call to the method of the
+	// instantiated Box[int], which is not the declared function — that is how
+	// the walk has always behaved and this change does not touch it.
+	wantStatic := []string{
+		"app.CallHelper -> app.Helper",
+		"app.CallStoreHelper -> store.Helper",
+		"app.Direct -> store.Mem.Get",
+	}
+	if got, want := sorted(edgeLines(static)), wantStatic; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("static edges:\n got %v\nwant %v", got, want)
+	}
 
 	want := []string{
 		"app.Box.Fill -> store.Mem.Get [via store.Store.Get]",
@@ -72,6 +85,10 @@ func TestInterfaceCallsBecomeEdges(t *testing.T) {
 		"app.InDefer -> store.Mem.Get [via store.Store.Get]",
 		"app.InGo -> store.Mem.Get [via store.Store.Get]",
 		"app.Serve -> store.Mem.Get [via store.Store.Get]",
+		// Two call sites, through two interfaces, produce this one edge. The
+		// witness is the lower of the two names so it cannot depend on which
+		// site was visited first.
+		"app.Two -> store.Mem.Get [via store.Getter.Get]",
 	}
 	got := sorted(dispatchLines(cha))
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -94,6 +111,9 @@ func TestCHAKeepsEveryStaticEdge(t *testing.T) {
 			t.Errorf("cha lost a static edge: %s", l)
 		}
 	}
+	if len(edgeLines(static)) == 0 {
+		t.Fatal("no static edges, so this test would pass on an empty graph")
+	}
 	if len(edgeLines(cha)) <= len(edgeLines(static)) {
 		t.Errorf("cha added nothing: static %d edges, cha %d", len(edgeLines(static)), len(edgeLines(cha)))
 	}
@@ -111,6 +131,45 @@ func TestFuncValueCallIsNotDispatch(t *testing.T) {
 		if strings.HasPrefix(l, "apply.Apply ->") || strings.Contains(l, "hidden.Squirrel") {
 			t.Errorf("edge through a function value: %s", l)
 		}
+	}
+}
+
+// TestNothingLeavesTheModule: CHA returns edges into the standard library and
+// every dependency, and a call graph of the module has no business showing them.
+// app.OutOfModule calls fmt.Sprint.
+func TestNothingLeavesTheModule(t *testing.T) {
+	for _, mode := range []callgraph.Mode{callgraph.Static, callgraph.CHA} {
+		g := build(t, "iface", mode)
+		for f := range g.Defined {
+			if !strings.HasPrefix(g.Pkg[f], "example.com/iface") {
+				t.Errorf("mode %s: %s is not in the module", mode, g.Pkg[f])
+			}
+		}
+		// Check the endpoints, not the rendered line: a function outside the
+		// module has no label, so an edge to it renders as "caller -> " and a
+		// check on the text cannot see it.
+		for _, e := range g.SortedEdges() {
+			if !g.Defined[e.From] || !g.Defined[e.To] {
+				t.Errorf("mode %s: edge with an endpoint outside the module: %q -> %q",
+					mode, g.ID[e.From], g.ID[e.To])
+			}
+		}
+	}
+}
+
+// TestUnattributedCallSitesAreCounted: a method value is dispatched inside a
+// wrapper go/ssa synthesises, which has no declaration to attribute the call to,
+// so app.MethodValue produces no edge. The static walk misses it too, so the two
+// halves agree — but the graph has to say so rather than looking complete.
+func TestUnattributedCallSitesAreCounted(t *testing.T) {
+	g := build(t, "iface", callgraph.CHA)
+	for _, l := range edgeLines(g) {
+		if strings.HasPrefix(l, "app.MethodValue ->") {
+			t.Fatalf("unexpected edge %q: if this now resolves, count and doc need updating", l)
+		}
+	}
+	if g.Unattributed == 0 {
+		t.Error("the method value in app.MethodValue was dropped without being counted")
 	}
 }
 
@@ -133,6 +192,18 @@ func TestNodeIDsSurviveIdenticalFullNames(t *testing.T) {
 	want := []string{"example.com/iface/store.init#1", "example.com/iface/store.init#2"}
 	if strings.Join(inits, ",") != strings.Join(want, ",") {
 		t.Errorf("ids of the two initializers: got %v, want %v", inits, want)
+	}
+
+	// Which one is #1 has to be stable too: these ids identify nodes across
+	// runs, so if they swap, every diff of the output lies.
+	byID := map[string]int{}
+	for f, id := range g.ID {
+		if f.Name() == "init" && g.Pkg[f] == "example.com/iface/store" {
+			byID[id] = g.Pos[f].Lo
+		}
+	}
+	if byID["example.com/iface/store.init#1"] >= byID["example.com/iface/store.init#2"] {
+		t.Errorf("#1 should be the initializer declared first, got lines %v", byID)
 	}
 	for id, n := range seen {
 		if n > 1 {
@@ -206,6 +277,16 @@ func TestIllTypedPackagesAreReportedCausesFirst(t *testing.T) {
 	}
 	if importer.Path != "example.com/illtyped/importer" || importer.Cause {
 		t.Errorf("second entry should be the importer, got %+v", importer)
+	}
+}
+
+// TestPatternMatchingNothingIsAnError: packages.Load answers a pattern that
+// matches nothing with one synthetic package rather than an empty slice, so
+// without a check the caller gets an empty graph and a success.
+func TestPatternMatchingNothingIsAnError(t *testing.T) {
+	g, err := callgraph.Build("testdata/iface", "./nosuchpackage/...", callgraph.CHA)
+	if err == nil {
+		t.Fatalf("want an error, got a graph with %d functions", len(g.Defined))
 	}
 }
 
