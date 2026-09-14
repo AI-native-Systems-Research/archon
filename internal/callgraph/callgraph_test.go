@@ -1,6 +1,7 @@
 package callgraph
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -249,8 +250,27 @@ func TestBuildIsDeterministic(t *testing.T) {
 	}
 }
 
+// Uses a generated fixture with many edges on purpose: the small interface
+// fixture has only 4, so an unsorted slice has a real chance of landing in order
+// by luck and the assertion passes while proving nothing.
 func TestEdgesAndFuncsAreSorted(t *testing.T) {
-	g := buildModule(t, CHA, ifaceModule())
+	src := "package big\n\n"
+	for i := 0; i < 24; i++ {
+		src += fmt.Sprintf("func F%02d() {", i)
+		for j := 0; j < 24; j++ {
+			if j != i {
+				src += fmt.Sprintf(" F%02d();", j)
+			}
+		}
+		src += " }\n"
+	}
+	g := buildModule(t, Static, map[string]string{
+		"go.mod":     "module example.com/big\n\ngo 1.26\n",
+		"big/big.go": src,
+	})
+	if len(g.Edges) < 100 {
+		t.Fatalf("fixture produced only %d edges; too few for this to mean anything", len(g.Edges))
+	}
 
 	for i := 1; i < len(g.Funcs); i++ {
 		if g.Funcs[i-1].ID > g.Funcs[i].ID {
@@ -301,29 +321,38 @@ func Run(xs []string) string {
 	}
 }
 
-// SSA builds synthetic thunks for method values, named like (*T).M$bound. Mapping
-// back to the declaration keeps them out of the graph.
-func TestMethodValuesDoNotLeakSyntheticNames(t *testing.T) {
-	g := buildModule(t, CHA, map[string]string{
-		"go.mod": "module example.com/cg\n\ngo 1.26\n",
-		"a/a.go": `package a
+// An interface call inside a function literal must be attributed to the enclosing
+// declaration. Closures, goroutine and defer bodies have no SSA Object() of their
+// own, so without walking to the parent these edges vanish — and the static AST
+// walk already attributes direct calls inside literals to the enclosing FuncDecl,
+// so the two halves would disagree. This is the most common real shape there is.
+func TestInterfaceCallInsideFunctionLiteralIsAttributed(t *testing.T) {
+	files := ifaceModule()
+	files["lit/lit.go"] = `package lit
 
-type T struct{}
+import "example.com/cg/store"
 
-func (t *T) M() int { return 1 }
-
-func Use() func() int {
-	t := &T{}
-	return t.M // a method value: SSA builds a $bound thunk
+func InClosure(s store.Store) func() string {
+	return func() string { return s.Get("c") }
 }
-`,
-	})
 
-	for _, f := range g.Funcs {
-		if strings.Contains(f.ID, "$") || strings.Contains(f.Label, "$") {
-			t.Errorf("synthetic SSA name leaked into the graph: %+v", f)
+func InGoroutine(s store.Store) {
+	go func() { _ = s.Get("g") }()
+}
+
+func InDefer(s store.Store) {
+	defer func() { _ = s.Get("d") }()
+}
+`
+	g := buildModule(t, CHA, files)
+
+	for _, fn := range []string{"lit.InClosure", "lit.InGoroutine", "lit.InDefer"} {
+		if !hasEdge(g, fn, "mem.Store).Get", "Get") {
+			t.Errorf("%s: interface call inside a function literal was dropped; edges = %+v",
+				fn, edgesFrom(g, fn))
 		}
 	}
+	// And no synthetic SSA name may reach the graph.
 	for _, e := range g.Edges {
 		if strings.Contains(e.From, "$") || strings.Contains(e.To, "$") {
 			t.Errorf("synthetic SSA name leaked into an edge: %+v", e)
@@ -331,40 +360,139 @@ func Use() func() int {
 	}
 }
 
-// A generic function is instantiated per type argument in SSA; Origin maps the
-// instantiations back to the one declaration.
-func TestGenericsMapBackToDeclaration(t *testing.T) {
+// A generic function calling a constrained method dispatches through an interface,
+// so it must produce an edge. The previous version of this test only exercised the
+// static path and would have passed with interfaceEdges deleted entirely.
+func TestGenericConstrainedMethodCallIsResolved(t *testing.T) {
 	g := buildModule(t, CHA, map[string]string{
 		"go.mod": "module example.com/cg\n\ngo 1.26\n",
-		"a/a.go": `package a
+		"cons/cons.go": `package cons
 
-func Map[T any](xs []T, f func(T) T) []T {
-	out := make([]T, 0, len(xs))
-	for _, x := range xs {
-		out = append(out, f(x))
+type Getter interface{ Get() string }
+`,
+		"impl/impl.go": `package impl
+
+type T struct{}
+
+func (T) Get() string { return "t" }
+`,
+		"api/api.go": `package api
+
+import "example.com/cg/cons"
+
+func Serve[G cons.Getter](g G) string { return g.Get() }
+`,
+	})
+
+	if !hasEdge(g, "api.Serve", "impl.T).Get", "Get") {
+		t.Errorf("call to a constrained method was not resolved; edges = %+v", g.Edges)
 	}
-	return out
+	// The declaration, not a per-instantiation clone.
+	for _, f := range g.Funcs {
+		if strings.Contains(f.ID, "[") {
+			t.Errorf("a generic instantiation leaked instead of the declaration: %+v", f)
+		}
+	}
 }
 
-func Ints() []int    { return Map([]int{1}, func(i int) int { return i }) }
-func Strs() []string { return Map([]string{"a"}, func(s string) string { return s }) }
+// types.Func.FullName() is not unique: every func init() in a package renders the
+// same. Collapsing them keeps one declaration's position and discards the rest,
+// which silently empties the --since view. Reproduced as a regression against the
+// original, which keyed by *types.Func and was immune.
+func TestDuplicateFullNamesGetDistinctIDs(t *testing.T) {
+	g := buildModule(t, Static, map[string]string{
+		"go.mod": "module example.com/cg\n\ngo 1.26\n",
+		"p/a.go": `package p
+
+func init() { A() }
+
+func A() {}
+`,
+		"p/b.go": `package p
+
+func init() { B() }
+
+func B() {}
+`,
+	})
+
+	var inits []Func
+	for _, f := range g.Funcs {
+		if strings.Contains(f.ID, ".init") {
+			inits = append(inits, f)
+		}
+	}
+	if len(inits) != 2 {
+		t.Fatalf("got %d init entries, want 2 (one per declaration): %+v", len(inits), g.Funcs)
+	}
+	if inits[0].ID == inits[1].ID {
+		t.Errorf("both inits share the id %q, so one position was discarded", inits[0].ID)
+	}
+	// Each must keep its OWN file, or --since cannot match a diff hunk to it.
+	if inits[0].File == inits[1].File {
+		t.Errorf("both inits report file %q; positions were collapsed", inits[0].File)
+	}
+	// Both call edges must survive, keyed to the right init.
+	if !hasEdge(g, "p.init#1", "p.A", "") || !hasEdge(g, "p.init#2", "p.B", "") {
+		t.Errorf("init call edges lost or mis-attributed: %+v", g.Edges)
+	}
+}
+
+// IDs must be a function of the source, not of map iteration order.
+func TestDuplicateIDsAreAssignedDeterministically(t *testing.T) {
+	files := map[string]string{
+		"go.mod": "module example.com/cg\n\ngo 1.26\n",
+		"p/a.go": "package p\n\nfunc init() {}\n",
+		"p/b.go": "package p\n\nfunc init() {}\n",
+		"p/c.go": "package p\n\nfunc init() {}\n",
+	}
+	a := buildModule(t, Static, files)
+	b := buildModule(t, Static, files)
+	if len(a.Funcs) != len(b.Funcs) {
+		t.Fatalf("func counts differ: %d vs %d", len(a.Funcs), len(b.Funcs))
+	}
+	for i := range a.Funcs {
+		// Compare the basename: each build runs in its own temp dir, so absolute
+		// paths necessarily differ. What must be stable is which id maps to which
+		// source file.
+		if a.Funcs[i].ID != b.Funcs[i].ID ||
+			filepath.Base(a.Funcs[i].File) != filepath.Base(b.Funcs[i].File) {
+			t.Errorf("func %d differs between builds: %s@%s vs %s@%s", i,
+				a.Funcs[i].ID, filepath.Base(a.Funcs[i].File),
+				b.Funcs[i].ID, filepath.Base(b.Funcs[i].File))
+		}
+	}
+}
+
+// A pair reached both directly and through an interface must yield ONE edge, or
+// Graphviz draws two arrows between the same nodes and the edge count inflates.
+func TestDirectAndDispatchedCallDoNotDuplicate(t *testing.T) {
+	g := buildModule(t, CHA, map[string]string{
+		"go.mod": "module example.com/cg\n\ngo 1.26\n",
+		"p/p.go": `package p
+
+type Getter interface{ Get() string }
+
+type T struct{}
+
+func (t *T) Get() string { return "t" }
+
+func Caller(t *T, g Getter) string { return t.Get() + g.Get() }
 `,
 	})
 
 	n := 0
-	for _, f := range g.Funcs {
-		if strings.HasSuffix(f.ID, "a.Map") {
+	for _, e := range g.Edges {
+		if strings.HasSuffix(e.From, "p.Caller") && strings.HasSuffix(e.To, "p.T).Get") {
 			n++
-		}
-		if strings.Contains(f.ID, "[") {
-			t.Errorf("an instantiation leaked instead of the declaration: %+v", f)
 		}
 	}
 	if n != 1 {
-		t.Errorf("found %d entries for a.Map, want exactly 1 declaration", n)
+		t.Errorf("got %d edges Caller -> T.Get, want 1: %+v", n, g.Edges)
 	}
 }
 
+// --- RTA ---
 // --- RTA ---
 
 // RTA needs an entry point. A library has none, and silently falling back to a
@@ -403,6 +531,59 @@ func TestRTAPrunesUninstantiatedImplementer(t *testing.T) {
 	}
 }
 
+// RTA must root at init as well as main. A type instantiated in a package-level
+// var or in func init — the registry pattern behind database/sql, prometheus and
+// cobra — is otherwise never reachable and RTA prunes every edge to it.
+func TestRTARootsIncludePackageInit(t *testing.T) {
+	files := map[string]string{
+		"go.mod": "module example.com/cg\n\ngo 1.26\n",
+		"store/store.go": `package store
+
+type Getter interface{ Get() string }
+
+var Registry []Getter
+
+func Register(g Getter) { Registry = append(Registry, g) }
+`,
+		"impl/impl.go": `package impl
+
+import "example.com/cg/store"
+
+type T struct{}
+
+func (T) Get() string { return "t" }
+
+func init() { store.Register(T{}) }
+`,
+		"api/api.go": `package api
+
+import "example.com/cg/store"
+
+func ServeAll() string {
+	out := ""
+	for _, g := range store.Registry {
+		out += g.Get()
+	}
+	return out
+}
+`,
+		"main.go": `package main
+
+import (
+	"example.com/cg/api"
+	_ "example.com/cg/impl"
+)
+
+func main() { println(api.ServeAll()) }
+`,
+	}
+	g := buildModule(t, RTA, files)
+
+	if !hasEdge(g, "api.ServeAll", "impl.T).Get", "Get") {
+		t.Errorf("rta pruned an implementer registered in init; edges = %+v", g.Edges)
+	}
+}
+
 // --- Modes and errors ---
 
 func TestParseMode(t *testing.T) {
@@ -426,14 +607,27 @@ func TestModeString(t *testing.T) {
 	}
 }
 
-func TestBuildErrorsOnNoMatch(t *testing.T) {
+// A package that exists but declares no function bodies yields an empty graph
+// rather than an error: the original command emitted a valid empty DOT and exited
+// 0. (No package matching the pattern at all is still an error, as before.)
+func TestBuildOnPackageWithNoFunctionsIsNotAnError(t *testing.T) {
+	g := buildModule(t, Static, map[string]string{
+		"go.mod": "module example.com/empty\n\ngo 1.26\n",
+		"p/p.go": "package p\n\ntype T struct{ A int }\n",
+	})
+	if len(g.Funcs) != 0 || len(g.Edges) != 0 {
+		t.Errorf("expected an empty graph, got %d funcs / %d edges", len(g.Funcs), len(g.Edges))
+	}
+}
+
+func TestBuildErrorsWhenNoPackageMatches(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module example.com/empty\n\ngo 1.26\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Build(dir, "./...", Static); err == nil {
-		t.Error("Build on a module with no Go files succeeded; want an error")
+		t.Error("Build with no matching package succeeded; want an error, as before")
 	}
 }
 

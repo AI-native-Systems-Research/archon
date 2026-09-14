@@ -13,7 +13,9 @@
 //	--mode=static  (default) a call is an edge only when the callee is a concrete
 //	               in-module function. Calls through an interface are dropped.
 //	--mode=cha     also resolves an interface call to every in-module implementer.
-//	               Sound without a main, so it works on libraries. ~1.5x the edges.
+//	               Sound without a main, so it works on libraries. Cost depends on
+//	               how much the module dispatches dynamically: 1.28x on BLIS, no
+//	               extra edges on archon itself.
 //	--mode=rta     prunes implementers never instantiated on a reachable path.
 //	               Needs a main, and finds almost nothing when dispatch goes
 //	               through a framework (a Cobra CLI yields one edge).
@@ -127,10 +129,19 @@ func main() {
 		for d := 0; d < depth; d++ {
 			next := map[string]bool{}
 			for f := range frontier {
-				for _, g := range append(adjOut[f], adjIn[f]...) {
-					if !visible[g] {
-						visible[g] = true
-						next[g] = true
+				// Two loops rather than append(adjOut[f], adjIn[f]...): that writes
+				// into adjOut[f]'s spare capacity, and shadowing g here would hide
+				// the graph.
+				for _, nb := range adjOut[f] {
+					if !visible[nb] {
+						visible[nb] = true
+						next[nb] = true
+					}
+				}
+				for _, nb := range adjIn[f] {
+					if !visible[nb] {
+						visible[nb] = true
+						next[nb] = true
 					}
 				}
 			}
@@ -232,7 +243,14 @@ func emitDOT(
 
 	for ci, p := range pkgs {
 		nodes := byPkg[p]
-		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Label < nodes[j].Label })
+		// ID, not Label, breaks the tie: two func init() declarations share the
+		// label "p.init", and leaving them tied means map iteration order decides.
+		sort.Slice(nodes, func(i, j int) bool {
+			if nodes[i].Label != nodes[j].Label {
+				return nodes[i].Label < nodes[j].Label
+			}
+			return nodes[i].ID < nodes[j].ID
+		})
 		short := p
 		if idx := strings.LastIndex(p, "/"); idx >= 0 {
 			short = p[idx+1:]

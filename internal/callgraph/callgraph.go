@@ -40,8 +40,10 @@ const (
 	//
 	// CHA is the right default because it is sound on partial programs — archon
 	// must analyse library packages that have no main at all. It over-approximates:
-	// an implementer that is never actually wired up still gets an edge. Measured
-	// cost is about 1.5x the static edge count on both archon and BLIS.
+	// an implementer that is never actually wired up still gets an edge. Cost
+	// depends entirely on how much the module dispatches dynamically — measured at
+	// 1.28x the static edge count on BLIS, and no extra edges at all on archon
+	// itself, whose non-test code barely uses interfaces.
 	CHA
 
 	// RTA (rapid type analysis) prunes implementers whose type is never
@@ -84,30 +86,30 @@ func ParseMode(s string) (Mode, error) {
 type Func struct {
 	// ID is types.Func.FullName(): stable across runs and unique, so it works as
 	// both a map key and a DOT node id.
-	ID    string `json:"id"`
-	Label string `json:"label"` // pkg.Recv.Method, for display
-	Pkg   string `json:"pkg"`
-	File  string `json:"file"`
-	Lo    int    `json:"lo"` // first line of the declaration
-	Hi    int    `json:"hi"` // last line
+	ID    string // discriminated when FullName() repeats, e.g. "pkg.init#2"
+	Label string // pkg.Recv.Method, for display
+	Pkg   string
+	File  string
+	Lo    int // first line of the declaration
+	Hi    int // last line
 }
 
 // Edge is a call from one in-module function to another.
 type Edge struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From string
+	To   string
 	// Via names the interface method that dispatched the call, empty for a direct
 	// call. It is the witness: without it an interface-resolved edge looks
 	// identical to a direct one and a reader cannot tell why it exists.
-	Via string `json:"via,omitempty"`
+	Via string
 }
 
 // Graph is the call graph of one module at one mode. Funcs and Edges are sorted,
 // so two builds of the same tree are byte-identical.
 type Graph struct {
-	Mode  Mode   `json:"mode"`
-	Funcs []Func `json:"funcs"`
-	Edges []Edge `json:"edges"`
+	Mode  Mode
+	Funcs []Func
+	Edges []Edge
 }
 
 // Build loads the module at dir matching pattern and returns its call graph.
@@ -125,18 +127,17 @@ func Build(dir, pattern string, mode Mode) (*Graph, error) {
 		return nil, fmt.Errorf("no packages matched %q in %s", pattern, dir)
 	}
 
-	defined, byID := declaredFuncs(pkgs)
-	if len(defined) == 0 {
-		return nil, fmt.Errorf("no functions with bodies found in %q", pattern)
-	}
+	ids, funcs := declaredFuncs(pkgs)
+	// No error when a matched package has no function bodies: the original emitted
+	// a valid empty graph and exited 0, and callers rely on that.
 
 	edges := map[Edge]bool{}
-	for e := range staticEdges(pkgs, defined) {
+	for e := range staticEdges(pkgs, ids) {
 		edges[e] = true
 	}
 
 	if mode != Static {
-		iface, err := interfaceEdges(pkgs, defined, mode)
+		iface, err := interfaceEdges(pkgs, ids, edges, mode)
 		if err != nil {
 			return nil, err
 		}
@@ -148,10 +149,7 @@ func Build(dir, pattern string, mode Mode) (*Graph, error) {
 		}
 	}
 
-	g := &Graph{Mode: mode}
-	for _, f := range byID {
-		g.Funcs = append(g.Funcs, f)
-	}
+	g := &Graph{Mode: mode, Funcs: funcs}
 	for e := range edges {
 		g.Edges = append(g.Edges, e)
 	}
@@ -178,16 +176,20 @@ func (g *Graph) sort() {
 // the graph's nodes, and membership also serves as the in-module filter: an edge
 // is kept only when both ends are here, which excludes stdlib and dependencies
 // without needing a module-path prefix test.
-func declaredFuncs(pkgs []*packages.Package) (map[*types.Func]bool, map[string]Func) {
-	defined := map[*types.Func]bool{}
-	byID := map[string]Func{}
+func declaredFuncs(pkgs []*packages.Package) (map[*types.Func]string, []Func) {
+	type decl struct {
+		obj  *types.Func
+		fn   Func
+		base string
+	}
+	var decls []decl
 	for _, p := range pkgs {
 		if p.TypesInfo == nil {
 			continue
 		}
 		for _, file := range p.Syntax {
-			for _, decl := range file.Decls {
-				fd, ok := decl.(*ast.FuncDecl)
+			for _, d := range file.Decls {
+				fd, ok := d.(*ast.FuncDecl)
 				if !ok || fd.Body == nil {
 					continue
 				}
@@ -195,30 +197,65 @@ func declaredFuncs(pkgs []*packages.Package) (map[*types.Func]bool, map[string]F
 				if obj == nil {
 					continue
 				}
-				defined[obj] = true
 				start := p.Fset.Position(fd.Pos())
 				end := p.Fset.Position(fd.End())
 				pkgPath := ""
 				if obj.Pkg() != nil {
 					pkgPath = obj.Pkg().Path()
 				}
-				byID[obj.FullName()] = Func{
-					ID:    obj.FullName(),
-					Label: ShortLabel(obj),
-					Pkg:   pkgPath,
-					File:  start.Filename,
-					Lo:    start.Line,
-					Hi:    end.Line,
-				}
+				decls = append(decls, decl{
+					obj:  obj,
+					base: obj.FullName(),
+					fn: Func{
+						Label: shortLabel(obj),
+						Pkg:   pkgPath,
+						File:  start.Filename,
+						Lo:    start.Line,
+						Hi:    end.Line,
+					},
+				})
 			}
 		}
 	}
-	return defined, byID
+
+	// types.Func.FullName() is NOT unique: every func init() in a package renders
+	// as "pkg/path.init", and so does every func _(). Collapsing them would keep
+	// one declaration's position and discard the rest, which silently empties the
+	// --since view for any package that registers things in two init functions.
+	// Sort first so the discriminator is a function of the source, not map order.
+	sort.Slice(decls, func(i, j int) bool {
+		if decls[i].base != decls[j].base {
+			return decls[i].base < decls[j].base
+		}
+		if decls[i].fn.File != decls[j].fn.File {
+			return decls[i].fn.File < decls[j].fn.File
+		}
+		return decls[i].fn.Lo < decls[j].fn.Lo
+	})
+	count := map[string]int{}
+	for _, d := range decls {
+		count[d.base]++
+	}
+
+	ids := make(map[*types.Func]string, len(decls))
+	funcs := make([]Func, 0, len(decls))
+	seen := map[string]int{}
+	for _, d := range decls {
+		id := d.base
+		if count[d.base] > 1 {
+			seen[d.base]++
+			id = fmt.Sprintf("%s#%d", d.base, seen[d.base])
+		}
+		ids[d.obj] = id
+		d.fn.ID = id
+		funcs = append(funcs, d.fn)
+	}
+	return ids, funcs
 }
 
 // staticEdges walks call expressions and keeps those whose callee is a concrete
 // in-module function. This is the pre-existing behaviour, unchanged.
-func staticEdges(pkgs []*packages.Package, defined map[*types.Func]bool) map[Edge]bool {
+func staticEdges(pkgs []*packages.Package, ids map[*types.Func]string) map[Edge]bool {
 	out := map[Edge]bool{}
 	for _, p := range pkgs {
 		info := p.TypesInfo
@@ -240,8 +277,14 @@ func staticEdges(pkgs []*packages.Package, defined map[*types.Func]bool) map[Edg
 					if !ok {
 						return true
 					}
-					if callee := calleeFunc(info, ce.Fun); callee != nil && defined[callee] {
-						out[Edge{From: caller.FullName(), To: callee.FullName()}] = true
+					callee := calleeFunc(info, ce.Fun)
+					if callee == nil {
+						return true
+					}
+					if from, ok := ids[caller]; ok {
+						if to, ok := ids[callee]; ok {
+							out[Edge{From: from, To: to}] = true
+						}
 					}
 					return true
 				})
@@ -258,7 +301,7 @@ func staticEdges(pkgs []*packages.Package, defined map[*types.Func]bool) map[Edg
 // but those are already covered by the static walk, and importing SSA's view of
 // them wholesale would drag in synthetic wrappers and init functions that no
 // reader recognises.
-func interfaceEdges(pkgs []*packages.Package, defined map[*types.Func]bool, mode Mode) (map[Edge]bool, error) {
+func interfaceEdges(pkgs []*packages.Package, ids map[*types.Func]string, static map[Edge]bool, mode Mode) (map[Edge]bool, error) {
 	prog, _ := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
 
@@ -270,8 +313,14 @@ func interfaceEdges(pkgs []*packages.Package, defined map[*types.Func]bool, mode
 		mains := ssautil.MainPackages(prog.AllPackages())
 		var roots []*ssa.Function
 		for _, m := range mains {
-			if fn := m.Func("main"); fn != nil {
-				roots = append(roots, fn)
+			// init as well as main, matching x/tools' own callgraph and deadcode
+			// commands. A type instantiated in a package-level var or in func init
+			// — the registry pattern behind database/sql, prometheus and cobra — is
+			// otherwise never marked reachable and RTA prunes every edge to it.
+			for _, name := range []string{"init", "main"} {
+				if fn := m.Func(name); fn != nil {
+					roots = append(roots, fn)
+				}
 			}
 		}
 		if len(roots) == 0 {
@@ -287,16 +336,21 @@ func interfaceEdges(pkgs []*packages.Package, defined map[*types.Func]bool, mode
 		if e.Site == nil || !e.Site.Common().IsInvoke() {
 			return nil // direct call: the static walk already has it
 		}
-		from := declaredFunc(e.Caller.Func, defined)
-		to := declaredFunc(e.Callee.Func, defined)
-		if from == nil || to == nil {
+		from, ok1 := ids[declaredFunc(e.Caller.Func)]
+		to, ok2 := ids[declaredFunc(e.Callee.Func)]
+		if !ok1 || !ok2 {
+			return nil
+		}
+		// Already recorded as a direct call: adding the dispatched variant would
+		// draw a second arrow between the same pair and double-count the edge.
+		if static[Edge{From: from, To: to}] {
 			return nil
 		}
 		via := ""
 		if m := e.Site.Common().Method; m != nil {
 			via = m.Name()
 		}
-		out[Edge{From: from.FullName(), To: to.FullName(), Via: via}] = true
+		out[Edge{From: from, To: to, Via: via}] = true
 		return nil
 	})
 	if err != nil {
@@ -305,22 +359,26 @@ func interfaceEdges(pkgs []*packages.Package, defined map[*types.Func]bool, mode
 	return out, nil
 }
 
-// declaredFunc maps an SSA function back to the source function it came from, or
-// nil when it is not one of ours.
+// declaredFunc maps an SSA function back to the declaration it belongs to, or nil.
 //
-// Object() already yields the declaration for a generic instantiation, and nil for
-// the synthetic thunks SSA builds for method values, so both are handled by the
-// nil check — no Origin() walk is needed. Verified on BLIS: adding one changed the
-// edge set by zero.
-func declaredFunc(fn *ssa.Function, defined map[*types.Func]bool) *types.Func {
-	if fn == nil {
-		return nil
+// An anonymous function — a closure, a goroutine or defer body, an http handler
+// literal — has no Object() of its own, so it must be attributed to its enclosing
+// declaration. Without that walk an interface call inside `go func(){ g.Get() }()`
+// is dropped, which is the most common shape there is, while the static AST walk
+// already attributes direct calls inside literals to the enclosing FuncDecl. The
+// two halves have to agree.
+//
+// Synthetic thunks and wrappers have no parent, so they still resolve to nil and
+// stay out of the graph. Object() already yields the declaration for a generic
+// instantiation; verified on BLIS that an extra Origin() walk changes nothing.
+func declaredFunc(fn *ssa.Function) *types.Func {
+	for fn != nil {
+		if tf, ok := fn.Object().(*types.Func); ok && tf != nil {
+			return tf
+		}
+		fn = fn.Parent()
 	}
-	tf, _ := fn.Object().(*types.Func)
-	if tf == nil || !defined[tf] {
-		return nil
-	}
-	return tf
+	return nil
 }
 
 // calleeFunc resolves a call target to a *types.Func when it is statically known.
@@ -343,8 +401,8 @@ func calleeFunc(info *types.Info, fun ast.Expr) *types.Func {
 	return nil
 }
 
-// ShortLabel renders a function for display: pkg.Func, or pkg.Recv.Method.
-func ShortLabel(f *types.Func) string {
+// shortLabel renders a function for display: pkg.Func, or pkg.Recv.Method.
+func shortLabel(f *types.Func) string {
 	pkg := ""
 	if f.Pkg() != nil {
 		pkg = f.Pkg().Name()

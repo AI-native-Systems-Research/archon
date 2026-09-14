@@ -202,6 +202,52 @@ Draw the same delta as a picture (added = green, removed = red, grey = context):
 top-level keys: commitA, commitB, emptyAtPackageAltitude, invariants
 ```
 
+### callgraph — the function-level graph, including interface calls
+
+```sh
+go build -o callgraph ./cmd/callgraph
+./callgraph $R ./... --mode=cha > cg.dot
+```
+
+```
+callgraph: 1197 functions in module, 1197 visible, 1806 edges [full, mode=cha]
+```
+
+Three modes, differing only in how a call through an interface is resolved:
+
+| `--mode=` | Resolves interface calls | Needs a `main` | Use for |
+|---|---|---|---|
+| `static` (default) | no — they are dropped | no | the direct-call graph |
+| `cha` | to **every** in-module implementer | no | the honest answer for a library |
+| `rta` | only to implementers actually instantiated | yes | a binary, when CHA is too broad |
+
+`static` records a call only when the callee is a concrete function with a body, so
+`s.Get("x")` on an interface disappears. `cha` adds it back and marks it dashed,
+labelled with the dispatching method:
+
+```
+ArrivalEvent.Execute → RooflineLatencyModel.QueueingTime   [via QueueingTime]
+ArrivalEvent.Execute → TrainedPhysicsModel.QueueingTime    [via QueueingTime]
+```
+
+Both latency models appear because both implement the method. CHA cannot know which
+one is wired up — that is the price of being sound without an entry point — so it
+reports every candidate. On BLIS that is 1.28x the static edge count, in under a
+second.
+
+`rta` prunes implementers whose type is never instantiated on a reachable path, so
+it is tighter *where it works*. It needs a `main`, and it is only as good as what it
+can follow: on BLIS, a Cobra CLI whose `main` is just `cmd.Execute()`, every command
+is a func value RTA cannot see through and it finds **one** edge. Never rely on it
+alone.
+
+These are **leaf** edges and are deliberately not folded into the package-level
+diagram. A caller reaching an implementation through an interface does not depend on
+it — that is what the interface is for — so drawing a package arrow would erase the
+decoupling. Use this view for "if I change this method, who is affected?".
+
+Add `--since <ref>` and `--depth N` to scope the drawing to what a change touched.
+
 ### plan — declare the architecture before the code exists
 
 A `.archon` file states the packages you intend to build (`hole`), the ones you
