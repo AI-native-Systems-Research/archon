@@ -85,11 +85,17 @@ func Analyze(g *graph.Graph) Report {
 		}
 	}
 
+	// The path breaks the last tie. pkgs is built by iterating a map, so without
+	// a total order two packages with the same blast radius and fan-in come out
+	// in a different order on every run, and the report is not reproducible.
 	sort.Slice(pkgs, func(i, j int) bool {
 		if pkgs[i].BlastRadius != pkgs[j].BlastRadius {
 			return pkgs[i].BlastRadius > pkgs[j].BlastRadius
 		}
-		return pkgs[i].FanIn > pkgs[j].FanIn
+		if pkgs[i].FanIn != pkgs[j].FanIn {
+			return pkgs[i].FanIn > pkgs[j].FanIn
+		}
+		return pkgs[i].Path < pkgs[j].Path
 	})
 	sort.Strings(gods)
 	return Report{Packages: pkgs, Cycles: cycles(g, internal), GodModules: gods}
@@ -166,7 +172,15 @@ func cycles(g *graph.Graph, internal map[string]bool) [][]string {
 			}
 		}
 	}
+	// Sorted roots: which component is found first follows the order the search
+	// starts in, and adj is a map. The components themselves are the same either
+	// way, but their order in the report would not be.
+	roots := make([]string, 0, len(adj))
 	for v := range adj {
+		roots = append(roots, v)
+	}
+	sort.Strings(roots)
+	for _, v := range roots {
 		if _, ok := idx[v]; !ok {
 			dfs(v)
 		}
