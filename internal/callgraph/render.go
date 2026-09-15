@@ -29,6 +29,12 @@ type Options struct {
 
 // Render builds the call graph of pattern in dir and writes Graphviz DOT to out,
 // with a one-line summary and any warnings to errw.
+//
+// Two views. By default every in-module function is drawn, clustered by package.
+// With Options.SinceRef the tool diffs that ref against the working tree, marks
+// the functions whose bodies overlap changed lines, and draws only those plus
+// their callers and callees out to Options.Depth hops — one by default. The
+// changed functions and the edges touching them are highlighted.
 func Render(dir, pattern string, o Options, out, errw io.Writer) error {
 	cg, err := Build(dir, pattern, o.Mode)
 	if err != nil {

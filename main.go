@@ -128,9 +128,6 @@ func cmdReflexion(args []string) {
 	}
 }
 
-// cmdHealth reports architecture-health metrics: coupling (fan-in/out,
-// instability), dependency cycles, blast-radius hotspots, and god-module
-// candidates — the "understand the current design" view for a refactor.
 // cmdCallgraph draws the call graph at function altitude. Everything else here
 // works at package altitude.
 func cmdCallgraph(args []string) {
@@ -177,6 +174,9 @@ func cmdCallgraph(args []string) {
 	}
 }
 
+// cmdHealth reports architecture-health metrics: coupling (fan-in/out,
+// instability), dependency cycles, blast-radius hotspots, and god-module
+// candidates — the "understand the current design" view for a refactor.
 func cmdHealth(args []string) {
 	jsonOut := false
 	var pos []string
