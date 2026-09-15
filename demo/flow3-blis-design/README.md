@@ -269,7 +269,7 @@ notice the drift until someone re-reads the tracking issue months later.
 |------|------|
 | `kv-offload.archon` | The .archon source (5 holes, 8 arrows, 19 contract clauses) |
 | `kv-offload.plan.json` | Compiled plan graph |
-| `expected-health.txt` | archon-go health output (reference, not golden-checked due to sort non-determinism) |
+| `expected-health.txt` | archon-go health output |
 | `expected-impact.txt` | archon-go impact output |
 | `expected-stats.txt` | Compile stats (19 clauses) |
 | `expected-dist-base.txt` | Initial distance: dist=13 |
