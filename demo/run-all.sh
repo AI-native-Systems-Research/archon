@@ -77,9 +77,12 @@ else
     check "flow3 plan compile" /tmp/demo-flow3-plan.json "$F3/kv-offload.plan.json"
 
     # Health (reference only). The sort order used to be non-deterministic for
-    # equal blast radius, which is why this was never checked against a golden;
-    # fixed in #59, so a golden can be added if we want the check.
+    # equal blast radius, which is why this check is commented out. #59 fixed
+    # that, but expected-health.txt still holds one of the old arbitrary orders:
+    # same rows, three of them in different positions. Re-enabling the check
+    # needs that golden re-approved by a human (see docs/CONTRIBUTING.md).
     # $ARCHON health "$BLIS_REPO" 52161669 > /tmp/demo-flow3-health.txt 2>&1
+    # check "flow3 health" /tmp/demo-flow3-health.txt "$F3/expected-health.txt"
 
     # Dist at base
     $ARCHON plan dist "$F3/kv-offload.plan.json" "$BLIS_REPO" 52161669 > /tmp/demo-flow3-dist-base.txt 2>&1
