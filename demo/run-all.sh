@@ -67,20 +67,20 @@ check "plan compile --stats" /tmp/demo-flow2-stats.txt "$F2/expected-stats.txt"
 
 echo ""
 echo "=== Flow 3: BLIS Design-Phase Tracking (real PRs) ==="
+F3="$SCRIPT_DIR/flow3-blis-design"
+
+# The plan is a file, so these two need no repo. Outside the guard on purpose:
+# flow 3's source declares 19 clauses against flow 2's 5, and behind the guard it
+# would never be compiled in CI, which does not set BLIS_REPO.
+$ARCHON plan compile "$F3/kv-offload.archon" > /tmp/demo-flow3-plan.json
+check "flow3 plan compile" /tmp/demo-flow3-plan.json "$F3/kv-offload.plan.json"
+
+$ARCHON plan compile --stats "$F3/kv-offload.archon" > /dev/null 2> /tmp/demo-flow3-stats.txt
+check "flow3 plan compile --stats (19)" /tmp/demo-flow3-stats.txt "$F3/expected-stats.txt"
+
 if [ -z "$BLIS_REPO" ]; then
-    echo "  SKIP: set BLIS_REPO=/path/to/blis to run Flow 3"
+    echo "  SKIP: the rest of Flow 3 needs BLIS_REPO=/path/to/blis"
 else
-    F3="$SCRIPT_DIR/flow3-blis-design"
-
-    # Compile
-    $ARCHON plan compile "$F3/kv-offload.archon" > /tmp/demo-flow3-plan.json
-    check "flow3 plan compile" /tmp/demo-flow3-plan.json "$F3/kv-offload.plan.json"
-
-    # Compile stats. Needs no BLIS_REPO, but lives here so it sits with the rest
-    # of flow 3; flow 2 has a file of the same name with different content.
-    $ARCHON plan compile --stats "$F3/kv-offload.archon" > /dev/null 2> /tmp/demo-flow3-stats.txt
-    check "flow3 plan compile --stats (19)" /tmp/demo-flow3-stats.txt "$F3/expected-stats.txt"
-
     # Health. Checkable since #59 made the row order total; before that, rows
     # with an equal blast radius came out in a different order every run.
     $ARCHON health "$BLIS_REPO" 52161669 > /tmp/demo-flow3-health.txt 2>&1
