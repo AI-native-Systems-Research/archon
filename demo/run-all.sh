@@ -76,7 +76,9 @@ else
     $ARCHON plan compile "$F3/kv-offload.archon" > /tmp/demo-flow3-plan.json
     check "flow3 plan compile" /tmp/demo-flow3-plan.json "$F3/kv-offload.plan.json"
 
-    # Health (reference only — sort order is non-deterministic for equal blast radius)
+    # Health (reference only). The sort order used to be non-deterministic for
+    # equal blast radius, which is why this was never checked against a golden;
+    # fixed in #59, so a golden can be added if we want the check.
     # $ARCHON health "$BLIS_REPO" 52161669 > /tmp/demo-flow3-health.txt 2>&1
 
     # Dist at base
