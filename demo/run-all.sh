@@ -76,6 +76,11 @@ else
     $ARCHON plan compile "$F3/kv-offload.archon" > /tmp/demo-flow3-plan.json
     check "flow3 plan compile" /tmp/demo-flow3-plan.json "$F3/kv-offload.plan.json"
 
+    # Compile stats. Needs no BLIS_REPO, but lives here so it sits with the rest
+    # of flow 3; flow 2 has a file of the same name with different content.
+    $ARCHON plan compile --stats "$F3/kv-offload.archon" > /dev/null 2> /tmp/demo-flow3-stats.txt
+    check "flow3 plan compile --stats (19)" /tmp/demo-flow3-stats.txt "$F3/expected-stats.txt"
+
     # Health. Checkable since #59 made the row order total; before that, rows
     # with an equal blast radius came out in a different order every run.
     $ARCHON health "$BLIS_REPO" 52161669 > /tmp/demo-flow3-health.txt 2>&1
