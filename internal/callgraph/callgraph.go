@@ -123,14 +123,18 @@ type Graph struct {
 	// there.
 	Edges    map[Edge]string
 	IllTyped []IllTypedPkg
-	// Unresolved describes the interface dispatches, in the packages that were
-	// asked for, which produced no edge because the caller could not be traced
-	// to a function with a body. Each entry names the method dispatched and
-	// where to look: a position when the call site has syntax, and otherwise the
-	// functions that took the method value. Entries are deduplicated, so there
-	// can be more sites than entries. Empty in Static mode, which resolves no
-	// dispatch and so measures nothing.
+	// Unresolved names the interface dispatches, in the packages that were asked
+	// for, that produced no edge because the caller has no body to draw one from
+	// and the call site has a position to point at. Deduplicated, so one entry
+	// can cover several sites and says so. Empty in Static mode, which resolves
+	// no dispatch and so measures nothing.
 	Unresolved []string
+	// UnresolvedInWrappers counts the same thing for call sites with no position
+	// at all: those are inside a wrapper go/ssa synthesises for a method value or
+	// a method expression, which has no syntax to point at. Only dispatches into
+	// this module are counted — a dependency's own wrappers are not this graph's
+	// business.
+	UnresolvedInWrappers int
 }
 
 // Build loads pattern from dir and returns its call graph.
@@ -324,11 +328,11 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		return fmt.Errorf("addDispatchEdges: mode %s resolves no dispatch", mode)
 	}
 
-	takers := wrapperTakers(prog)
 	// Keyed by call site, not by edge: one site offers one edge per candidate
 	// implementation, so counting edges overstates it. A value method and the
 	// pointer wrapper for it are two candidates for the same call.
 	unresolved := map[string]map[ssa.CallInstruction]bool{}
+	inWrappers := map[ssa.CallInstruction]bool{}
 	err := xcallgraph.GraphVisitEdges(cg, func(e *xcallgraph.Edge) error {
 		if e.Site == nil {
 			return nil
@@ -360,14 +364,24 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		}
 
 		if from == nil || !g.Defined[from] {
-			// The call site is real but there is no function with a body to
-			// draw it from. Worth recording when it belongs to a package we
-			// were asked about; in a dependency it is noise.
-			if d, ok := describeSite(takers, prog, asked, e, from); ok {
-				if unresolved[d] == nil {
-					unresolved[d] = map[ssa.CallInstruction]bool{}
+			// The call site is real but there is no function with a body to draw
+			// it from. Name it where there is a position to point at; otherwise
+			// count it, because the call is inside a wrapper go/ssa synthesised
+			// and that has no syntax of its own.
+			if pos := prog.Fset.Position(e.Site.Pos()); pos.IsValid() {
+				if asked[sitePkg(e.Caller.Func, from)] {
+					d := fmt.Sprintf("%s at %s:%d", shortLabel(call.Method), pos.Filename, pos.Line)
+					if unresolved[d] == nil {
+						unresolved[d] = map[ssa.CallInstruction]bool{}
+					}
+					unresolved[d][e.Site] = true
 				}
-				unresolved[d][e.Site] = true
+				return nil
+			}
+			// The dispatch landing in this module is what makes it ours; without
+			// that test the count fills up with wrappers inside dependencies.
+			if to != nil && g.Defined[to] {
+				inWrappers[e.Site] = true
 			}
 			return nil
 		}
@@ -386,6 +400,7 @@ func (g *Graph) addDispatchEdges(pkgs []*packages.Package, mode Mode) error {
 		g.Unresolved = append(g.Unresolved, d)
 	}
 	sort.Strings(g.Unresolved)
+	g.UnresolvedInWrappers = len(inWrappers)
 	return err
 }
 
@@ -425,51 +440,6 @@ func rtaRoots(prog *ssa.Program) []*ssa.Function {
 	}
 	return roots
 }
-
-// wrapperTakers maps each wrapper go/ssa synthesises to the functions that
-// reference it, which is where the reader has to look when the dispatch inside
-// that wrapper cannot be attributed.
-//
-// The reference, not the call: under CHA a call to a function value resolves by
-// signature, so the functions that *call* a wrapper include functions that
-// contain no such reference at all.
-//
-// Two kinds are referenced, in two different ways. A method value (s.Get) binds
-// a receiver, so its wrapper can only appear as the operand of a MakeClosure. A
-// method expression (Store.Get) binds nothing, so its thunk appears as a plain
-// function value anywhere an operand can.
-//
-// A promoted method — the wrapper for an embedded interface — is not covered
-// here, because it is not a reference to a value: its dispatch is recovered as
-// an edge instead, drawn from whoever reaches the wrapper.
-func wrapperTakers(prog *ssa.Program) map[*ssa.Function][]*ssa.Function {
-	takers := map[*ssa.Function][]*ssa.Function{}
-	for fn := range ssautil.AllFunctions(prog) {
-		for _, b := range fn.Blocks {
-			for _, instr := range b.Instrs {
-				if mc, ok := instr.(*ssa.MakeClosure); ok {
-					if w, ok := mc.Fn.(*ssa.Function); ok {
-						takers[w] = append(takers[w], fn)
-					}
-					continue
-				}
-				for _, op := range instr.Operands(nil) {
-					if op == nil {
-						continue
-					}
-					if w, ok := (*op).(*ssa.Function); ok && isThunk(w) {
-						takers[w] = append(takers[w], fn)
-					}
-				}
-			}
-		}
-	}
-	return takers
-}
-
-// isThunk reports whether fn is the function go/ssa synthesises for a method
-// expression. The marker is the description makeThunk writes, "thunk for ...".
-func isThunk(fn *ssa.Function) bool { return strings.HasPrefix(fn.Synthetic, "thunk") }
 
 // isPromotionWrapper reports whether fn is the wrapper go/ssa synthesises for a
 // method promoted from an embedded field, whose description is "wrapper for ...".
@@ -515,61 +485,6 @@ func (g *Graph) callersThroughWrappers(cg *xcallgraph.Graph, fn *ssa.Function, s
 		}
 	}
 	return out
-}
-
-// describeSite says what was dispatched and where, and reports whether the site
-// belongs to a package that was asked for.
-//
-// A wrapper go/ssa synthesises for a method value has neither syntax nor a
-// package of its own, and its object is the interface method — so the interface's
-// package is the wrong thing to attribute it to, being where the interface is
-// declared and not where the value was taken. Those sites are named by the
-// functions that take them.
-func describeSite(takers map[*ssa.Function][]*ssa.Function, prog *ssa.Program, asked map[string]bool, e *xcallgraph.Edge, from *types.Func) (string, bool) {
-	what := shortLabel(e.Site.Common().Method)
-	if pos := prog.Fset.Position(e.Site.Pos()); pos.IsValid() {
-		if !asked[sitePkg(e.Caller.Func, from)] {
-			return "", false
-		}
-		return fmt.Sprintf("%s at %s:%d", what, pos.Filename, pos.Line), true
-	}
-	names := map[string]bool{}
-	for _, taker := range takers[e.Caller.Func] {
-		if n, ok := takerName(taker, asked); ok {
-			names[n] = true
-		}
-	}
-	if len(names) == 0 {
-		// Nothing in the packages asked for references this wrapper, so the
-		// dispatch belongs to somebody else's code.
-		return "", false
-	}
-	sorted := make([]string, 0, len(names))
-	for n := range names {
-		sorted = append(sorted, n)
-	}
-	sort.Strings(sorted)
-	kind := "as a method value"
-	if isThunk(e.Caller.Func) {
-		kind = "as a method expression"
-	}
-	return fmt.Sprintf("%s %s in %s", what, kind, strings.Join(sorted, ", ")), true
-}
-
-// takerName names the function that took a method value, when it is one of the
-// packages asked for.
-func takerName(fn *ssa.Function, asked map[string]bool) (string, bool) {
-	if f := declaredFunc(fn); f != nil && f.Pkg() != nil && asked[f.Pkg().Path()] {
-		return shortLabel(f), true
-	}
-	// Referenced from a package-level variable initializer, which sits under a
-	// synthetic initializer with no object of its own. The package is still an
-	// answer, and a better one than dropping the site. Not spelled pkg.init,
-	// which would read as a declared func init.
-	if fn.Pkg != nil && asked[fn.Pkg.Pkg.Path()] {
-		return "the " + fn.Pkg.Pkg.Name() + " package initializer", true
-	}
-	return "", false
 }
 
 // sitePkg names the package a call site with syntax belongs to.

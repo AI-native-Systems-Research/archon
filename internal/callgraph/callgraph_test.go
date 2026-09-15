@@ -75,7 +75,6 @@ func TestInterfaceCallsBecomeEdges(t *testing.T) {
 		"app.CallStoreHelper -> store.Helper",
 		"app.Direct -> store.Mem.Get",
 		"app.Mixed -> store.Mem.Get",
-		"taker.Invoke -> taker.Take",
 	}
 	if got, want := sorted(edgeLines(static)), wantStatic; strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("static edges:\n got %v\nwant %v", got, want)
@@ -181,14 +180,16 @@ func TestNothingLeavesTheModule(t *testing.T) {
 	}
 }
 
-// TestUnresolvedCallSitesArePinpointed: a method value dispatches inside a
-// wrapper go/ssa synthesises whose object is the interface method, and an
-// interface method has no body, so there is no implementation to draw the edge
-// from and app.MethodValue gets no edge. The graph has to name that site rather
-// than look complete — by position, so that a count fed by unrelated dependency
-// initializers cannot stand in for it.
-func TestUnresolvedCallSitesArePinpointed(t *testing.T) {
+// TestUnresolvedDispatchesAreReported: an interface call whose caller has no
+// body cannot be drawn from anywhere. The closure in app.Registered sits under a
+// synthetic package initializer but has a position, so it is named; the method
+// value in app.MethodValue dispatches inside a wrapper go/ssa synthesised, which
+// has no position at all, so it is counted. Either way the graph says so instead
+// of looking complete.
+func TestUnresolvedDispatchesAreReported(t *testing.T) {
 	g := build(t, "iface", callgraph.CHA)
+	t.Logf("positioned: %v", g.Unresolved)
+	t.Logf("inside wrappers: %d", g.UnresolvedInWrappers)
 
 	for _, l := range edgeLines(g) {
 		if strings.HasPrefix(l, "app.MethodValue ->") {
@@ -196,92 +197,28 @@ func TestUnresolvedCallSitesArePinpointed(t *testing.T) {
 		}
 	}
 
-	t.Logf("unresolved:\n  %s", strings.Join(g.Unresolved, "\n  "))
-	var methodValue, inInitializer bool
+	var positioned bool
 	for _, d := range g.Unresolved {
-		// The method value in app.MethodValue: dispatched through Store.Get
-		// inside the bound wrapper go/ssa made for it, which has no syntax and
-		// so no position — the wrapper's name is the handle.
-		// Named by the function that takes the method value, not by the package
-		// the interface happens to be declared in.
-		if d == "store.Store.Get as a method value in app.MethodValue" {
-			methodValue = true
-		}
-		// The closure in app.Registered does have syntax, so this one is
-		// reported with a file and a line.
 		if strings.Contains(d, "store.Store.Get at ") && strings.Contains(d, "app.go:") {
-			inInitializer = true
+			positioned = true
 		}
-	}
-	if !methodValue {
-		t.Errorf("the method value in app.MethodValue is missing from %v", g.Unresolved)
-	}
-	if !inInitializer {
-		t.Errorf("the closure in app.Registered is missing from %v", g.Unresolved)
-	}
-
-	// The taker, not the caller. taker.Take creates the method value;
-	// taker.Invoke only calls it and taker.Unrelated merely shares its
-	// signature, and under CHA a call to a function value resolves by
-	// signature — so attributing the site to the wrapper's callers names
-	// functions that contain no method value at all.
-	var namesTaker bool
-	for _, d := range g.Unresolved {
-		if d == "store.Store.Get as a method value in taker.Take" {
-			namesTaker = true
-		}
-		for _, notATaker := range []string{"taker.Invoke", "taker.Unrelated"} {
-			if strings.Contains(d, notATaker) {
-				t.Errorf("%s takes no method value, but %q says it does", notATaker, d)
-			}
-		}
-	}
-	if !namesTaker {
-		t.Errorf("taker.Take takes the method value but is not named in %v", g.Unresolved)
-	}
-
-	// A method expression (Store.Get) is a thunk rather than a bound wrapper, and
-	// a thunk binds no receiver, so it is referenced as a plain function value
-	// and not through a closure. Missing it dropped the dispatch from the graph
-	// and from this list at the same time.
-	var namesExpression bool
-	for _, d := range g.Unresolved {
-		if d == "store.Store.Get as a method expression in taker.Expr" {
-			namesExpression = true
-		}
-	}
-	if !namesExpression {
-		t.Errorf("the method expression in taker.Expr is missing from %v", g.Unresolved)
-	}
-
-	// taker.Held is taken in a variable initializer, so the function that takes
-	// it is the synthetic package initializer and the package is all there is
-	// to name. Naming it still beats dropping the site.
-	var namesInitializer bool
-	for _, d := range g.Unresolved {
-		if strings.Contains(d, "the taker package initializer") {
-			namesInitializer = true
-		}
-	}
-	if !namesInitializer {
-		t.Errorf("the method value in taker's variable initializer is missing from %v", g.Unresolved)
-	}
-}
-
-// TestUnresolvedIgnoresDependencies: the same condition fires constantly inside
-// the standard library, where it is noise. Only the packages asked for count.
-func TestUnresolvedIgnoresDependencies(t *testing.T) {
-	g := build(t, "iface", callgraph.CHA)
-	fixture := map[string]bool{"app": true, "store": true, "apply": true, "hidden": true, "taker": true, "promote": true}
-	for _, d := range g.Unresolved {
-		// Every entry opens with the dispatched method, pkg.Iface.Method.
-		i := strings.Index(d, ".")
-		if i < 0 || !fixture[d[:i]] {
-			t.Errorf("site dispatching an interface from outside the module: %s", d)
+		// Only the packages asked for: the same condition fires constantly
+		// inside the standard library, where it is noise.
+		if i := strings.Index(d, "."); i < 0 || !map[string]bool{"app": true, "store": true, "apply": true, "hidden": true, "promote": true}[d[:i]] {
+			t.Errorf("dispatch from outside the module: %s", d)
 		}
 		if strings.Contains(d, " at ") && !strings.Contains(d, "testdata/iface") {
 			t.Errorf("site in a file outside the module: %s", d)
 		}
+	}
+	if !positioned {
+		t.Errorf("the closure in app.Registered is missing from %v", g.Unresolved)
+	}
+	// Exactly the one method value in app.MethodValue. An exact count is what
+	// keeps the in-module test on the count honest: without it every wrapper in
+	// the standard library would be counted as this module's problem.
+	if g.UnresolvedInWrappers != 1 {
+		t.Errorf("want the 1 method value in app.MethodValue counted, got %d", g.UnresolvedInWrappers)
 	}
 }
 

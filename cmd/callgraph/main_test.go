@@ -133,7 +133,7 @@ func TestModeFlag(t *testing.T) {
 
 	t.Run("interface calls that produced no edge are reported", func(t *testing.T) {
 		_, stderr, _ := runIn(t, bin, "../../internal/callgraph/testdata/iface", "./...", "--mode=cha")
-		if !strings.Contains(stderr, "unresolved interface dispatches") || !strings.Contains(stderr, "method value") {
+		if !strings.Contains(stderr, "unresolved interface dispatches") || !strings.Contains(stderr, "inside wrappers") {
 			t.Errorf("the report is not wired up: %q", stderr)
 		}
 	})

@@ -204,11 +204,11 @@ func reportIllTyped(cg *callgraph.Graph) {
 // reportUnresolved names the interface call sites that produced no edge, with
 // their positions, so they can be looked at rather than merely counted.
 func reportUnresolved(cg *callgraph.Graph) {
-	if len(cg.Unresolved) == 0 {
+	if len(cg.Unresolved) == 0 && cg.UnresolvedInWrappers == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "callgraph: %d distinct unresolved interface dispatches (no function with a body to draw the edge from; a line covering more than one site says so):\n",
-		len(cg.Unresolved))
+	fmt.Fprintf(os.Stderr, "callgraph: %d unresolved interface dispatches, %d of them positioned (no function with a body to draw the edge from):\n",
+		len(cg.Unresolved)+cg.UnresolvedInWrappers, len(cg.Unresolved))
 	const maxShown = 10
 	for i, d := range cg.Unresolved {
 		if i == maxShown {
@@ -216,6 +216,10 @@ func reportUnresolved(cg *callgraph.Graph) {
 			break
 		}
 		fmt.Fprintf(os.Stderr, "  %s\n", d)
+	}
+	if cg.UnresolvedInWrappers > 0 {
+		fmt.Fprintf(os.Stderr, "  %d inside wrappers go/ssa synthesised, which have no position: method values and method expressions\n",
+			cg.UnresolvedInWrappers)
 	}
 }
 
