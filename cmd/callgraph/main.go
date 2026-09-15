@@ -1,9 +1,7 @@
 // Command callgraph extracts a function-level call graph from a Go module: for
-// every function/method with a body, which in-module functions it calls. Calls
-// are resolved through go/types, so a call is an edge only when the callee is a
-// concrete function defined in one of the loaded packages. Calls through an
-// interface resolve to the interface method (which has no body) and are dropped,
-// so this is a static direct-call graph, not a devirtualized one.
+// every function/method with a body, which in-module functions it calls. The
+// graph itself is built by internal/callgraph; see that package for how each
+// mode resolves a call.
 //
 // Two views:
 //
@@ -13,20 +11,31 @@
 //	              and draws only those plus their callers/callees out to --depth
 //	              hops (default 1). Changed functions are highlighted.
 //
+// Three modes:
+//
+//	--mode=static  (default) go/types only: a call is an edge when the callee is
+//	               a concrete function defined in one of the loaded packages, so
+//	               calls through an interface are dropped.
+//	--mode=cha     also resolves interface calls, to every in-module method that
+//	               could satisfy them. Sound on a library, with no main.
+//	--mode=rta     resolves interface calls from the types reachable from the
+//	               entry points; needs a main package.
+//
 // Usage:
 //
-//	callgraph <module-dir> <pkg-pattern> [--since <ref>] [--depth N]
+//	callgraph <module-dir> <pkg-pattern> [--mode static|cha|rta] [--since <ref>] [--depth N]
 //	e.g.  callgraph ../inference-sim ./...                 # full graph
+//	      callgraph ../inference-sim ./... --mode cha      # with interface calls
 //	      callgraph ../inference-sim ./... --since HEAD~1  # what the last commit touched
 //
-// Emits Graphviz DOT on stdout; a one-line summary on stderr.
+// Emits Graphviz DOT on stdout; a one-line summary on stderr. An interface call
+// is drawn dashed, with the dispatching method as the edge tooltip.
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"go/ast"
 	"go/types"
 	"os"
 	"os/exec"
@@ -36,24 +45,20 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/tools/go/packages"
+	"github.com/AI-native-Systems-Research/archon/internal/callgraph"
 )
 
-type edge struct{ from, to *types.Func }
-type span struct {
-	file   string
-	lo, hi int
-}
 type iv struct{ lo, hi int }
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: callgraph <module-dir> <pkg-pattern> [--since <ref>] [--depth N]")
+		fmt.Fprintln(os.Stderr, "usage: callgraph <module-dir> <pkg-pattern> [--mode static|cha|rta] [--since <ref>] [--depth N]")
 		os.Exit(2)
 	}
 	dir, pattern := os.Args[1], os.Args[2]
 	sinceRef := ""
 	depth := 1
+	modeArg := "static"
 	for i := 3; i < len(os.Args); i++ {
 		a := os.Args[i]
 		switch {
@@ -67,75 +72,31 @@ func main() {
 			i++
 		case strings.HasPrefix(a, "--depth="):
 			depth, _ = strconv.Atoi(strings.TrimPrefix(a, "--depth="))
+		case a == "--mode" && i+1 < len(os.Args):
+			modeArg = os.Args[i+1]
+			i++
+		case strings.HasPrefix(a, "--mode="):
+			modeArg = strings.TrimPrefix(a, "--mode=")
+		case strings.HasPrefix(a, "--mode"):
+			// Falling through here would silently give static, which is the
+			// graph with the interface calls missing.
+			fmt.Fprintf(os.Stderr, "bad flag %q: --mode takes a value, one of static, cha or rta\n", a)
+			os.Exit(2)
 		}
 	}
-
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedTypes | packages.NeedSyntax |
-			packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports |
-			packages.NeedFiles,
-		Dir: dir,
-	}
-	pkgs, err := packages.Load(cfg, pattern)
+	cgMode, err := callgraph.ParseMode(modeArg)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "load:", err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
+	cg, err := callgraph.Build(dir, pattern, cgMode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if len(pkgs) == 0 {
-		fmt.Fprintln(os.Stderr, "no packages matched", pattern)
-		os.Exit(1)
-	}
-
-	defined := map[*types.Func]bool{} // functions we have a body for (in scope)
-	label := map[*types.Func]string{}
-	pkgOf := map[*types.Func]string{}
-	pos := map[*types.Func]span{}
-	rawEdges := map[edge]bool{}
-
-	for _, p := range pkgs {
-		info := p.TypesInfo
-		if info == nil {
-			continue
-		}
-		for _, f := range p.Syntax {
-			for _, decl := range f.Decls {
-				fd, ok := decl.(*ast.FuncDecl)
-				if !ok || fd.Body == nil {
-					continue
-				}
-				obj, _ := info.Defs[fd.Name].(*types.Func)
-				if obj == nil {
-					continue
-				}
-				defined[obj] = true
-				label[obj] = shortLabel(obj)
-				if obj.Pkg() != nil {
-					pkgOf[obj] = obj.Pkg().Path()
-				}
-				s := p.Fset.Position(fd.Pos())
-				e := p.Fset.Position(fd.End())
-				pos[obj] = span{s.Filename, s.Line, e.Line}
-				ast.Inspect(fd.Body, func(n ast.Node) bool {
-					ce, ok := n.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-					if callee := calleeFunc(info, ce.Fun); callee != nil {
-						rawEdges[edge{obj, callee}] = true
-					}
-					return true
-				})
-			}
-		}
-	}
-
-	// keep only edges whose callee is also in-module and not a self-loop noise
-	edges := map[edge]bool{}
-	for e := range rawEdges {
-		if defined[e.to] {
-			edges[e] = true
-		}
-	}
+	reportIllTyped(cg)
+	defined, pos, edges := cg.Defined, cg.Pos, cg.Edges
 
 	// delta scope: which functions did <ref>..worktree touch?
 	changed := map[*types.Func]bool{}
@@ -143,11 +104,11 @@ func main() {
 		ranges := gitChangedRanges(dir, sinceRef)
 		for f, sp := range pos {
 			for file, ivs := range ranges {
-				if !sameFile(sp.file, file) {
+				if !sameFile(sp.File, file) {
 					continue
 				}
 				for _, r := range ivs {
-					if sp.lo <= r.hi && r.lo <= sp.hi {
+					if sp.Lo <= r.hi && r.lo <= sp.Hi {
 						changed[f] = true
 					}
 				}
@@ -161,8 +122,8 @@ func main() {
 		adjOut := map[*types.Func][]*types.Func{}
 		adjIn := map[*types.Func][]*types.Func{}
 		for e := range edges {
-			adjOut[e.from] = append(adjOut[e.from], e.to)
-			adjIn[e.to] = append(adjIn[e.to], e.from)
+			adjOut[e.From] = append(adjOut[e.From], e.To)
+			adjIn[e.To] = append(adjIn[e.To], e.From)
 		}
 		frontier := map[*types.Func]bool{}
 		for f := range changed {
@@ -195,7 +156,7 @@ func main() {
 
 	nEdges := 0
 	for e := range edges {
-		if visible[e.from] && visible[e.to] {
+		if visible[e.From] && visible[e.To] {
 			nEdges++
 		}
 	}
@@ -203,51 +164,63 @@ func main() {
 	if sinceRef != "" {
 		mode = fmt.Sprintf("delta since %s (%d changed fn, depth %d)", sinceRef, len(changed), depth)
 	}
+	if cgMode != callgraph.Static {
+		mode += ", " + cgMode.String()
+	}
 	fmt.Fprintf(os.Stderr, "callgraph: %d functions in module, %d visible, %d edges [%s]\n",
 		len(defined), len(visible), nEdges, mode)
 
-	emitDOT(visible, changed, edges, label, pkgOf, sinceRef != "", sinceRef, depth)
+	if cgMode == callgraph.Static {
+		fmt.Fprintln(os.Stderr, "callgraph: static mode: calls through an interface are dropped; --mode=cha resolves them")
+	}
+	reportUnresolved(cg)
+
+	emitDOT(cg, visible, changed, cgMode, sinceRef != "", sinceRef, depth)
 }
 
-// calleeFunc resolves a call target to an in-package *types.Func when possible.
-func calleeFunc(info *types.Info, fun ast.Expr) *types.Func {
-	switch f := fun.(type) {
-	case *ast.Ident:
-		if fn, ok := info.Uses[f].(*types.Func); ok {
-			return fn
-		}
-	case *ast.SelectorExpr:
-		if sel, ok := info.Selections[f]; ok {
-			if fn, ok := sel.Obj().(*types.Func); ok {
-				return fn
-			}
-		}
-		if fn, ok := info.Uses[f.Sel].(*types.Func); ok {
-			return fn
-		}
+// reportIllTyped prints what callgraph.IllTypedPkg documents: a package that did
+// not type-check contributes nodes but not all of its edges, so the graph looks
+// complete when it is not. Causes are listed before importers, so truncating the
+// list cannot hide the package that has to be fixed.
+func reportIllTyped(cg *callgraph.Graph) {
+	if len(cg.IllTyped) == 0 {
+		return
 	}
-	return nil
+	fmt.Fprintf(os.Stderr, "callgraph: %d packages did not type-check; calls inside them are missing:\n", len(cg.IllTyped))
+	const maxShown = 20
+	for i, p := range cg.IllTyped {
+		if i == maxShown {
+			fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(cg.IllTyped)-maxShown)
+			break
+		}
+		if p.Cause {
+			fmt.Fprintf(os.Stderr, "  cause    %s: %s\n", p.Path, p.Err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  importer %s\n", p.Path)
+	}
 }
 
-func shortLabel(f *types.Func) string {
-	pkg := ""
-	if f.Pkg() != nil {
-		pkg = f.Pkg().Name()
+// reportUnresolved names the interface call sites that produced no edge, with
+// their positions, so they can be looked at rather than merely counted.
+func reportUnresolved(cg *callgraph.Graph) {
+	if len(cg.Unresolved) == 0 && cg.UnresolvedInWrappers == 0 {
+		return
 	}
-	recv := ""
-	if sig, ok := f.Type().(*types.Signature); ok && sig.Recv() != nil {
-		t := sig.Recv().Type()
-		if p, ok := t.(*types.Pointer); ok {
-			t = p.Elem()
+	fmt.Fprintf(os.Stderr, "callgraph: %d unresolved interface dispatches, %d of them positioned (no function with a body to draw the edge from):\n",
+		len(cg.Unresolved)+cg.UnresolvedInWrappers, len(cg.Unresolved))
+	const maxShown = 10
+	for i, d := range cg.Unresolved {
+		if i == maxShown {
+			fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(cg.Unresolved)-maxShown)
+			break
 		}
-		if n, ok := t.(*types.Named); ok {
-			recv = n.Obj().Name()
-		}
+		fmt.Fprintf(os.Stderr, "  %s\n", d)
 	}
-	if recv != "" {
-		return fmt.Sprintf("%s.%s.%s", pkg, recv, f.Name())
+	if cg.UnresolvedInWrappers > 0 {
+		fmt.Fprintf(os.Stderr, "  %d inside wrappers go/ssa synthesised, which have no position: method values and method expressions\n",
+			cg.UnresolvedInWrappers)
 	}
-	return fmt.Sprintf("%s.%s", pkg, f.Name())
 }
 
 // gitChangedRanges diffs ref against the working tree and returns, per file
@@ -292,11 +265,12 @@ func sameFile(abs, rel string) bool {
 }
 
 func emitDOT(
+	cg *callgraph.Graph,
 	visible, changed map[*types.Func]bool,
-	edges map[edge]bool,
-	label, pkgOf map[*types.Func]string,
+	mode callgraph.Mode,
 	delta bool, sinceRef string, depth int,
 ) {
+	label, pkgOf := cg.Label, cg.Pkg
 	// group visible functions by package
 	byPkg := map[string][]*types.Func{}
 	for f := range visible {
@@ -311,19 +285,30 @@ func emitDOT(
 	fmt.Println("digraph callgraph {")
 	fmt.Println("  rankdir=LR;")
 	fmt.Println(`  labelloc="t"; fontname="Helvetica-Bold"; fontsize=18;`)
+	resolved := ""
+	if mode != callgraph.Static {
+		resolved = fmt.Sprintf(", %s: interface calls resolved", mode)
+	}
 	if delta {
-		fmt.Printf("  label=\"Function call graph (delta-scoped: since %s, depth %d)   arrow: A calls B\";\n", sinceRef, depth)
+		fmt.Printf("  label=\"Function call graph (delta-scoped: since %s, depth %d%s)   arrow: A calls B\";\n", sinceRef, depth, resolved)
 	} else {
-		fmt.Println(`  label="Function call graph (full)   arrow: A calls B; boxes = packages";`)
+		fmt.Printf("  label=\"Function call graph (full%s)   arrow: A calls B; boxes = packages\";\n", resolved)
 	}
 	fmt.Println(`  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#eef3fb", color="#4a6fa5"];`)
 	fmt.Println(`  edge [color="#666666", arrowsize=0.7];`)
 
-	id := func(f *types.Func) string { return f.FullName() }
+	// Not FullName, for the reason given at callgraph.assignIDs: two nodes with
+	// the same DOT id are one node.
+	id := func(f *types.Func) string { return cg.ID[f] }
 
 	for ci, p := range pkgs {
 		nodes := byPkg[p]
-		sort.Slice(nodes, func(i, j int) bool { return label[nodes[i]] < label[nodes[j]] })
+		sort.Slice(nodes, func(i, j int) bool {
+			if label[nodes[i]] != label[nodes[j]] {
+				return label[nodes[i]] < label[nodes[j]]
+			}
+			return id(nodes[i]) < id(nodes[j])
+		})
 		short := p
 		if idx := strings.LastIndex(p, "/"); idx >= 0 {
 			short = p[idx+1:]
@@ -341,15 +326,25 @@ func emitDOT(
 		fmt.Println("  }")
 	}
 
-	for e := range edges {
-		if !visible[e.from] || !visible[e.to] {
+	// SortedEdges, not the edge map: map order is not stable, so without this two
+	// runs on identical input differ everywhere and a real change cannot be
+	// spotted in the diff.
+	for _, e := range cg.SortedEdges() {
+		if !visible[e.From] || !visible[e.To] {
 			continue
 		}
-		style := ""
-		if changed[e.from] || changed[e.to] {
-			style = ` [color="#1a7f37", penwidth=1.4]`
+		var attrs []string
+		if changed[e.From] || changed[e.To] {
+			attrs = append(attrs, `color="#1a7f37"`, "penwidth=1.4")
 		}
-		fmt.Printf("  %q -> %q%s;\n", id(e.from), id(e.to), style)
+		if w := cg.Edges[e]; w != "" {
+			attrs = append(attrs, "style=dashed", fmt.Sprintf("tooltip=%q", "dispatched through "+w))
+		}
+		style := ""
+		if len(attrs) > 0 {
+			style = " [" + strings.Join(attrs, ", ") + "]"
+		}
+		fmt.Printf("  %q -> %q%s;\n", id(e.From), id(e.To), style)
 	}
 
 	// legend
@@ -363,6 +358,10 @@ func emitDOT(
 	} else {
 		fmt.Println(`    Lq [label="another function", fillcolor="#eef3fb", color="#4a6fa5"];`)
 		fmt.Println(`    Lp -> Lq [label="  calls", color="#666666"];`)
+	}
+	if mode != callgraph.Static {
+		fmt.Println(`    Li [label="an implementation", fillcolor="#eef3fb", color="#4a6fa5"];`)
+		fmt.Println(`    Lp -> Li [label="  calls through an interface", color="#666666", style=dashed];`)
 	}
 	fmt.Println(`  }`)
 	fmt.Println("}")
