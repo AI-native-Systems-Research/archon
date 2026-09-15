@@ -18,8 +18,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/AI-native-Systems-Research/archon/internal/callgraph"
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
 	"github.com/AI-native-Systems-Research/archon/internal/evidence"
 	"github.com/AI-native-Systems-Research/archon/internal/extract"
@@ -48,6 +50,8 @@ func main() {
 		cmdContract(os.Args[2:])
 	case "evidence":
 		cmdEvidence(os.Args[2:])
+	case "callgraph":
+		cmdCallgraph(os.Args[2:])
 	case "impact":
 		cmdImpact(os.Args[2:])
 	case "health":
@@ -121,6 +125,52 @@ func cmdReflexion(args []string) {
 	}
 	if rep.UpEdges == 0 {
 		fmt.Println("  → code conforms to the declared layering.")
+	}
+}
+
+// cmdCallgraph draws the call graph at function altitude. Everything else here
+// works at package altitude.
+func cmdCallgraph(args []string) {
+	if len(args) < 2 {
+		usage()
+	}
+	dir, pattern := args[0], args[1]
+	o := callgraph.Options{Depth: 1}
+	modeArg := "static"
+	for i := 2; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--since" && i+1 < len(args):
+			o.SinceRef = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--since="):
+			o.SinceRef = strings.TrimPrefix(a, "--since=")
+		case a == "--depth" && i+1 < len(args):
+			o.Depth, _ = strconv.Atoi(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--depth="):
+			o.Depth, _ = strconv.Atoi(strings.TrimPrefix(a, "--depth="))
+		case a == "--mode" && i+1 < len(args):
+			modeArg = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--mode="):
+			modeArg = strings.TrimPrefix(a, "--mode=")
+		case strings.HasPrefix(a, "--mode"):
+			// Falling through here would silently give static, which is the
+			// graph with the interface calls missing.
+			fmt.Fprintf(os.Stderr, "bad flag %q: --mode takes a value, one of static, cha or rta\n", a)
+			os.Exit(2)
+		}
+	}
+	mode, err := callgraph.ParseMode(modeArg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	o.Mode = mode
+	if err := callgraph.Render(dir, pattern, o, os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }
 
@@ -202,6 +252,11 @@ func usage() {
       --allow <file>                            check deps against an allow-list
   archon-go impact <repo|graph.json> <pkg> [commit]  blast radius: what depends
                                                 on <pkg> (direct + transitive)
+  archon-go callgraph <dir> <pkg-pattern>       call graph at FUNCTION altitude
+                                                (DOT to stdout)
+      --mode static|cha|rta                     cha also resolves calls made
+                                                through an interface
+      --since <ref> [--depth N]                 only what a change touched
   archon-go contract <repo|graph.json> [commit] snapshot the allow-list baseline
                                                 (per-box permitted internal deps)
   archon-go evidence <repo> [commit]            run the contract tests bound to
