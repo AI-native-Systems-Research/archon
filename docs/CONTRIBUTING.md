@@ -51,6 +51,7 @@ Write 3-5 bullets covering:
 - **What** changes (files, behavior)
 - **How** it works (approach, not line-by-line)
 - **What tests** prove it works
+- **What docs** change — or one line saying why none do
 - **What you're NOT changing** (scope boundary)
 
 **Present this to the reviewer (or issue owner) and get explicit approval before writing code.** This avoids wasted work when the approach is wrong. A quick "does this make sense?" saves hours of rework.
@@ -95,6 +96,16 @@ Your PR description must include:
 2. **What the PR delivers** — what changed, concretely (files, behavior, flags).
 3. **Input/output proof** — which test to run (e.g., `go test -v -run TestXxx ./internal/pkg/`) and what the output demonstrates.
 4. **No-regression proof** — which existing tests still pass, and what guarantees previous behavior is unchanged (e.g., "without `--flag`, output is byte-identical").
+5. **Docs** — which doc you updated, or one line saying why none needed.
+
+**When docs are required.** If the change is visible to someone using the tool — a
+new flag, subcommand or binary, a change to output, a new mode — then `USERGUIDE.md`
+gets the example and `README.md` gets the pointer, **in the same PR**. A doc that
+lands later usually does not land. If the change is internal, say "internal only,
+no user-visible behavior" and move on; this is not a licence to add a paragraph to
+every refactor.
+
+Show real output in the example, copied from a run, not written from memory.
 
 ### 6. Review with pr-review-toolkit (/pr-review-toolkit:review-pr)
 

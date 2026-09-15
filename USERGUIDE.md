@@ -422,6 +422,92 @@ single Go binary with no Python and no checkout — which is what makes it a cle
 fit for a CI runner. The Python wrapper remains the interactive human path (see
 §5).
 
+### callgraph — which function calls which
+
+A separate binary, not an `archon-go` subcommand. Everything above works at
+package altitude; this one works at function altitude, which is what you want for
+"if I change this method, who is affected?"
+
+```sh
+go build -o callgraph ./cmd/callgraph        # once
+
+./callgraph $R ./...                        # direct calls
+./callgraph $R ./... --mode=cha             # also calls made through an interface
+```
+
+Graphviz DOT on stdout, a summary on stderr. Add `--since <ref>` to draw only the
+functions a change touched plus their neighbours, and `--depth N` to widen that.
+
+**Why the mode matters.** In `inference-sim`, `sim/event.go:46` reads:
+
+```go
+queued_delay := sim.latencyModel.QueueingTime(e.Request)
+```
+
+`latencyModel` is an interface, and two types implement it. The default mode
+resolves calls through `go/types`, so the callee here is the *interface* method —
+which has no body, so the call is dropped:
+
+```sh
+./callgraph $R ./... | grep ' -> .*QueueingTime'
+# nothing: the graph has the method as a node, but no arrow into it
+```
+
+`--mode=cha` resolves it to every implementation that could satisfy the call:
+
+```sh
+./callgraph $R ./... --mode=cha | grep ' -> .*QueueingTime'
+```
+
+**What you'll see:**
+
+```
+"(*sim.ArrivalEvent).Execute" -> "(*sim/latency.RooflineLatencyModel).QueueingTime" [style=dashed, tooltip="dispatched through sim.LatencyModel.QueueingTime"];
+"(*sim.ArrivalEvent).Execute" -> "(*sim/latency.TrainedPhysicsModel).QueueingTime" [style=dashed, tooltip="dispatched through sim.LatencyModel.QueueingTime"];
+```
+
+An interface call is drawn **dashed**, and its tooltip names the method that was
+dispatched, so you can tell it from a direct call and see why it is there. On that
+module the difference is 1413 edges against 1817 — about a fifth of the call graph
+was missing.
+
+**Which mode to use.**
+
+| mode | resolves dispatch | needs | use it for |
+|---|---|---|---|
+| `static` (default) | not at all | anything | the behaviour this tool has always had |
+| `cha` | every implementation that satisfies the interface | nothing — works on a library | the general answer |
+| `rta` | only implementations reachable from `main` | a `main` package | a whole program, when `cha` is too broad |
+
+`cha` is the one to reach for. It over-approximates, and it is sound on a partial
+program — a package with no `main` — which `rta` is not:
+
+```sh
+./callgraph . ./internal/graph/... --mode=rta
+# mode=rta needs an entry point: no main package among the loaded packages; use mode=cha for a library
+```
+
+**It tells you what it cannot see.** A call through a function value is not
+dispatch and is excluded on purpose. So are calls whose caller is a wrapper the
+compiler synthesised — a method value such as `f := s.Get` — because a wrapper has
+no body to draw the edge from. Those are counted rather than dropped in silence:
+
+```
+callgraph: 6 unresolved interface dispatches, 1 of them positioned (no function with a body to draw the edge from):
+  cmd.Err at $R/cmd/root.go:2744
+  5 inside wrappers go/ssa synthesised, which have no position
+```
+
+It also warns when a package does not type-check, because `go/ssa` builds nothing
+for such a package: its functions still appear as nodes while its calls go
+missing, so the graph would look complete when it is not.
+
+> These are **leaf** edges, and they are deliberately not aggregated into the
+> package-level graph that `render`, `impact` and `health` draw. A caller that
+> reaches an implementation through an interface does not depend on it — avoiding
+> that dependency is what the interface bought — so a package arrow would erase
+> the decoupling and make well-factored code look tangled.
+
 ---
 
 ## 5. Reviewer views — one command, three levels
