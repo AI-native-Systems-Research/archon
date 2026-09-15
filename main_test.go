@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// buildTool compiles the command so the flag table and the exit codes are
+// buildTool compiles archon-go so the flag table and the exit codes are
 // exercised the way a user meets them, through main.
-func buildTool(t *testing.T) string {
+func buildArchon(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "callgraph")
+	bin := filepath.Join(t.TempDir(), "archon-go")
 	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
@@ -19,15 +19,15 @@ func buildTool(t *testing.T) string {
 	return bin
 }
 
-// run invokes the tool against this repository, whose root is two levels up.
-func run(t *testing.T, bin string, args ...string) (string, string, int) {
+// run invokes the subcommand against this repository.
+func runCG(t *testing.T, bin string, args ...string) (string, string, int) {
 	t.Helper()
-	return runIn(t, bin, "../..", "./internal/graph/...", args...)
+	return runCGIn(t, bin, ".", "./internal/graph/...", args...)
 }
 
-func runIn(t *testing.T, bin, dir, pattern string, args ...string) (string, string, int) {
+func runCGIn(t *testing.T, bin, dir, pattern string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, append([]string{dir, pattern}, args...)...)
+	cmd := exec.Command(bin, append([]string{"callgraph", dir, pattern}, args...)...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -40,13 +40,13 @@ func runIn(t *testing.T, bin, dir, pattern string, args ...string) (string, stri
 	return stdout.String(), stderr.String(), code
 }
 
-func TestModeFlag(t *testing.T) {
-	bin := buildTool(t)
+func TestCallgraphSubcommand(t *testing.T) {
+	bin := buildArchon(t)
 
 	t.Run("bare --mode does not fall through to static", func(t *testing.T) {
 		// The whole point of the flag is to stop producing the graph with the
 		// interface calls missing, so accepting it silently is the worst answer.
-		stdout, stderr, code := run(t, bin, "--mode")
+		stdout, stderr, code := runCG(t, bin, "--mode")
 		if code != 2 {
 			t.Errorf("exit code %d, want 2; stderr %q", code, stderr)
 		}
@@ -59,14 +59,14 @@ func TestModeFlag(t *testing.T) {
 	})
 
 	t.Run("unknown mode value", func(t *testing.T) {
-		_, stderr, code := run(t, bin, "--mode=CHA")
+		_, stderr, code := runCG(t, bin, "--mode=CHA")
 		if code != 2 || !strings.Contains(stderr, "unknown mode") {
 			t.Errorf("exit %d, stderr %q; want exit 2 and an unknown-mode message", code, stderr)
 		}
 	})
 
 	t.Run("rta on a library names the mode that works", func(t *testing.T) {
-		_, stderr, code := run(t, bin, "--mode=rta")
+		_, stderr, code := runCG(t, bin, "--mode=rta")
 		if code != 1 {
 			t.Errorf("exit code %d, want 1; stderr %q", code, stderr)
 		}
@@ -76,7 +76,7 @@ func TestModeFlag(t *testing.T) {
 	})
 
 	t.Run("cha says so in the graph and in the summary", func(t *testing.T) {
-		stdout, stderr, code := run(t, bin, "--mode=cha")
+		stdout, stderr, code := runCG(t, bin, "--mode=cha")
 		if code != 0 {
 			t.Fatalf("exit code %d; stderr %q", code, stderr)
 		}
@@ -100,7 +100,7 @@ func TestModeFlag(t *testing.T) {
 	})
 
 	t.Run("an interface call is drawn dashed, with its witness", func(t *testing.T) {
-		stdout, stderr, code := runIn(t, bin, "../../internal/callgraph/testdata/iface", "./...", "--mode=cha")
+		stdout, stderr, code := runCGIn(t, bin, "internal/callgraph/testdata/iface", "./...", "--mode=cha")
 		if code != 0 {
 			t.Fatalf("exit code %d; stderr %q", code, stderr)
 		}
@@ -115,7 +115,7 @@ func TestModeFlag(t *testing.T) {
 	})
 
 	t.Run("static draws no dashed edge and no key for one", func(t *testing.T) {
-		stdout, _, code := run(t, bin)
+		stdout, _, code := runCG(t, bin)
 		if code != 0 {
 			t.Fatal(code)
 		}
@@ -125,28 +125,28 @@ func TestModeFlag(t *testing.T) {
 	})
 
 	t.Run("a package that does not type-check is reported", func(t *testing.T) {
-		_, stderr, _ := runIn(t, bin, "../../internal/callgraph/testdata/illtyped", "./...", "--mode=cha")
+		_, stderr, _ := runCGIn(t, bin, "internal/callgraph/testdata/illtyped", "./...", "--mode=cha")
 		if !strings.Contains(stderr, "did not type-check") || !strings.Contains(stderr, "cause ") {
 			t.Errorf("the warning is not wired up: %q", stderr)
 		}
 	})
 
 	t.Run("interface calls that produced no edge are reported", func(t *testing.T) {
-		_, stderr, _ := runIn(t, bin, "../../internal/callgraph/testdata/iface", "./...", "--mode=cha")
+		_, stderr, _ := runCGIn(t, bin, "internal/callgraph/testdata/iface", "./...", "--mode=cha")
 		if !strings.Contains(stderr, "unresolved interface dispatches") || !strings.Contains(stderr, "inside wrappers") {
 			t.Errorf("the report is not wired up: %q", stderr)
 		}
 	})
 
 	t.Run("default is static, and repeats byte for byte", func(t *testing.T) {
-		first, stderr, code := run(t, bin)
+		first, stderr, code := runCG(t, bin)
 		if code != 0 {
 			t.Fatalf("exit code %d; stderr %q", code, stderr)
 		}
 		if strings.Contains(first, "interface calls resolved") {
 			t.Error("the default mode should not claim to resolve interface calls")
 		}
-		second, _, _ := run(t, bin)
+		second, _, _ := runCG(t, bin)
 		if first != second {
 			t.Error("two runs on identical input produced different output")
 		}

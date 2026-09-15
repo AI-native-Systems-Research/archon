@@ -424,15 +424,12 @@ fit for a CI runner. The Python wrapper remains the interactive human path (see
 
 ### callgraph — which function calls which
 
-A separate binary, not an `archon-go` subcommand. Everything above works at
-package altitude; this one works at function altitude, which is what you want for
-"if I change this method, who is affected?"
+Everything above works at package altitude; this one works at function altitude,
+which is what you want for "if I change this method, who is affected?"
 
 ```sh
-go build -o callgraph ./cmd/callgraph        # once
-
-./callgraph $R ./...                        # direct calls
-./callgraph $R ./... --mode=cha             # also calls made through an interface
+./archon-go callgraph $R ./...                  # direct calls
+./archon-go callgraph $R ./... --mode=cha       # also calls made through an interface
 ```
 
 Graphviz DOT on stdout, a summary on stderr. Add `--since <ref>` to draw only the
@@ -449,14 +446,14 @@ resolves calls through `go/types`, so the callee here is the *interface* method 
 which has no body, so the call is dropped:
 
 ```sh
-./callgraph $R ./... | grep ' -> .*QueueingTime'
+./archon-go callgraph $R ./... | grep ' -> .*QueueingTime'
 # nothing: the graph has the method as a node, but no arrow into it
 ```
 
 `--mode=cha` resolves it to every implementation that could satisfy the call:
 
 ```sh
-./callgraph $R ./... --mode=cha | grep ' -> .*QueueingTime'
+./archon-go callgraph $R ./... --mode=cha | grep ' -> .*QueueingTime'
 ```
 
 **What you'll see:**
@@ -483,7 +480,7 @@ was missing.
 program — a package with no `main` — which `rta` is not:
 
 ```sh
-./callgraph . ./internal/graph/... --mode=rta
+./archon-go callgraph . ./internal/graph/... --mode=rta
 # mode=rta needs an entry point: no main package among the loaded packages; use mode=cha for a library
 ```
 

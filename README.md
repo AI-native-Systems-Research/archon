@@ -511,15 +511,15 @@ See the full step-by-step walkthrough with all real output:
 ## Repository layout
 
 - **`main.go`** — the `archon-go` CLI (subcommands: `extract`, `delta`, `render`,
-  `contract`, `evidence`, `impact`, `health`, `reflexion`, `pr-review`, `plan`).
+  `contract`, `evidence`, `impact`, `health`, `reflexion`, `pr-review`, `plan`,
+  `callgraph`). All but `callgraph` work at package altitude; `callgraph` works at
+  function altitude, and its `--mode=cha` resolves calls made through an interface
+  — see [USERGUIDE §4](USERGUIDE.md#callgraph--which-function-calls-which).
 - **`internal/`** — the analysis libraries (`extract`, `graph`, `delta`,
   `evidence`, `impact`, `health`, `reflexion`, `render`, `plan`, `gate`,
   `callgraph`).
-- **`cmd/`** — auxiliary CLI tools (`consumes`, `callgraph`, `eventflow`), each
-  built separately, e.g. `go build -o consumes ./cmd/consumes`. `callgraph` works
-  at function altitude rather than package altitude, and `--mode=cha` resolves
-  calls made through an interface — see
-  [USERGUIDE §4](USERGUIDE.md#callgraph--which-function-calls-which).
+- **`cmd/`** — auxiliary CLI tools (`consumes`, `eventflow`), each built
+  separately, e.g. `go build -o consumes ./cmd/consumes`.
 - **`demo/`** — runnable end-to-end golden tests for all three flows
   (`run-all.sh`), with committed expected output.
 - **`reviewer/`** — deterministic, no-LLM Python views for PR review
