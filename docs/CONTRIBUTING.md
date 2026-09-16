@@ -107,9 +107,17 @@ every refactor.
 
 Show real output in the example, copied from a run, not written from memory.
 
-### 6. Review with pr-review-toolkit (/pr-review-toolkit:review-pr)
+### 6. Review with pr-review-toolkit (/pr-review-toolkit:review-pr) — every PR
 
-Before marking the PR ready, run the review skill with this prompt:
+**Open the PR as a draft, run the review, then mark it ready.** In that order, so that
+"ready" means "something other than the author has looked at this".
+
+This step is not scoped by size. Step 5 above applies to Medium+ feature PRs; this one applies
+to all of them, including a three-line fix and a docs-only change. What scales with size is how
+many perspectives you ask for and how many rounds you run — one reviewer on a small PR is
+right-sizing, zero is skipping the step.
+
+Run the review skill with this prompt:
 
 ```
 Review this PR against the linked issue. Check:
@@ -119,6 +127,17 @@ Review this PR against the linked issue. Check:
 ```
 
 Please first reason about findings, Fix if they are valid, then mark ready for human review.
+
+Verifying your own work thoroughly is not a substitute, and the failure mode is specific: your
+verification can be wrong in a way that looks right. On #62 the tests, the demos and a
+hand-written sweep all passed, and the PR still shipped a false claim that no golden file was
+unreferenced — the sweep compared base filenames, so a same-named file in another directory
+masked the orphan. The review that should have run before that merge found it immediately, and
+on the follow-up found coverage that had been argued away. Both were flaws in the author's
+reasoning about the change, which is the class of thing a second pair of eyes exists for.
+
+If you notice after merging that this step was skipped, run it retroactively on the merged
+commit and fix what it finds in a follow-up. Do not just note the omission.
 
 ## Principles
 
