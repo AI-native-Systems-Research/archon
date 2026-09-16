@@ -80,9 +80,11 @@ ARCHON=./archon-go ./demo/run-all.sh
 
 CI runs these same checks on every pull request (`.github/workflows/ci.yml`) and
 `main` requires them to pass, so a failure here is a blocked merge rather than a
-suggestion. CI runs the demos without `BLIS_REPO`, which exercises Flow 2 only —
-if your change touches review rendering or extraction, run them locally with
-`BLIS_REPO` set so Flows 1 and 3 are covered too.
+suggestion. CI runs the demos without `BLIS_REPO`, which exercises Flow 2 plus the two Flow 3
+checks that need only the checked-in plan file — if your change touches review
+rendering or extraction, run them locally with `BLIS_REPO` set so Flow 1 and the
+rest of Flow 3 are covered too. Use an absolute path for `BLIS_REPO`: one Flow 1
+golden embeds the repo path, so a relative one fails two checks.
 
 If the demo fails, your change altered archon's output — fix the bug. Do NOT update golden files yourself; flag the diff to the human reviewer and justify why the output changed. Only a human may approve golden-file updates.
 
@@ -110,12 +112,12 @@ Show real output in the example, copied from a run, not written from memory.
 ### 6. Review with pr-review-toolkit (/pr-review-toolkit:review-pr) — every PR
 
 **Open the PR as a draft, run the review, then mark it ready.** In that order, so that
-"ready" means "something other than the author has looked at this".
+"ready" means something other than the author has looked at this. Nothing merges without this
+step having run — a draft merged directly has skipped it just as surely.
 
-This step is not scoped by size. Step 5 above applies to Medium+ feature PRs; this one applies
-to all of them, including a three-line fix and a docs-only change. What scales with size is how
-many perspectives you ask for and how many rounds you run — one reviewer on a small PR is
-right-sizing, zero is skipping the step.
+This step is not scoped by size: step 5 above applies to Medium+ feature PRs, this one has no
+exceptions. What scales is depth, not whether the gate exists. The floor is mechanical — always
+invoke the skill; on a small PR one reviewing agent and one round is enough.
 
 Run the review skill with this prompt:
 
@@ -126,15 +128,13 @@ Review this PR against the linked issue. Check:
 3. Is there any overengineering or unnecessary scope creep?
 ```
 
-Please first reason about findings, Fix if they are valid, then mark ready for human review.
+Reason about each finding first, then fix the valid ones. **List any finding you dismiss in the
+PR, with the reason** — otherwise "fix if they are valid" lets an author dismiss everything and
+still claim the step ran, and a dismissal nobody can see is not a dismissal.
 
-Verifying your own work thoroughly is not a substitute, and the failure mode is specific: your
-verification can be wrong in a way that looks right. On #62 the tests, the demos and a
-hand-written sweep all passed, and the PR still shipped a false claim that no golden file was
-unreferenced — the sweep compared base filenames, so a same-named file in another directory
-masked the orphan. The review that should have run before that merge found it immediately, and
-on the follow-up found coverage that had been argued away. Both were flaws in the author's
-reasoning about the change, which is the class of thing a second pair of eyes exists for.
+Verifying your own work is not a substitute: your verification can be wrong in a way that looks
+right. On #62 the tests, the demos and a hand-written sweep all passed while the PR shipped a
+false claim about golden-file coverage; run late, the review found it in minutes (#63).
 
 If you notice after merging that this step was skipped, run it retroactively on the merged
 commit and fix what it finds in a follow-up. Do not just note the omission.
