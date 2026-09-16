@@ -83,8 +83,13 @@ CI runs these same checks on every pull request (`.github/workflows/ci.yml`) and
 suggestion. CI runs the demos without `BLIS_REPO`, which exercises Flow 2 plus the two Flow 3
 checks that need only the checked-in plan file — if your change touches review
 rendering or extraction, run them locally with `BLIS_REPO` set so Flow 1 and the
-rest of Flow 3 are covered too. Use an absolute path for `BLIS_REPO`: one Flow 1
-golden embeds the repo path, so a relative one fails two checks.
+rest of Flow 3 are covered too.
+
+Flow 1 is the exception, and it is worth knowing before you read its diff as your
+own bug: `flow1-pr-review/review.json` and the copy inside `review.md` both record
+the repo path as one specific absolute path. Those two checks therefore only
+reproduce from that checkout — anywhere else they fail whatever you pass in
+`BLIS_REPO`, and that failure is not your change.
 
 If the demo fails, your change altered archon's output — fix the bug. Do NOT update golden files yourself; flag the diff to the human reviewer and justify why the output changed. Only a human may approve golden-file updates.
 
@@ -136,8 +141,12 @@ Verifying your own work is not a substitute: your verification can be wrong in a
 right. On #62 the tests, the demos and a hand-written sweep all passed while the PR shipped a
 false claim about golden-file coverage; run late, the review found it in minutes (#63).
 
-If you notice after merging that this step was skipped, run it retroactively on the merged
-commit and fix what it finds in a follow-up. Do not just note the omission.
+State in the PR that the step ran — "step 6: N findings, fixed" — so the gate is auditable.
+Silence is indistinguishable from having skipped it.
+
+If a PR ever does merge without this step, that is a broken rule rather than a second route
+through it: run the review on the merged commit and fix what it finds in a follow-up, promptly.
+Planning to use that path is skipping the step.
 
 ## Principles
 
