@@ -21,11 +21,15 @@ import (
 //     "(?!...)" fix made BSD grep -E return zero matches and the report looked
 //     clean while being broken.
 //
-// The boundary excludes "-" and "_" as well as letters and digits, so an ID is
-// counted only where it stands on its own. That drops "INV-6-safe", which BLIS's
-// registry names as a known false positive of its own git-grep recipe: it is the
-// adjective "INV-6-safe", not a citation. Both boundaries agree, so "foo_INV-6"
-// and "INV-6_foo" are treated alike.
+// The trailing boundary excludes "-" and "_" as well as letters and digits, so
+// an ID is counted only where it ends on its own. That drops "INV-6-safe", which
+// BLIS's registry names as a known false positive of its own git-grep recipe: it
+// is the adjective "INV-6-safe", not a citation.
+//
+// The leading boundary is \b, so the two are not symmetric: "INV-6-safe" is not
+// counted but "safe-INV-6" is, and "foo_INV-6" is not. A consumed class on the
+// leading side would swallow the separator between adjacent citations and
+// undercount "INV-6 INV-6".
 func CitationRegexp(id string) *regexp.Regexp {
 	return regexp.MustCompile(`\b` + regexp.QuoteMeta(id) + `([^0-9A-Za-z_-]|$)`)
 }
@@ -40,9 +44,11 @@ var skipDir = map[string]bool{".git": true, "vendor": true, "node_modules": true
 // LinkRepo scans the Go sources under root and reports what the repository has
 // behind each declared invariant.
 //
-// Only files the Go tool would build are scanned — .go outside testdata and
-// underscore-prefixed paths — so a fixture or a markdown registry mentioning an
-// ID is not mistaken for something upholding it. A citation is still only
+// Only .go files are scanned, and paths the Go tool itself ignores are skipped —
+// testdata directories below root, underscore-prefixed files and directories — so
+// a fixture or a markdown registry mentioning an ID is not mistaken for something
+// upholding it. The skip set applies below root only, so pointing root at a
+// testdata directory does scan it. A citation is still only
 // evidence that a file names the ID: a file that discusses an invariant, such as
 // a linter listing IDs as data, counts as a citation, which is inherent to
 // following IDs rather than inferring them. Reports name the files so a reader
