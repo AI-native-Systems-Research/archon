@@ -8,7 +8,10 @@
 // else.
 package invariant
 
-import "sort"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // Invariant is one entry in a declared registry.
 type Invariant struct {
@@ -19,14 +22,6 @@ type Invariant struct {
 	Tier      string `json:"tier"`      // the registry's own grouping shape, uninterpreted
 	Source    string `json:"source"`    // file:line where declared
 }
-
-// Tier labels. They record the shape the entry was declared in and nothing
-// more: archon does not decide what "core" or "subsystem" mean for a repo.
-const (
-	TierH3    = "h3"    // declared as a "### ID: Title" heading
-	TierH4    = "h4"    // declared as a "#### ID: Title" heading
-	TierTable = "table" // declared as a table row whose first cell is a bold ID
-)
 
 // Key identifies an invariant globally. An ID is only unique within its scope:
 // BLIS cites BC-1 307 times across four packages meaning something different in
@@ -69,6 +64,16 @@ func (l Link) Status() Status {
 	default:
 		return StatusUnlinked
 	}
+}
+
+// MarshalJSON emits the derived status alongside the fields, so a --json
+// consumer sees the same verdict as the table without recomputing it.
+func (l Link) MarshalJSON() ([]byte, error) {
+	type link Link // shed the method, so this does not recurse
+	return json.Marshal(struct {
+		link
+		Status Status `json:"status"`
+	}{link(l), l.Status()})
 }
 
 // Totals counts links by status. Returned by value so a caller reporting

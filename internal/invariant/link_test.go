@@ -1,14 +1,19 @@
 package invariant
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 // fixtureRepo is a tiny repository under testdata: INV-1, INV-6 and INV-13
 // cited in production code, INV-2 cited only from a test, INV-42 with nothing
-// but a test named for it, INV-99 nowhere at all — plus a vendor/ directory, a
-// dot-directory and a .md file that must not be scanned.
+// but a test named for it, INV-99 nowhere at all — plus the paths that must not
+// count: vendor/, a dot-directory, a .md file, a nested testdata/ and an
+// underscore-prefixed source file.
 const fixtureRepo = "testdata/repo"
 
 func fixtureInvariants() []Invariant {
@@ -54,7 +59,7 @@ func TestLinkRepo_BareNumberNeverMatches(t *testing.T) {
 	if CitationRegexp("INV-2").MatchString("func TestFooE2E(t *testing.T) {}") {
 		t.Error("CitationRegexp(INV-2) matched TestFooE2E")
 	}
-	if namedFor("TestFooE2E", []string{"INV2"}, map[string]string{"INV2": "INV-2"}) != nil {
+	if namedFor("TestFooE2E", map[string]string{"INV2": "INV-2"}) != nil {
 		t.Error("namedFor attributed TestFooE2E to INV-2")
 	}
 }
@@ -188,13 +193,9 @@ func TestLinkRepo_ScopeIsRespected(t *testing.T) {
 }
 
 func TestNamedFor_SeparatorSpellings(t *testing.T) {
-	ids := []string{"INV-6", "INV-1", "INV-13", "INV-P2-1", "INV-PD-3", "INV-PD-6", "INV-PD-6b", "INV-A", "NS-6"}
 	norm := map[string]string{}
-	var normIDs []string
-	for _, id := range ids {
-		n := normalizeID(id)
-		norm[n] = id
-		normIDs = append(normIDs, n)
+	for _, id := range []string{"INV-6", "INV-1", "INV-13", "INV-P2-1", "INV-PD-3", "INV-PD-6", "INV-PD-6b", "INV-A", "NS-6"} {
+		norm[normalizeID(id)] = id
 	}
 
 	cases := []struct {
@@ -217,7 +218,7 @@ func TestNamedFor_SeparatorSpellings(t *testing.T) {
 		{"TestINVA2_PlacementFailureVisibility", nil},
 	}
 	for _, c := range cases {
-		if got := namedFor(c.test, normIDs, norm); !reflect.DeepEqual(got, c.want) {
+		if got := namedFor(c.test, norm); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("namedFor(%q) = %v, want %v", c.test, got, c.want)
 		}
 	}
@@ -246,5 +247,141 @@ func TestLinkRepo_Deterministic(t *testing.T) {
 		if !reflect.DeepEqual(first, next) {
 			t.Fatalf("run %d differs from the first", i)
 		}
+	}
+}
+
+// TestNamedFor_WordsAreNotIDSegments is the bare-number bug wearing a letter.
+// With INV-A declared, substring matching on a separator-stripped name read
+// "Allocator" as the "A" segment and reported these as tests for INV-A. Because
+// a named test is test evidence, that promoted a genuinely unlinked invariant to
+// TEST ONLY — "the promise is checked" — on the strength of an English word.
+func TestNamedFor_WordsAreNotIDSegments(t *testing.T) {
+	norm := map[string]string{}
+	for _, id := range []string{"INV-A", "INV-1", "NS-6", "INV-PD-6"} {
+		norm[normalizeID(id)] = id
+	}
+
+	for _, name := range []string{
+		"TestINVAllocatorBoundary",
+		"TestOptionsINVArgs",
+		"TestINVAB_Something",
+		"TestBINV1_X",
+		// INV-PD-6b is not declared here, which is exactly where the old
+		// longest-declared-ID rule failed: a trailing lowercase letter continues
+		// an ID whether or not the longer one is in the registry.
+		"TestDisaggregation_INVPD6b_CompletionTime",
+	} {
+		if got := namedFor(name, norm); got != nil {
+			t.Errorf("namedFor(%q) = %v, want none", name, got)
+		}
+	}
+
+	// The real spellings still match.
+	for name, want := range map[string]string{
+		"TestINVA_GPUConservation": "INV-A",
+		"TestINV1_Conservation":    "INV-1",
+		"TestNS6_StaticGuard":      "NS-6",
+		"TestX_INVPD6_MetricMap":   "INV-PD-6",
+	} {
+		if got := namedFor(name, norm); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("namedFor(%q) = %v, want [%s]", name, got, want)
+		}
+	}
+}
+
+func TestTokenize(t *testing.T) {
+	for in, want := range map[string][]string{
+		"TestINV_P2_1_PoolConfig": {"Test", "INV", "P", "2", "1", "Pool", "Config"},
+		"TestINVAllocator":        {"Test", "INV", "Allocator"},
+		"TestX_INVPD6b_Holds":     {"Test", "X", "INVPD", "6", "b", "Holds"},
+		"TestINVBCDP1_Dense":      {"Test", "INVBCDP", "1", "Dense"},
+	} {
+		if got := tokenize(in); !reflect.DeepEqual(got, want) {
+			t.Errorf("tokenize(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// TestCitationRegexp_RejectsAdjectiveForm: BLIS's registry names "INV-6-safe" in
+// sim/workload/fixed_accumulate_test.go as a known false positive of its own
+// git-grep recipe — it is an adjective, not a citation. Counting it makes the
+// number a human reads wrong by one that the source document already flagged.
+func TestCitationRegexp_RejectsAdjectiveForm(t *testing.T) {
+	re := CitationRegexp("INV-6")
+	for _, s := range []string{"// an INV-6-safe accumulator", "// INV-6_determinism", "// fooINV-6"} {
+		if re.MatchString(s) {
+			t.Errorf("matched %q", s)
+		}
+	}
+	for _, s := range []string{"// INV-6 holds", "// determinism (INV-6)", "upholds INV-6"} {
+		if !re.MatchString(s) {
+			t.Errorf("missed %q", s)
+		}
+	}
+}
+
+// TestLinkRepo_SymlinkedRoot: WalkDir does not follow symlinks, so a symlinked
+// root arrived as a non-directory, was skipped for want of a .go suffix, and
+// produced a confident repository-wide UNLINKED report. CI checkouts and macOS
+// /tmp are routinely reached through a symlink.
+func TestLinkRepo_SymlinkedRoot(t *testing.T) {
+	abs, err := filepath.Abs(fixtureRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "repo")
+	if err := os.Symlink(abs, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	links, err := LinkRepo(link, fixtureInvariants())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := Count(links), (Totals{Linked: 3, TestOnly: 2, Unlinked: 1}); got != want {
+		t.Errorf("through a symlink: Count = %+v, want %+v", got, want)
+	}
+}
+
+// TestLinkRepo_BadRootIsAnError: reporting every invariant UNLINKED is the
+// loudest thing this package can say about a repository, so it must not be what
+// a caller gets for pointing at the wrong path.
+func TestLinkRepo_BadRootIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("INV-1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, root := range map[string]string{
+		"no Go files":             dir,
+		"a file, not a directory": filepath.Join(fixtureRepo, "core", "engine.go"),
+		"nonexistent":             filepath.Join(dir, "nope"),
+	} {
+		if _, err := LinkRepo(root, fixtureInvariants()); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+// TestLinkRepo_SkipsPathsTheGoToolIgnores: testdata/fixture.go cites INV-1 and
+// core/_scratch.go cites INV-6. The Go tool builds neither, so neither is
+// evidence that anything upholds them.
+func TestLinkRepo_SkipsPathsTheGoToolIgnores(t *testing.T) {
+	byID := linkFixture(t)
+	for _, f := range append(byID["INV-1"].CodeFiles, byID["INV-6"].CodeFiles...) {
+		if strings.HasPrefix(f, "testdata/") || strings.Contains(f, "_scratch") {
+			t.Errorf("scanned %s, which the Go tool ignores", f)
+		}
+	}
+}
+
+// TestLink_JSONCarriesStatus: Status() is derived, so a --json consumer would
+// otherwise have to recompute it and could disagree with the table.
+func TestLink_JSONCarriesStatus(t *testing.T) {
+	b, err := json.Marshal(linkFixture(t)["INV-99"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"status":"UNLINKED"`) {
+		t.Errorf("JSON = %s, want a status field", b)
 	}
 }

@@ -2,6 +2,7 @@ package invariant
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -44,9 +45,8 @@ func TestExample_ParseAndLink(t *testing.T) {
 	b.Reset()
 	b.WriteString("  ID        STATUS     CODE  TEST  CITES  NAMED TESTS\n")
 	for _, l := range links {
-		b.WriteString(pad(l.Invariant.ID, 10) + pad(string(l.Status()), 11) +
-			pad(itoa(len(l.CodeFiles)), 6) + pad(itoa(len(l.TestFiles)), 6) +
-			pad(itoa(l.Citations), 7) + strings.Join(l.NamedTests, ", ") + "\n")
+		fmt.Fprintf(&b, "  %-10s%-11s%-6d%-6d%-7d%s\n", l.Invariant.ID, l.Status(),
+			len(l.CodeFiles), len(l.TestFiles), l.Citations, strings.Join(l.NamedTests, ", "))
 	}
 	t.Logf("LINK TABLE:\n%s", b.String())
 
@@ -83,22 +83,4 @@ func tree(t *testing.T, root string) string {
 		}
 	}
 	return b.String()
-}
-
-func pad(s string, n int) string {
-	for len(s) < n {
-		s += " "
-	}
-	return s
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var d []byte
-	for ; n > 0; n /= 10 {
-		d = append([]byte{byte('0' + n%10)}, d...)
-	}
-	return string(d)
 }

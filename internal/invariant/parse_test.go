@@ -1,6 +1,9 @@
 package invariant
 
 import (
+	"errors"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -172,7 +175,26 @@ func TestParseMarkdown_StatementIsScopedToItsEntry(t *testing.T) {
 	}
 }
 
-// TestParseFile_Deterministic: entries come back sorted by ID, so a caller
+// TestParseFile_NaturalOrder: numeric segments compare as numbers, so a reader
+// scanning a report for INV-2 does not find it after INV-13 and conclude the
+// list is truncated.
+func TestParseFile_NaturalOrder(t *testing.T) {
+	invs := parseBLIS(t)
+	var got []string
+	for _, inv := range invs[:6] {
+		got = append(got, inv.ID)
+	}
+	want := []string{"INV-1", "INV-2", "INV-3", "INV-4", "INV-5", "INV-6"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("first six = %v, want %v", got, want)
+	}
+	// INV-PD-6 immediately precedes INV-PD-6b, and numbers precede letters.
+	if !lessID("INV-PD-6", "INV-PD-6b") || !lessID("INV-13", "INV-A") || !lessID("INV-9", "INV-10") {
+		t.Error("lessID ordering is wrong")
+	}
+}
+
+// TestParseFile_Deterministic: entries come back in a stable order, so a caller
 // rendering them never depends on document order or map iteration.
 func TestParseFile_Deterministic(t *testing.T) {
 	a, b := parseBLIS(t), parseBLIS(t)
@@ -180,8 +202,165 @@ func TestParseFile_Deterministic(t *testing.T) {
 		if a[i] != b[i] {
 			t.Fatalf("entry %d differs between parses", i)
 		}
-		if i > 0 && a[i-1].ID >= a[i].ID {
+		if i > 0 && !lessID(a[i-1].ID, a[i].ID) {
 			t.Fatalf("not sorted by ID: %q then %q", a[i-1].ID, a[i].ID)
 		}
+	}
+}
+
+// TestParseFile_FenceOutOfStepIsAnError is the highest-consequence silent
+// failure the fence toggle allowed. Deleting one "```bash" line from BLIS's real
+// registry used to yield 9 well-formed entries and a nil error: the mask
+// re-balanced one fence later, so 25 entries — every PD-disaggregation and pool
+// invariant among them — were read as code. A PR touching
+// sim/cluster/pd_events.go would have been reported as risking nothing.
+func TestParseFile_FenceOutOfStepIsAnError(t *testing.T) {
+	b, err := os.ReadFile(blisFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(b), "\n")
+	opener := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "```bash") {
+			opener = i
+			break
+		}
+	}
+	if opener < 0 {
+		t.Fatal("fixture no longer contains a ```bash fence")
+	}
+	maimed := append(append([]string{}, lines[:opener]...), lines[opener+1:]...)
+
+	invs, err := ParseMarkdown([]byte(strings.Join(maimed, "\n")), "s", "s")
+	if err == nil {
+		t.Fatalf("want an error, got %d entries", len(invs))
+	}
+	if !strings.Contains(err.Error(), "out of step") {
+		t.Errorf("error should name the cause: %v", err)
+	}
+}
+
+// TestParseMarkdown_NestedAndTildeFences: a fence closes only on the character
+// and length it opened with. A naive toggle both invented INV-998 from inside a
+// four-backtick example and dropped the real INV-2 after it.
+func TestParseMarkdown_NestedAndTildeFences(t *testing.T) {
+	for name, src := range map[string]string{
+		"nested backticks": "### INV-1: Real\n\n````markdown\n#### INV-998: Example\n```\n#### INV-997: Example\n```\n````\n\n### INV-2: Also Real\n",
+		"tilde fence":      "### INV-1: Real\n\n~~~markdown\n#### INV-999: Example\n~~~\n\n### INV-2: Also Real\n",
+	} {
+		invs, err := ParseMarkdown([]byte(src), "s", "s")
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		var ids []string
+		for _, inv := range invs {
+			ids = append(ids, inv.ID)
+		}
+		if !reflect.DeepEqual(ids, []string{"INV-1", "INV-2"}) {
+			t.Errorf("%s: got %v, want [INV-1 INV-2]", name, ids)
+		}
+	}
+}
+
+// TestParseMarkdown_NoEntriesIsAnError: a truncated fetch, a path pointing at
+// the wrong markdown file, or a registry whose heading convention drifted must
+// not read as "this repository declares no invariants".
+func TestParseMarkdown_NoEntriesIsAnError(t *testing.T) {
+	for _, src := range []string{"", "# BLIS System Invariants\n\nnothing here yet\n", "<html><body>404</body></html>"} {
+		_, err := ParseMarkdown([]byte(src), "s", "s")
+		if !errors.Is(err, ErrNoEntries) {
+			t.Errorf("ParseMarkdown(%q) error = %v, want ErrNoEntries", src, err)
+		}
+	}
+}
+
+// TestParseMarkdown_NearMissHeadingIsAnError: every one of these used to parse
+// to zero entries with no error, so a registry could lose an entry to a typo
+// and still report cleanly.
+func TestParseMarkdown_NearMissHeadingIsAnError(t *testing.T) {
+	for _, heading := range []string{
+		"### INV-1 — Request Conservation",
+		"### `INV-1`: Request Conservation",
+		"### INV-1:Request Conservation",
+		"### INV-1:",
+		"### INV-1",
+	} {
+		src := "### INV-2: Real\n\n**Statement:** Real.\n\n" + heading + "\n"
+		_, err := ParseMarkdown([]byte(src), "s", "s")
+		if err == nil {
+			t.Errorf("%q parsed without error", heading)
+			continue
+		}
+		if !strings.Contains(err.Error(), "INV-1") {
+			t.Errorf("%q: error should name the ID: %v", heading, err)
+		}
+	}
+}
+
+// TestParseMarkdown_IDGrammarRejectsProse: an ID's segments are capitals and
+// digits, not words. Otherwise an ordinary heading or a group-label row becomes
+// a declared invariant and inflates the UNLINKED count the feature exists to
+// report.
+func TestParseMarkdown_IDGrammarRejectsProse(t *testing.T) {
+	src := "### INV-1: Real\n\n**Statement:** Real.\n\n" +
+		"#### KV-Cache: Terminology\n\n### PD-Disaggregation: Overview\n\n" +
+		"| Group | Meaning |\n|---|---|\n| **Run-Level** | whole-run property |\n"
+	invs, err := ParseMarkdown([]byte(src), "s", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invs) != 1 || invs[0].ID != "INV-1" {
+		var ids []string
+		for _, inv := range invs {
+			ids = append(ids, inv.ID)
+		}
+		t.Errorf("got %v, want only [INV-1]", ids)
+	}
+}
+
+// TestParseMarkdown_StatementDoesNotBleedPastItsBlock: a "**Statement:**" under
+// a table, or after a horizontal rule, belongs to what follows the rule — not to
+// the heading above it.
+func TestParseMarkdown_StatementDoesNotBleedPastItsBlock(t *testing.T) {
+	src := "### INV-1: No Statement\n\nProse.\n\n---\n\n| ID | Statement |\n|---|---|\n" +
+		"| **INV-L1** | table statement | \n\n**Statement:** This belongs to the family below, not INV-1.\n"
+	invs, err := ParseMarkdown([]byte(src), "s", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := find(t, invs, "INV-1").Statement; got != "" {
+		t.Errorf("INV-1 Statement = %q, want empty", got)
+	}
+	if got := find(t, invs, "INV-L1").Statement; got != "table statement" {
+		t.Errorf("INV-L1 Statement = %q", got)
+	}
+}
+
+// TestParseFile_AnyHeadingLevel: the level is recorded, not filtered. Accepting
+// only ### and #### would drop an entry the day a registry promotes a section.
+func TestParseFile_AnyHeadingLevel(t *testing.T) {
+	src := "# INV-1: Title\n\n## INV-2: Title\n\n##### INV-3: Title\n\n###### INV-4: Title\n"
+	invs, err := ParseMarkdown([]byte(src), "s", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"h1", "h2", "h5", "h6"}
+	for i, inv := range invs {
+		if inv.Tier != want[i] {
+			t.Errorf("%s Tier = %q, want %q", inv.ID, inv.Tier, want[i])
+		}
+	}
+}
+
+func TestParseMarkdown_UnterminatedFenceIsAnError(t *testing.T) {
+	src := "### INV-1: Real\n\n**Statement:** Real.\n\n```go\ncode\n\n### INV-2: Lost\n"
+	_, err := ParseMarkdown([]byte(src), "s", "s")
+	if err == nil {
+		t.Fatal("want an error for a fence left open at EOF")
+	}
+	if !strings.Contains(err.Error(), "unterminated code fence") {
+		t.Errorf("error should name the cause: %v", err)
 	}
 }
