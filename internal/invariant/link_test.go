@@ -195,7 +195,7 @@ func TestLinkRepo_ScopeIsRespected(t *testing.T) {
 func TestNamedFor_SeparatorSpellings(t *testing.T) {
 	norm := map[string]string{}
 	for _, id := range []string{"INV-6", "INV-1", "INV-13", "INV-P2-1", "INV-PD-3", "INV-PD-6", "INV-PD-6b", "INV-A", "NS-6"} {
-		norm[normalizeID(id)] = id
+		norm[strings.ToUpper(normalizeID(id))] = id
 	}
 
 	cases := []struct {
@@ -258,7 +258,7 @@ func TestLinkRepo_Deterministic(t *testing.T) {
 func TestNamedFor_WordsAreNotIDSegments(t *testing.T) {
 	norm := map[string]string{}
 	for _, id := range []string{"INV-A", "INV-1", "NS-6", "INV-PD-6"} {
-		norm[normalizeID(id)] = id
+		norm[strings.ToUpper(normalizeID(id))] = id
 	}
 
 	for _, name := range []string{
@@ -383,5 +383,26 @@ func TestLink_JSONCarriesStatus(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"status":"UNLINKED"`) {
 		t.Errorf("JSON = %s, want a status field", b)
+	}
+}
+
+// TestNamedFor_FoldsCase: BLIS writes TestINV6_*, but a repo writing
+// TestInv6_Determinism means the same thing. Tokenising first is what makes
+// case-folding safe — "Invalid" is a token of its own and cannot serve as
+// INV-A's "A" segment.
+func TestNamedFor_FoldsCase(t *testing.T) {
+	norm := map[string]string{}
+	for _, id := range []string{"INV-6", "INV-A", "NS-6"} {
+		norm[strings.ToUpper(normalizeID(id))] = id
+	}
+	for name, want := range map[string][]string{
+		"TestInv6_Determinism": {"INV-6"},
+		"TestNs6_Catalog":      {"NS-6"},
+		"TestInvalidRequest":   nil,
+		"TestInventoryAudit":   nil,
+	} {
+		if got := namedFor(name, norm); !reflect.DeepEqual(got, want) {
+			t.Errorf("namedFor(%q) = %v, want %v", name, got, want)
+		}
 	}
 }

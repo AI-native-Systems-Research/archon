@@ -364,3 +364,66 @@ func TestParseMarkdown_UnterminatedFenceIsAnError(t *testing.T) {
 		t.Errorf("error should name the cause: %v", err)
 	}
 }
+
+// TestParseMarkdown_WhitespaceAfterHashes: the entry pattern and the near-miss
+// pattern must agree on what separates the hashes from the ID. When one accepted
+// a single space and the other any run, "###  INV-1: Title" became a hard error
+// and a tab-separated heading was dropped without one.
+func TestParseMarkdown_WhitespaceAfterHashes(t *testing.T) {
+	for _, src := range []string{"###  INV-1: Two Spaces\n", "###\tINV-1: Tab\n"} {
+		invs, err := ParseMarkdown([]byte(src), "s", "s")
+		if err != nil {
+			t.Errorf("%q: %v", src, err)
+			continue
+		}
+		if len(invs) != 1 || invs[0].ID != "INV-1" || invs[0].Tier != TierH3 {
+			t.Errorf("%q: got %+v", src, invs)
+		}
+	}
+}
+
+// TestParseMarkdown_HeadingContinuingInProseIsNotAnEntry: a heading that opens
+// with an ID and carries on in prose is not a malformed entry — BLIS's design
+// docs contain the shape — so it must neither be declared nor rejected. Only a
+// heading that was evidently trying to be an entry is an error.
+func TestParseMarkdown_HeadingContinuingInProseIsNotAnEntry(t *testing.T) {
+	for _, heading := range []string{
+		"## INV-1 Impact",
+		"### INV-6 (deprecated)",
+		"### INV-6 and INV-7: Joint",
+		"### Impact on INV-6 explained",
+	} {
+		invs, err := ParseMarkdown([]byte("### INV-2: Real\n\n"+heading+"\n"), "s", "s")
+		if err != nil {
+			t.Errorf("%q: %v", heading, err)
+			continue
+		}
+		if len(invs) != 1 || invs[0].ID != "INV-2" {
+			var ids []string
+			for _, inv := range invs {
+				ids = append(ids, inv.ID)
+			}
+			t.Errorf("%q: got %v, want only [INV-2]", heading, ids)
+		}
+	}
+}
+
+// TestParseMarkdown_FencesOfDifferentTypesNest: the out-of-step guard compares
+// the fence character as well as its width. Without that, a "```bash" line
+// inside a ~~~ block — valid CommonMark, since a closing fence carries no info
+// string — was rejected as a corrupt document.
+func TestParseMarkdown_FencesOfDifferentTypesNest(t *testing.T) {
+	for name, src := range map[string]string{
+		"backtick info inside tilde": "### INV-1: R\n\n~~~\n```bash\ncode\n```\n~~~\n\n### INV-2: R\n",
+		"tilde info inside backtick": "### INV-1: R\n\n```\n~~~yaml\nx\n~~~\n```\n\n### INV-2: R\n",
+	} {
+		invs, err := ParseMarkdown([]byte(src), "s", "s")
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if len(invs) != 2 {
+			t.Errorf("%s: got %d entries, want 2", name, len(invs))
+		}
+	}
+}

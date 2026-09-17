@@ -23,10 +23,14 @@ var ErrNoEntries = errors.New("no invariant entries found")
 //
 // The prefix is not assumed to be "INV": BLIS declares NS-6 in the same
 // registry, numbered by a different design note, and its resolution rule is
-// about resolvability rather than the prefix. But segments cannot be capitalised
-// words, or ordinary prose headings become declared invariants — "### KV-Cache:
-// Terminology" and a group-label row "| **Run-Level** |" would each inflate the
-// UNLINKED count that is this feature's headline number.
+// about resolvability rather than the prefix.
+//
+// Segments cannot be capitalised words, which is what stops "### KV-Cache:
+// Terminology" and a group-label row "| **Run-Level** |" from becoming declared
+// invariants and inflating the UNLINKED count that is this feature's headline
+// number. An all-caps hyphenated label — "FAST-TRACK", "HTTP-2" — is still
+// ID-shaped and would parse as an entry; INV-A carries no digit, so there is no
+// tighter rule available that keeps every ID BLIS actually declares.
 const idPattern = `[A-Z][A-Z0-9]*(?:-[A-Z0-9]+[a-z]?)+`
 
 var (
@@ -35,7 +39,7 @@ var (
 	// express tiering, but pinning the parser to those two levels would drop an
 	// entry the day a registry promotes a section or adds a tier — the silent
 	// kind of loss this package exists to avoid.
-	headingEntryRe = regexp.MustCompile(`^(#{1,6}) (` + idPattern + `): +(\S.*)$`)
+	headingEntryRe = regexp.MustCompile(`^(#{1,6})[ \t]+(` + idPattern + `):[ \t]+(\S.*)$`)
 
 	// A table entry: "| **INV-L1** | statement | ... |". The bold first cell is
 	// what separates an entry from an index row like
@@ -46,12 +50,17 @@ var (
 	statementRe = regexp.MustCompile(`^\*\*Statement:\*\* *(.*)$`)
 	fenceRe     = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
 
-	// A heading whose text opens with a complete ID. If it is not also a
-	// well-formed entry — a missing colon, a backticked ID, an em dash, no title
-	// — that is an error: silently skipping it is how a registry loses an entry
-	// to a typo and still reports cleanly. The trailing boundary makes the ID
-	// maximal, so "KV-Cache" is not read as the ID "KV-Ca".
-	headingIDRe = regexp.MustCompile("^#{1,6} +`?(" + idPattern + ")`?([^0-9A-Za-z-].*|)$")
+	// A heading that was evidently trying to be an entry and is not one: the ID
+	// alone, or an ID followed by a separator that is not ": " — a missing colon,
+	// a backticked ID, an em dash, no title. Those are errors, because silently
+	// skipping one is how a registry loses an entry to a typo and still reports
+	// cleanly.
+	//
+	// A heading that merely opens with an ID and continues in prose ("## INV-1
+	// Impact", "### INV-6 (deprecated)") is left alone: it is not a malformed
+	// entry, and BLIS's design docs contain the shape. The trailing boundary
+	// makes the ID maximal, so "KV-Cache" is not read as the ID "KV-Ca".
+	headingIDRe = regexp.MustCompile("^#{1,6}[ \t]+`?(" + idPattern + ")`?[ \t]*(?:$|`|[:;,.\\-\u2013\u2014]+[ \t]*.*$)")
 
 	// A statement paragraph belongs to the entry it follows. These end the
 	// search so a "**Statement:**" further down the section — after a horizontal
@@ -182,7 +191,7 @@ func fenceMask(lines []string, source string) ([]bool, error) {
 		case m != nil && m[1][0] == open[0] && len(m[1]) >= len(open) && strings.TrimSpace(m[2]) == "":
 			open = ""
 			fenced[i] = true
-		case m != nil && len(m[1]) == len(open) && strings.TrimSpace(m[2]) != "":
+		case m != nil && m[1][0] == open[0] && len(m[1]) == len(open) && strings.TrimSpace(m[2]) != "":
 			// An info string on a fence of the same width as the one already
 			// open: this is an opener, and openers do not nest at equal width.
 			// It means the mask is one fence out of step.

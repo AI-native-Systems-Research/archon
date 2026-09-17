@@ -55,9 +55,9 @@ var skipDir = map[string]bool{".git": true, "vendor": true, "node_modules": true
 // Returned links are in the order of invs; every slice inside them is sorted and
 // de-duplicated, and no map iteration reaches the result.
 func LinkRepo(root string, invs []Invariant) ([]Link, error) {
-	byNorm := map[string]string{} // normalized ID -> ID
+	byNorm := map[string]string{} // upper-cased normalized ID -> ID
 	for _, inv := range invs {
-		n := normalizeID(inv.ID)
+		n := strings.ToUpper(normalizeID(inv.ID))
 		if prev, ok := byNorm[n]; ok && prev != inv.ID {
 			return nil, fmt.Errorf("invariants %s and %s are indistinguishable in test names (both normalize to %s)", prev, inv.ID, n)
 		}
@@ -183,6 +183,10 @@ func LinkRepo(root string, invs []Invariant) ([]Link, error) {
 // what keeps INV-1 off TestINV13_RunReplayParity and INV-PD-6 off a test named
 // for INV-PD-6b — including when the longer ID is not itself declared, which
 // is where the previous longest-wins rule quietly failed.
+//
+// Comparison folds case, so a repo writing TestInv6_Determinism is matched too.
+// Tokenising first is what makes that safe: "Invalid" is its own token and can
+// never serve as INV-A's "A" segment.
 func namedFor(testName string, byNorm map[string]string) []string {
 	tokens := tokenize(testName)
 	var out []string
@@ -190,7 +194,7 @@ func namedFor(testName string, byNorm map[string]string) []string {
 		run := ""
 		for j := i; j < len(tokens); j++ {
 			run += tokens[j]
-			id, ok := byNorm[run]
+			id, ok := byNorm[strings.ToUpper(run)]
 			if !ok {
 				continue
 			}
