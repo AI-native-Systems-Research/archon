@@ -25,7 +25,9 @@ check() {
 echo "=== Flow 1: PR Review (BLIS #1546) ==="
 if [ -z "$BLIS_REPO" ]; then
     echo "  SKIP: set BLIS_REPO=/path/to/blis to run Flow 1"
-    echo "  (e.g., BLIS_REPO=../main-repo-blis ./demo/run-all.sh)"
+    echo "  (e.g., BLIS_REPO=/abs/path/to/blis ./demo/run-all.sh)"
+    echo "  NOTE: this flow's goldens record one absolute repo path, so they only"
+    echo "        reproduce from that checkout; elsewhere expect these 2 to fail."
 else
     rm -rf /tmp/demo-flow1
     $ARCHON pr-review "$BLIS_REPO" 70e9ba85 d77764f5 --out /tmp/demo-flow1 2>/dev/null
