@@ -497,6 +497,12 @@ func usage() {
       --plan <file>                             plan ratchet: check dist(plan,
                                                 base) vs dist(plan, head)
       --fixed <file>                            surface growth gate (G3)
+      --invariants <file>                       declared invariant registry; a
+                                                section reports which declared
+                                                invariants the change exposes.
+                                                Auto-discovered at a conventional
+                                                path when the flag is absent;
+                                                advisory, never changes the verdict
   archon-go plan compile [--stats] <file.archon>  compile a plan into graph JSON
   archon-go plan dist <plan.json> <repo|graph> [commit]  plan distance (C1-C4)
   archon-go plan slice <plan.json> <hole-path>  extract one hole as a work order
@@ -683,6 +689,8 @@ func cmdPRReview(args []string) {
 	allowPath := ""
 	fixedPath := ""
 	planPath := ""
+	registryPath := ""
+	registryExplicit := false
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -722,6 +730,12 @@ func cmdPRReview(args []string) {
 			opts.LabelB = next()
 		case strings.HasPrefix(a, "--label-b="):
 			opts.LabelB = strings.TrimPrefix(a, "--label-b=")
+		case a == "--invariants":
+			registryPath = next()
+			registryExplicit = true
+		case strings.HasPrefix(a, "--invariants="):
+			registryPath = strings.TrimPrefix(a, "--invariants=")
+			registryExplicit = true
 		case a == "--emit-artifacts":
 			opts.EmitArtifacts = true
 		default:
@@ -759,6 +773,7 @@ func cmdPRReview(args []string) {
 		fmt.Fprintf(os.Stderr, "      loading plan from %s\n", planPath)
 		opts.PlanGraph = loadPlanGraph(planPath)
 	}
+	opts.Registry, opts.ChangedFiles = loadRegistryForReview(opts.Repo, opts.Base, opts.Head, registryPath, registryExplicit)
 
 	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
 	res := review.Build(gA, gB, d, opts)
@@ -767,6 +782,73 @@ func cmdPRReview(args []string) {
 		fatal("write bundle: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "done: %s\n", res.Verdict)
+}
+
+// loadRegistryForReview resolves the declared invariant registry for a review,
+// following issue #65's discovery table: an explicit --invariants path that is
+// missing or unparseable is a hard error, an absent registry is silent, and a
+// registry found at a conventional path is used and named in the report.
+//
+// Everything is read at the head commit, never the working tree. Probing the
+// working tree would make the report — and every golden built from it — depend on
+// whatever the checkout happens to contain, which is the opposite of the pinning
+// the rest of pr-review does.
+func loadRegistryForReview(repo, base, head, path string, explicit bool) (*invariant.Result, []string) {
+	if !explicit {
+		found := ""
+		for _, p := range conventionalRegistryPaths {
+			if fileExistsAt(repo, head, p) {
+				found = p
+				break
+			}
+		}
+		if found == "" {
+			// No registry: no section, and the bundle stays byte-identical to
+			// what it was before this feature existed.
+			return nil, nil
+		}
+		path = found
+		fmt.Fprintf(os.Stderr, "      found invariant registry at %s\n", path)
+	} else {
+		fmt.Fprintf(os.Stderr, "      reading invariant registry from %s\n", path)
+	}
+
+	res, err := linkInvariants(repo, filepath.ToSlash(path), head)
+	if err != nil {
+		if explicit {
+			// You asked for something that is not there.
+			fatal("--invariants %s: %v", path, err)
+		}
+		// Discovered, then failed to parse: still loud. Silence here would be a
+		// section that vanishes for a reason nobody sees.
+		fatal("invariant registry %s (auto-discovered): %v", path, err)
+	}
+	if err := res.Validate(); err != nil {
+		fatal("invariant registry %s: %v", path, err)
+	}
+
+	// Two-dot, base to head: the caller already passes the merge base as <base>
+	// (BLIS's scripts/archon-review.sh does exactly that), so this is the set of
+	// files the change touches rather than everything since a fork point.
+	changed, err := output(repo, "git", "diff", "--name-only", base, head)
+	if err != nil {
+		// An empty list would render "touched 0 of 69" — a wrong number rather
+		// than a missing one.
+		fatal("listing changed files for %s: %v", head, err)
+	}
+	var files []string
+	for _, f := range strings.Split(changed, "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			files = append(files, f)
+		}
+	}
+	return &res, files
+}
+
+// fileExistsAt reports whether path exists in the repo at commit.
+func fileExistsAt(repo, commit, path string) bool {
+	_, err := output(repo, "git", "cat-file", "-e", commit+":"+path)
+	return err == nil
 }
 
 // cmdPlan handles `archon-go plan compile|dist` subcommands.

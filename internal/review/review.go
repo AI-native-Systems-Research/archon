@@ -31,6 +31,7 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
 	"github.com/AI-native-Systems-Research/archon/internal/gate"
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
+	"github.com/AI-native-Systems-Research/archon/internal/invariant"
 	"github.com/AI-native-Systems-Research/archon/internal/plan"
 )
 
@@ -77,6 +78,17 @@ type Options struct {
 	// PlanGraph is a compiled plan. When non-nil, the plan ratchet (G5) and
 	// surface gate (G3, derived from plan holes) are computed.
 	PlanGraph *graph.Graph
+
+	// Registry is a declared invariant registry already parsed and linked against
+	// the repository. When non-nil, the advisory declared-invariant section is
+	// computed. Discovery, parsing, linking and validation happen in the caller,
+	// which keeps this package free of any filesystem or git dependency.
+	Registry *invariant.Result
+
+	// ChangedFiles are the repo-relative paths this change touches, used only to
+	// report how much of each invariant's footprint the change reaches. Empty
+	// when Registry is nil.
+	ChangedFiles []string
 
 	// EmitArtifacts also writes the separate .mmd/.dot/.md source files and, if
 	// `dot` is on PATH, PNGs. Off by default: review.md embeds every diagram
@@ -132,6 +144,10 @@ type Result struct {
 	// touched, with their evidence binding. Present only with --plan; a report,
 	// not a gate — nothing here affects Verdict.
 	Clauses []ClauseRow `json:"clauses,omitempty"`
+
+	// Registry is the advisory declared-invariant report. Nil when no registry
+	// was supplied, which keeps the bundle byte-identical to before this existed.
+	Registry *RegistrySection `json:"registry,omitempty"`
 
 	// Higher-altitude views (computed here).
 	Components ComponentView `json:"components"`
@@ -217,6 +233,9 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 			}
 		}
 	}
+
+	// Advisory, and computed after the verdict so it cannot feed it.
+	res.Registry = buildRegistrySection(opts.Registry, opts.ChangedFiles)
 
 	res.Verdict, res.Summary = verdict(d)
 	return res

@@ -463,7 +463,50 @@ dependencies as violations, against a baseline from `archon-go contract`),
 `--depth N` (component grouping granularity, default 2), `--label-a/-b S` (human
 labels for base/head), `--emit-artifacts` (also write the `.mmd`/`.dot`/`.md`
 sources and PNGs — off by default, since everything is already embedded in
-`review.md`).
+`review.md`), `--invariants FILE` (see below).
+
+#### Declared invariants in the review
+
+If the repo has a declared invariant registry (see `invariants`), `pr-review` adds
+a section reporting which declared invariants the change exposes:
+
+```
+### Declared invariants — registry
+
+Registry: `docs/contributing/standards/invariants.md` at `d77764f5…` — 23 declared,
+22 of 23 anchored (18 LINKED, 4 TEST ONLY, 1 UNLINKED), 318 Go files scanned.
+
+| ID | Status | files touched | named tests touched |
+|---|---|---|---|
+| `INV-6` | LINKED | 15 of 90 | 1 of 3 |
+| `INV-13` | LINKED | 8 of 20 | 0 of 5 |
+| `INV-PD-2` | UNLINKED | — | — |
+
+`INV-PD-2` is declared but cited in no file.
+```
+
+Rows are the invariants worth a reviewer's attention: the ones this change touched,
+most-exposed first, plus any declared invariant nothing in the repo cites. "15 of
+90 files, 1 of 3 named tests" is the useful shape — a wide change to INV-6's
+footprint that barely moved its tests.
+
+**You do not have to pass the flag.** With none, archon probes
+`docs/contributing/standards/invariants.md`, then `docs/invariants.md`, then
+`INVARIANTS.md`, **at the head commit** rather than in your working tree:
+
+| situation | behaviour |
+|---|---|
+| no flag, no registry at a conventional path | **no section**, bundle byte-identical to before this existed |
+| no flag, registry found | section rendered, **naming the path it used** |
+| `--invariants <path>`, file present | section rendered from that path |
+| `--invariants <path>`, missing or unparseable | **hard error** — you asked for something that is not there |
+| registry parses, nothing cites any ID | section rendered reporting `0 of N anchored` — a finding, not an empty result |
+
+The path is printed in the section for a reason: if the doc is renamed, the section
+would otherwise vanish and every later review would look normal.
+
+The section is **advisory**. It cannot change the verdict, `dist`, or the exit code
+— same tier as contract clauses. A test asserts that.
 
 **What you'll see — a boundary-moving PR** (inference-sim #1546, which decoupled
 `sim/saturation`):

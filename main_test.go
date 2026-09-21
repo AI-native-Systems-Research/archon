@@ -570,3 +570,164 @@ func TestInvariantsAtRejectsUnpinnable(t *testing.T) {
 		}
 	})
 }
+
+// TestPRReviewRegistryDiscovery covers issue #65's discovery table end to end,
+// including the guarantee that matters most: with no registry the bundle is
+// byte-identical to what it was before this feature existed.
+//
+// It runs in Go rather than only in demo/run-all.sh because CI leaves BLIS_REPO
+// unset, which skips flow 1 entirely — so the demo alone proves nothing on a PR.
+func TestPRReviewRegistryDiscovery(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("core/engine.go", "package core\n\n// Conserve upholds INV-1.\nfunc Conserve() {}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "base")
+	base := git("rev-parse", "HEAD")
+
+	write("leaf/leaf.go", "package leaf\n\n// Leaf also cites INV-1.\nfunc Leaf() {}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "head")
+	head := git("rev-parse", "HEAD")
+
+	run := func(t *testing.T, out string, extra ...string) (string, string, int) {
+		t.Helper()
+		args := append([]string{"pr-review", repo, base, head, "--out", out}, extra...)
+		cmd := exec.Command(bin, args...)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatalf("pr-review: %v\n%s", err, stderr.String())
+		}
+		return stdout.String(), stderr.String(), code
+	}
+	read := func(t *testing.T, p string) string {
+		t.Helper()
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	// --- no registry anywhere: no section, and this is the baseline bundle ---
+	noRegDir := filepath.Join(t.TempDir(), "none")
+	if _, stderr, code := run(t, noRegDir); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	baseMD := read(t, filepath.Join(noRegDir, "review.md"))
+	baseJSON := read(t, filepath.Join(noRegDir, "review.json"))
+	if strings.Contains(baseMD, "Declared invariants") {
+		t.Errorf("a section rendered with no registry present:\n%s", baseMD)
+	}
+	if strings.Contains(baseJSON, "\"registry\"") {
+		t.Error("review.json gained a registry key with no registry present")
+	}
+
+	// --- explicit path that does not exist: hard error ---
+	t.Run("explicit missing path is a hard error", func(t *testing.T) {
+		_, stderr, code := run(t, filepath.Join(t.TempDir(), "x"), "--invariants", "docs/nope.md")
+		if code == 0 {
+			t.Error("exit 0 for a registry that does not exist")
+		}
+		if !strings.Contains(stderr, "docs/nope.md") {
+			t.Errorf("stderr should name the path asked for, got %q", stderr)
+		}
+	})
+
+	// --- explicit path that exists but declares nothing: hard error ---
+	t.Run("explicit unparseable path is a hard error", func(t *testing.T) {
+		write("docs/empty.md", "# Nothing here\n\nJust prose.\n")
+		git("add", "-A")
+		git("commit", "--quiet", "-m", "empty registry")
+		h := git("rev-parse", "HEAD")
+		cmd := exec.Command(bin, "pr-review", repo, base, h, "--out", filepath.Join(t.TempDir(), "y"), "--invariants", "docs/empty.md")
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil {
+			t.Error("a registry declaring no invariants should be a hard error when asked for by path")
+		}
+		if !strings.Contains(stderr.String(), "no invariant entries") {
+			t.Errorf("stderr should say why, got %q", stderr.String())
+		}
+	})
+
+	// --- registry at a conventional path: discovered, named, section rendered ---
+	t.Run("auto-discovery names the path and renders", func(t *testing.T) {
+		write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n\n### INV-99: Never cited\n\n**Statement:** Nowhere.\n")
+		git("add", "-A")
+		git("commit", "--quiet", "-m", "add registry")
+		h := git("rev-parse", "HEAD")
+
+		out := filepath.Join(t.TempDir(), "disc")
+		cmd := exec.Command(bin, "pr-review", repo, base, h, "--out", out)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("%v\n%s", err, stderr.String())
+		}
+		md := read(t, filepath.Join(out, "review.md"))
+		if !strings.Contains(md, "### Declared invariants — registry") {
+			t.Errorf("no section:\n%s", md)
+		}
+		// Naming the path is what turns a silent disable into something a reader
+		// notices if the doc is ever renamed.
+		if !strings.Contains(md, "`docs/invariants.md`") {
+			t.Errorf("the section must name the discovered path:\n%s", md)
+		}
+		if !strings.Contains(md, "`INV-99` is declared but cited in no file") {
+			t.Errorf("an uncited invariant is a finding:\n%s", md)
+		}
+		if !strings.Contains(stderr.String(), "found invariant registry at docs/invariants.md") {
+			t.Errorf("discovery should say what it found, got %q", stderr.String())
+		}
+
+		// Advisory: the verdict is whatever it was without a registry.
+		if !strings.Contains(md, "Verdict:") {
+			t.Fatal("no verdict line")
+		}
+		if v := verdictLine(baseMD); v != verdictLine(md) {
+			t.Errorf("verdict moved: %q vs %q", v, verdictLine(md))
+		}
+	})
+}
+
+// verdictLine extracts the verdict line so the advisory guarantee can be compared
+// without comparing bundles built from different commits.
+func verdictLine(md string) string {
+	for _, l := range strings.Split(md, "\n") {
+		if strings.HasPrefix(l, "**Verdict:") {
+			return l
+		}
+	}
+	return ""
+}
