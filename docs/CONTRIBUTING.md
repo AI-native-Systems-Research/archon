@@ -185,13 +185,13 @@ in round two were round one's *fixes*, each a new guard that rejected valid inpu
   must-fix finding does not merge, at any round count.** The named human is the escape hatch for a
   finding you believe is simply wrong.
 - **Name the SHA the last round reviewed**, taken at dispatch and equal to HEAD at merge. A clean
-  round on code you then changed is not a clean round. Two exceptions, without which the rule never
-  terminates: an update from `main` keeps the round if
-  `git diff <reviewed-sha> HEAD -- $(git diff --name-only origin/main...HEAD)` is empty, and **only
-  a must-fix fix invalidates a clean round**. Apply a clean round's non-blocking suggestions before
-  that round, or in a follow-up PR — applying them afterwards does not cost you another round.
-  Every round produces some, so treating them as invalidating means the loop has no end. Resolving
-  a conflict is a new commit and needs a new round.
+  round on code you then changed is not a clean round. Exactly two changes are carved out of that,
+  and nothing else is: an update from `main`, if
+  `git diff <reviewed-sha> HEAD -- $(git diff --name-only origin/main...HEAD)` is empty; and **that
+  round's own non-blocking suggestions**, applied as written. Every round produces suggestions, so
+  treating those as invalidating gives the loop no end. Anything else you push — a refactor, a bug
+  you spotted yourself, a conflict resolution, work the round never saw — voids the round, whatever
+  its severity would have been.
 - **Three rounds is a ceiling that signals a design problem**, not a permit to merge on the third.
   If round three still produces must-fix findings, stop, leave the PR in draft, and raise it with a
   human; more rounds will keep finding symptoms.
