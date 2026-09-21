@@ -118,19 +118,17 @@ Show real output in the example, copied from a run, not written from memory.
 
 ### 6. Review with pr-review-toolkit (/pr-review-toolkit:review-pr) — every PR
 
-**Open the PR as a draft, run the review, then mark it ready.** In that order, so that
-"ready" means something other than the author has looked at this. Nothing merges without this
-step having run — a draft merged directly has skipped it just as surely.
+**Open the PR as a draft, run the review, then mark it ready.** In that order, so that "ready"
+means something other than the author has looked at this. Nothing merges without this step having
+run, and a draft merged directly has skipped it just as surely.
 
-This step is not scoped by size: step 5 above applies to Medium+ feature PRs, this one has no
-exceptions. What scales is depth, not whether the gate exists.
+Unlike step 5, this step is not scoped by size: what scales is depth, not whether the gate exists.
 
 **The review must come from pr-review-toolkit.** Either invoke `/pr-review-toolkit:review-pr`, or
 dispatch its agents directly with the Agent tool. `pr-review-toolkit:code-reviewer` is the default.
 If the change matches a row below, **that agent runs too** — the table is an obligation, not a
 menu, and the PR must say which rows you judged not to apply. The conditions are observable on the
-diff rather than matters of author confidence, because "coverage I am unsure of" is never true of
-someone who wants to ship:
+diff rather than matters of author confidence:
 
 | Agent | Runs when the diff |
 |---|---|
@@ -139,13 +137,10 @@ someone who wants to ship:
 | `pr-test-analyzer` | adds or changes tests |
 | `comment-analyzer` | adds or changes prose stating how the tool behaves — doc comments included |
 
-Say in the PR which route you used and which agents ran, so "the review ran" is checkable rather
-than asserted.
-
 #### Briefing the reviewer
 
 Every PR gets at least one round. "Small" means one agent *plus any row of the table above that
-applies* — not a thinner brief.
+applies*.
 
 The canned prompt below is the floor, not the target. An agent starts with none of your context,
 so a thin brief buys a thin review — and a reviewer that only *reads* the guards will report that
@@ -187,28 +182,30 @@ in round two were round one's *fixes*, each a new guard that rejected valid inpu
   reasons, report a clean round.
 - **A must-fix finding is open** until it is fixed, or dismissed *and* not raised again by a later
   round on the post-fix code, or overruled by a named human in the PR. **A PR with an open
-  must-fix finding does not merge, at any round count.** The human overrule is the escape hatch for
-  a finding you believe is simply wrong — it costs one sentence and a name, and it is visible.
+  must-fix finding does not merge, at any round count.** The named human is the escape hatch for a
+  finding you believe is simply wrong.
 - **Name the SHA the last round reviewed**, taken at dispatch and equal to HEAD at merge. A clean
   round on code you then changed is not a clean round. Updating from `main` is the exception: if
-  `git diff <reviewed-sha> HEAD -- <your files>` is empty, the round still counts. Resolving a
-  conflict is a new commit and needs a new round.
+  `git diff <reviewed-sha> HEAD -- $(git diff --name-only origin/main...HEAD)` is empty, the round
+  still counts. Resolving a conflict is a new commit and needs a new round.
 - **Three rounds is a ceiling that signals a design problem**, not a permit to merge on the third.
   If round three still produces must-fix findings, stop, leave the PR in draft, and raise it with a
   human; more rounds will keep finding symptoms.
 
-Tell a later round it is reviewing fixes and name them, so it checks those rather than
-re-deriving the original findings.
+Tell a later round it is reviewing fixes, name them, and name any finding you dismissed, so it can
+rule on the dismissal rather than re-deriving the original list.
 
-Verifying your own work is not a substitute: your verification can be wrong in a way that looks
-right. On #62 the tests, the demos and a hand-written sweep all passed while the PR shipped a
-false claim about golden-file coverage; run late, the review found it in minutes (#63).
+Verifying your own work is not a substitute — on #62 the tests, the demos and a hand-written sweep
+all passed while the PR shipped a false claim about golden-file coverage (#63).
 
-State in the PR that the step ran — "step 6: N rounds, M findings, K fixed, M-K dismissed with
-reasons; last round clean at <sha>", or "round 3 escalated to <human>, not merged" — so the gate is
-auditable. Silence is indistinguishable from having
-skipped it, and "findings, fixed" without the round count hides whether the fixes were ever
-looked at.
+State in the PR that the step ran, so the gate is auditable rather than asserted — silence is
+indistinguishable from having skipped it:
+
+```
+step 6: <route, and which agents ran; which table rows you judged not to apply>.
+N rounds, M findings, K fixed, M-K dismissed with reasons.
+Last round clean at <sha>.        (or: round 3 escalated to <human>, not merged.)
+```
 
 If a PR ever does merge without this step, that is a broken rule rather than a second route
 through it: run the review on the merged commit and fix what it finds in a follow-up, promptly.
