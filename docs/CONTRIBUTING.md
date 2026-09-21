@@ -128,21 +128,24 @@ exceptions. What scales is depth, not whether the gate exists.
 **The review must come from pr-review-toolkit.** Either invoke `/pr-review-toolkit:review-pr`, or
 dispatch its agents directly with the Agent tool. `pr-review-toolkit:code-reviewer` is the default.
 If the change matches a row below, **that agent runs too** — the table is an obligation, not a
-menu, and the PR should say which rows you judged not to apply:
+menu, and the PR must say which rows you judged not to apply. The conditions are observable on the
+diff rather than matters of author confidence, because "coverage I am unsure of" is never true of
+someone who wants to ship:
 
-| Agent | Runs when the change involves |
+| Agent | Runs when the diff |
 |---|---|
-| `silent-failure-hunter` | error handling, fallbacks, catch blocks, anything that can return an empty result |
-| `type-design-analyzer` | new exported types, or types other PRs will build on |
-| `pr-test-analyzer` | test coverage you are unsure of |
-| `comment-analyzer` | new doc comments making claims about behaviour |
+| `silent-failure-hunter` | adds or changes error handling, a fallback, a catch block, or any path that can return an empty result |
+| `type-design-analyzer` | adds or changes an exported type |
+| `pr-test-analyzer` | adds or changes tests |
+| `comment-analyzer` | adds or changes prose stating how the tool behaves — doc comments included |
 
 Say in the PR which route you used and which agents ran, so "the review ran" is checkable rather
 than asserted.
 
 #### Briefing the reviewer
 
-Every PR gets at least one round. "Small" means one agent, not a thinner brief.
+Every PR gets at least one round. "Small" means one agent *plus any row of the table above that
+applies* — not a thinner brief.
 
 The canned prompt below is the floor, not the target. An agent starts with none of your context,
 so a thin brief buys a thin review — and a reviewer that only *reads* the guards will report that
@@ -179,19 +182,20 @@ the code you are actually merging* — not on a round whose fixes you then appli
 written under review pressure is exactly where the next bug goes: on #66, both must-fix findings
 in round two were round one's *fixes*, each a new guard that rejected valid input.
 
-Three clauses, because each closes a way to report a clean round without having had one:
-
-- **Must-fix means the reviewing agent called it must-fix**, not you. You may still dismiss such a
-  finding with a reason, but a dismissed must-fix finding does not make the round clean: the next
-  round has to see the resolution and not raise it again. Otherwise the dismissal power above
-  quietly becomes the power to end the loop.
-- **Name the commit SHA the last round reviewed.** If HEAD moves after it — a new commit, a rebase,
-  a merge from `main`, a one-line doc tweak — that SHA is no longer the code you are merging, and
-  the round no longer counts.
-- **A PR with an open must-fix finding does not merge, at any round count.** Three rounds is a
-  ceiling that signals a design problem, not a permit to merge on the third. If round three still
-  produces must-fix findings, stop, leave the PR in draft, and raise it with a human; more rounds
-  will keep finding symptoms.
+- **Must-fix means the reviewing agent called it must-fix**, not you. Otherwise the dismissal
+  power above is quietly the power to end the loop: dismiss everything as not-must-fix, list
+  reasons, report a clean round.
+- **A must-fix finding is open** until it is fixed, or dismissed *and* not raised again by a later
+  round on the post-fix code, or overruled by a named human in the PR. **A PR with an open
+  must-fix finding does not merge, at any round count.** The human overrule is the escape hatch for
+  a finding you believe is simply wrong — it costs one sentence and a name, and it is visible.
+- **Name the SHA the last round reviewed**, taken at dispatch and equal to HEAD at merge. A clean
+  round on code you then changed is not a clean round. Updating from `main` is the exception: if
+  `git diff <reviewed-sha> HEAD -- <your files>` is empty, the round still counts. Resolving a
+  conflict is a new commit and needs a new round.
+- **Three rounds is a ceiling that signals a design problem**, not a permit to merge on the third.
+  If round three still produces must-fix findings, stop, leave the PR in draft, and raise it with a
+  human; more rounds will keep finding symptoms.
 
 Tell a later round it is reviewing fixes and name them, so it checks those rather than
 re-deriving the original findings.
