@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -438,6 +439,11 @@ func output(dir, name string, args ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
+		// Without this the caller reports "exit status 128" and nothing else,
+		// which names no cause a reader could act on.
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(ee.Stderr)))
+		}
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
@@ -751,7 +757,7 @@ func cmdPRReview(args []string) {
 	case 3:
 		opts.Repo, opts.Base, opts.Head = pos[0], pos[1], pos[2]
 	default:
-		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--fixed FILE] [--plan FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
+		fmt.Fprintln(os.Stderr, "usage: archon-go pr-review [repo] <base> <head> [--out DIR] [--allow FILE] [--fixed FILE] [--plan FILE] [--invariants FILE] [--depth N] [--label-a S] [--label-b S] [--emit-artifacts]")
 		os.Exit(2)
 	}
 
@@ -774,6 +780,9 @@ func cmdPRReview(args []string) {
 		opts.PlanGraph = loadPlanGraph(planPath)
 	}
 	opts.Registry, opts.ChangedFiles = loadRegistryForReview(opts.Repo, opts.Base, opts.Head, registryPath, registryExplicit)
+	if opts.Registry != nil {
+		opts.RemovedAnchors = removedAnchors(opts.Repo, opts.Base, opts.Head, invariantsOf(opts.Registry))
+	}
 
 	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
 	res := review.Build(gA, gB, d, opts)
@@ -793,8 +802,33 @@ func cmdPRReview(args []string) {
 // working tree would make the report — and every golden built from it — depend on
 // whatever the checkout happens to contain, which is the opposite of the pinning
 // the rest of pr-review does.
+//
+// An auto-discovered registry that fails to parse is a warning, not a fatal:
+// pr-review is report-only, and a mistyped heading in a docs PR must not delete
+// the architectural review. Only an explicitly requested path is fatal, because
+// there the caller asked for something specific.
 func loadRegistryForReview(repo, base, head, path string, explicit bool) (*invariant.Result, []string) {
-	if !explicit {
+	// git worktree and git cat-file both work from the repository root, and
+	// linkInvariants refuses a subdirectory outright. Resolving here keeps
+	// `pr-review .` working from anywhere inside a checkout.
+	if top, err := output(repo, "git", "rev-parse", "--show-toplevel"); err == nil && top != "" {
+		repo = top
+	}
+
+	if explicit {
+		// Same guards as the invariants subcommand: the path is resolved inside
+		// the commit's tree, so an absolute or climbing path would read something
+		// that is in the repo at no commit.
+		if filepath.IsAbs(path) {
+			fatal("--invariants %s: path must be repo-relative; it is resolved inside <repo> at the head commit", path)
+		}
+		clean := filepath.ToSlash(filepath.Clean(path))
+		if clean == ".." || strings.HasPrefix(clean, "../") {
+			fatal("--invariants %s: path must stay inside <repo>", path)
+		}
+		path = clean
+		fmt.Fprintf(os.Stderr, "      reading invariant registry from %s\n", path)
+	} else {
 		found := ""
 		for _, p := range conventionalRegistryPaths {
 			if fileExistsAt(repo, head, p) {
@@ -804,51 +838,132 @@ func loadRegistryForReview(repo, base, head, path string, explicit bool) (*invar
 		}
 		if found == "" {
 			// No registry: no section, and the bundle stays byte-identical to
-			// what it was before this feature existed.
+			// what it was before this feature existed. Said on stderr because a
+			// renamed registry is otherwise indistinguishable from never having
+			// had one — the section cannot name a path that is not there.
+			fmt.Fprintf(os.Stderr, "      no invariant registry at %s — no declared-invariant section\n",
+				strings.Join(conventionalRegistryPaths, ", "))
 			return nil, nil
 		}
 		path = found
 		fmt.Fprintf(os.Stderr, "      found invariant registry at %s\n", path)
-	} else {
-		fmt.Fprintf(os.Stderr, "      reading invariant registry from %s\n", path)
 	}
 
-	res, err := linkInvariants(repo, filepath.ToSlash(path), head)
+	res, err := linkInvariants(repo, path, head)
 	if err != nil {
 		if explicit {
 			// You asked for something that is not there.
 			fatal("--invariants %s: %v", path, err)
 		}
-		// Discovered, then failed to parse: still loud. Silence here would be a
-		// section that vanishes for a reason nobody sees.
-		fatal("invariant registry %s (auto-discovered): %v", path, err)
+		fmt.Fprintf(os.Stderr, "warning: invariant registry %s (auto-discovered) could not be used: %v\n", path, err)
+		fmt.Fprintln(os.Stderr, "         continuing without the declared-invariant section")
+		return nil, nil
 	}
 	if err := res.Validate(); err != nil {
-		fatal("invariant registry %s: %v", path, err)
+		if explicit {
+			fatal("--invariants %s: %v", path, err)
+		}
+		fmt.Fprintf(os.Stderr, "warning: invariant registry %s (auto-discovered) is not publishable: %v\n", path, err)
+		return nil, nil
 	}
 
-	// Two-dot, base to head: the caller already passes the merge base as <base>
-	// (BLIS's scripts/archon-review.sh does exactly that), so this is the set of
-	// files the change touches rather than everything since a fork point.
-	changed, err := output(repo, "git", "diff", "--name-only", base, head)
+	files, err := changedFiles(repo, base, head)
 	if err != nil {
 		// An empty list would render "touched 0 of 69" — a wrong number rather
-		// than a missing one.
-		fatal("listing changed files for %s: %v", head, err)
-	}
-	var files []string
-	for _, f := range strings.Split(changed, "\n") {
-		if f = strings.TrimSpace(f); f != "" {
-			files = append(files, f)
-		}
+		// than a missing one — so this is fatal even though the section is
+		// advisory.
+		fatal("listing changed files between %s and %s: %v", base, head, err)
 	}
 	return &res, files
 }
 
-// fileExistsAt reports whether path exists in the repo at commit.
+// removedAnchors maps an invariant ID to the files a change deletes that cited it
+// at the base commit.
+//
+// Citation counts are read at head, where a deleted file no longer exists, so
+// without this a change that removes an invariant's last anchor renders exactly
+// like a whitespace-only commit. Only deleted files are re-read, so this costs one
+// `git show` per deletion rather than a second full scan.
+func removedAnchors(repo, base, head string, invs []invariant.Invariant) map[string][]string {
+	from := base
+	if mb, err := output(repo, "git", "merge-base", base, head); err == nil && mb != "" {
+		from = mb
+	}
+	out, err := output(repo, "git", "diff", "-z", "--name-only", "--diff-filter=D", from, head)
+	if err != nil || out == "" {
+		return nil
+	}
+	patterns := make(map[string]*regexp.Regexp, len(invs))
+	for _, inv := range invs {
+		patterns[inv.ID] = invariant.CitationRegexp(inv.ID)
+	}
+	removed := map[string][]string{}
+	for _, f := range strings.Split(out, "\x00") {
+		if f == "" || !strings.HasSuffix(f, ".go") {
+			continue
+		}
+		src, err := output(repo, "git", "show", from+":"+f)
+		if err != nil {
+			continue
+		}
+		for id, re := range patterns {
+			if re.MatchString(src) {
+				removed[id] = append(removed[id], f)
+			}
+		}
+	}
+	for id := range removed {
+		sort.Strings(removed[id])
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	return removed
+}
+
+// changedFiles lists the repo-relative paths a change touches.
+//
+// It diffs from the merge base rather than from <base> directly. A two-dot diff
+// against a base that has moved on attributes mainline commits to the PR: a probe
+// had a change credited with touching 100% of an invariant's footprint that it
+// never went near. The graph delta tolerates that (it is a symmetric comparison of
+// two trees); "files this change touched" is a causal claim and does not.
+//
+// core.quotePath is on by default, which renders a path containing non-ASCII or a
+// space as an escaped, quoted string — and those never compare equal to the raw
+// UTF-8 paths the linker produces, so every such file silently fails to match.
+// -z sidesteps the quoting entirely.
+func changedFiles(repo, base, head string) ([]string, error) {
+	from := base
+	if mb, err := output(repo, "git", "merge-base", base, head); err == nil && mb != "" {
+		from = mb
+	}
+	out, err := output(repo, "git", "diff", "-z", "--name-only", from, head)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, f := range strings.Split(out, "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	return files, nil
+}
+
+// invariantsOf lists the declared invariants behind a linked result.
+func invariantsOf(res *invariant.Result) []invariant.Invariant {
+	out := make([]invariant.Invariant, 0, len(res.Links))
+	for _, l := range res.Links {
+		out = append(out, l.Invariant)
+	}
+	return out
+}
+
+// fileExistsAt reports whether path is a file in the repo at commit.
 func fileExistsAt(repo, commit, path string) bool {
-	_, err := output(repo, "git", "cat-file", "-e", commit+":"+path)
-	return err == nil
+	kind, err := output(repo, "git", "cat-file", "-t", commit+":"+path)
+	return err == nil && kind == "blob"
 }
 
 // cmdPlan handles `archon-go plan compile|dist` subcommands.

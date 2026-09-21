@@ -10,7 +10,7 @@ Architectural change — a package boundary moved; an architecture review is req
 
 Registry: `docs/contributing/standards/invariants.md` at `d77764f520568b6c67616ca178b214fe288be7fd` — 23 declared, 22 of 23 anchored (18 LINKED, 4 TEST ONLY, 1 UNLINKED), 318 Go files scanned.
 
-| ID | Status | files touched | named tests touched |
+| ID | Status | citing files touched | named tests in touched files |
 |---|---|---|---|
 | `INV-6` | LINKED | 15 of 90 | 1 of 3 |
 | `INV-13` | LINKED | 8 of 20 | 0 of 5 |
@@ -399,7 +399,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 15,
         "citingFilesTotal": 90,
-        "namedTestsTouched": 1,
+        "namedTestsInTouchedFiles": 1,
         "namedTestsTotal": 3
       },
       {
@@ -407,7 +407,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 8,
         "citingFilesTotal": 20,
-        "namedTestsTouched": 0,
+        "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 5
       },
       {
@@ -415,7 +415,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 5,
         "citingFilesTotal": 32,
-        "namedTestsTouched": 0,
+        "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 6
       },
       {
@@ -423,7 +423,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 4,
         "citingFilesTotal": 18,
-        "namedTestsTouched": 0,
+        "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 0
       },
       {
@@ -431,7 +431,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 3,
         "citingFilesTotal": 15,
-        "namedTestsTouched": 1,
+        "namedTestsInTouchedFiles": 1,
         "namedTestsTotal": 2
       },
       {
@@ -439,7 +439,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 2,
         "citingFilesTotal": 5,
-        "namedTestsTouched": 1,
+        "namedTestsInTouchedFiles": 1,
         "namedTestsTotal": 1
       },
       {
@@ -447,7 +447,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 1,
         "citingFilesTotal": 8,
-        "namedTestsTouched": 1,
+        "namedTestsInTouchedFiles": 1,
         "namedTestsTotal": 3
       },
       {
@@ -455,7 +455,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 1,
         "citingFilesTotal": 4,
-        "namedTestsTouched": 0,
+        "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 0
       },
       {
@@ -463,7 +463,7 @@ graph LR
         "status": "TEST ONLY",
         "citingFilesTouched": 1,
         "citingFilesTotal": 5,
-        "namedTestsTouched": 0,
+        "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 1
       },
       {
@@ -471,7 +471,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 1,
         "citingFilesTotal": 11,
-        "namedTestsTouched": 0,
+        "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 0
       },
       {
@@ -479,7 +479,7 @@ graph LR
         "status": "LINKED",
         "citingFilesTouched": 1,
         "citingFilesTotal": 5,
-        "namedTestsTouched": 0,
+        "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 4
       },
       {
@@ -487,7 +487,7 @@ graph LR
         "status": "UNLINKED",
         "citingFilesTouched": 0,
         "citingFilesTotal": 0,
-        "namedTestsTouched": 0,
+        "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 0
       }
     ]

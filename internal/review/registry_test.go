@@ -2,6 +2,7 @@ package review
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -39,7 +40,7 @@ func fixtureRegistry() *invariant.Result {
 var changed = []string{"sim/a.go", "sim/b.go", "sim/a_test.go", "unrelated/x.go"}
 
 func TestRegistrySection_CountsTouchedFilesAndNamedTests(t *testing.T) {
-	sec := buildRegistrySection(fixtureRegistry(), changed)
+	sec := buildRegistrySection(fixtureRegistry(), changed, nil)
 	if sec == nil {
 		t.Fatal("no section")
 	}
@@ -51,7 +52,7 @@ func TestRegistrySection_CountsTouchedFilesAndNamedTests(t *testing.T) {
 	for _, r := range sec.Rows {
 		byID[r.ID] = r
 	}
-	if got := byID["INV-6"]; got.CitingFilesTouched != 3 || got.CitingFilesTotal != 4 || got.NamedTestsTouched != 1 || got.NamedTestsTotal != 2 {
+	if got := byID["INV-6"]; got.CitingFilesTouched != 3 || got.CitingFilesTotal != 4 || got.NamedTestsInTouchedFiles != 1 || got.NamedTestsTotal != 2 {
 		t.Errorf("INV-6 = %+v, want 3/4 citing files and 1/2 named", got)
 	}
 	// Declared, cited nowhere: a finding, so it appears even though the change
@@ -73,7 +74,7 @@ func TestRegistrySection_RowsOrderedByExposure(t *testing.T) {
 		Invariant: invariant.Invariant{ID: "INV-9", Scope: "docs/invariants.md"},
 		CodeFiles: []string{"unrelated/x.go"},
 	})
-	sec := buildRegistrySection(reg, changed)
+	sec := buildRegistrySection(reg, changed, nil)
 	if len(sec.Rows) < 2 || sec.Rows[0].ID != "INV-6" {
 		var ids []string
 		for _, r := range sec.Rows {
@@ -91,7 +92,7 @@ func TestRegistrySection_ZeroAnchoredIsAFinding(t *testing.T) {
 	for i := range reg.Links {
 		reg.Links[i].CodeFiles, reg.Links[i].TestFiles, reg.Links[i].NamedTests, reg.Links[i].Citations = nil, nil, nil, 0
 	}
-	sec := buildRegistrySection(reg, changed)
+	sec := buildRegistrySection(reg, changed, nil)
 	if sec.Anchored() != 0 || sec.Declared() != 3 {
 		t.Fatalf("anchored/declared = %d/%d, want 0/3", sec.Anchored(), sec.Declared())
 	}
@@ -112,7 +113,7 @@ func TestRegistrySection_ZeroAnchoredIsAFinding(t *testing.T) {
 // normal. Printing the path turns a silent disable into something a reader sees.
 func TestRegistrySection_NamesThePath(t *testing.T) {
 	var b strings.Builder
-	writeRegistrySection(&b, buildRegistrySection(fixtureRegistry(), changed))
+	writeRegistrySection(&b, buildRegistrySection(fixtureRegistry(), changed, nil))
 	out := b.String()
 	if !strings.Contains(out, "`docs/invariants.md`") {
 		t.Errorf("the section must name the registry path it used:\n%s", out)
@@ -123,7 +124,7 @@ func TestRegistrySection_NamesThePath(t *testing.T) {
 }
 
 func TestRegistrySection_NilIsNoSection(t *testing.T) {
-	if sec := buildRegistrySection(nil, changed); sec != nil {
+	if sec := buildRegistrySection(nil, changed, nil); sec != nil {
 		t.Errorf("no registry means no section, got %+v", sec)
 	}
 	var b strings.Builder
@@ -146,9 +147,17 @@ func TestRegistryIsAdvisory(t *testing.T) {
 	b.Sort()
 	d := delta.Compute(a, b)
 
-	plain := Build(a, b, d, Options{LabelA: "base", LabelB: "head"})
-	withReg := Build(a, b, d, Options{LabelA: "base", LabelB: "head",
-		Registry: fixtureRegistry(), ChangedFiles: changed})
+	// A plan is supplied so PlanRatchet and PlanClassify — which carry dist — are
+	// actually computed. Without one they are nil in both builds and comparing
+	// them proves nothing, which is how this test used to claim more than it
+	// checked.
+	planGraph := baseGraph()
+	opts := Options{LabelA: "base", LabelB: "head", PlanGraph: planGraph}
+	plain := Build(a, b, d, opts)
+
+	withOpts := opts
+	withOpts.Registry, withOpts.ChangedFiles = fixtureRegistry(), changed
+	withReg := Build(a, b, d, withOpts)
 
 	if withReg.Registry == nil {
 		t.Fatal("the registry section did not render, so this test would prove nothing")
@@ -161,6 +170,19 @@ func TestRegistryIsAdvisory(t *testing.T) {
 	}
 	if plain.Counts != withReg.Counts {
 		t.Errorf("counts moved: %+v vs %+v", plain.Counts, withReg.Counts)
+	}
+	// dist rides in the plan ratchet, which the issue names explicitly.
+	if plain.PlanRatchet == nil || withReg.PlanRatchet == nil {
+		t.Fatal("no plan ratchet computed, so dist is not actually being compared")
+	}
+	if fmt.Sprint(*plain.PlanRatchet) != fmt.Sprint(*withReg.PlanRatchet) {
+		t.Errorf("dist moved: %+v vs %+v", *plain.PlanRatchet, *withReg.PlanRatchet)
+	}
+	if fmt.Sprint(plain.PlanClassify) != fmt.Sprint(withReg.PlanClassify) {
+		t.Errorf("plan classification moved:\n%+v\n%+v", plain.PlanClassify, withReg.PlanClassify)
+	}
+	if fmt.Sprint(plain.Clauses) != fmt.Sprint(withReg.Clauses) {
+		t.Errorf("clauses moved:\n%+v\n%+v", plain.Clauses, withReg.Clauses)
 	}
 
 	// review.md must differ by exactly the section text and nothing else. Deleting
@@ -184,11 +206,22 @@ func TestRegistryIsAdvisory(t *testing.T) {
 		t.Errorf("review.md prose changed outside the registry section:\n--- want ---\n%s\n--- got ---\n%s", prose(plainMD), stripped)
 	}
 
-	// review.json likewise: the only new key is "registry".
+	// review.json likewise: the only new key is "registry". Compared as sets, not
+	// by count — equal counts would survive a rename.
 	plainJSON, withJSON := mustJSONKeys(t, plain), mustJSONKeys(t, withReg)
+	if _, ok := withJSON["registry"]; !ok {
+		t.Error("review.json has no registry key, so this comparison proves nothing")
+	}
 	delete(withJSON, "registry")
-	if len(plainJSON) != len(withJSON) {
-		t.Errorf("review.json gained or lost a key besides \"registry\": %v vs %v", plainJSON, withJSON)
+	for k := range plainJSON {
+		if _, ok := withJSON[k]; !ok {
+			t.Errorf("review.json lost key %q", k)
+		}
+	}
+	for k := range withJSON {
+		if _, ok := plainJSON[k]; !ok {
+			t.Errorf("review.json gained key %q besides \"registry\"", k)
+		}
 	}
 }
 
@@ -206,7 +239,7 @@ func mustJSONKeys(t *testing.T, res *Result) map[string]any {
 }
 
 func TestRegistrySection_JSONShape(t *testing.T) {
-	sec := buildRegistrySection(fixtureRegistry(), changed)
+	sec := buildRegistrySection(fixtureRegistry(), changed, nil)
 	b, err := json.Marshal(sec)
 	if err != nil {
 		t.Fatal(err)

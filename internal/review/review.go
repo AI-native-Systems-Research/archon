@@ -90,6 +90,12 @@ type Options struct {
 	// when Registry is nil.
 	ChangedFiles []string
 
+	// RemovedAnchors maps an invariant ID to the files this change deletes that
+	// cited it at the base commit. Those files do not exist at head, so they
+	// appear in no other count — and deleting an invariant's last anchor is the
+	// change most worth reporting.
+	RemovedAnchors map[string][]string
+
 	// EmitArtifacts also writes the separate .mmd/.dot/.md source files and, if
 	// `dot` is on PATH, PNGs. Off by default: review.md embeds every diagram
 	// inline (as Mermaid), so the bundle is self-contained without them.
@@ -235,7 +241,7 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 	}
 
 	// Advisory, and computed after the verdict so it cannot feed it.
-	res.Registry = buildRegistrySection(opts.Registry, opts.ChangedFiles)
+	res.Registry = buildRegistrySection(opts.Registry, opts.ChangedFiles, opts.RemovedAnchors)
 
 	res.Verdict, res.Summary = verdict(d)
 	return res

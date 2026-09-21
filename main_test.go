@@ -571,9 +571,12 @@ func TestInvariantsAtRejectsUnpinnable(t *testing.T) {
 	})
 }
 
-// TestPRReviewRegistryDiscovery covers issue #65's discovery table end to end,
-// including the guarantee that matters most: with no registry the bundle is
-// byte-identical to what it was before this feature existed.
+// TestPRReviewRegistryDiscovery covers issue #65's discovery table end to end.
+//
+// For the no-registry case it asserts what it can observe here: no section in
+// review.md and no registry key in review.json, so nothing is added to the bundle.
+// Byte-identity against a pre-feature build is a claim about two binaries and is
+// verified in review rather than here.
 //
 // It runs in Go rather than only in demo/run-all.sh because CI leaves BLIS_REPO
 // unset, which skips flow 1 entirely — so the demo alone proves nothing on a PR.
@@ -646,6 +649,9 @@ func TestPRReviewRegistryDiscovery(t *testing.T) {
 	}
 	baseMD := read(t, filepath.Join(noRegDir, "review.md"))
 	baseJSON := read(t, filepath.Join(noRegDir, "review.json"))
+	if _, _, code := run(t, filepath.Join(t.TempDir(), "again")); code != 0 {
+		t.Errorf("pr-review without a registry exited %d; it is report-only", code)
+	}
 	if strings.Contains(baseMD, "Declared invariants") {
 		t.Errorf("a section rendered with no registry present:\n%s", baseMD)
 	}
@@ -710,6 +716,10 @@ func TestPRReviewRegistryDiscovery(t *testing.T) {
 		if !strings.Contains(stderr.String(), "found invariant registry at docs/invariants.md") {
 			t.Errorf("discovery should say what it found, got %q", stderr.String())
 		}
+		// Advisory extends to the exit code: pr-review is report-only either way.
+		if cmd.ProcessState.ExitCode() != 0 {
+			t.Errorf("exit %d with a registry; pr-review is report-only", cmd.ProcessState.ExitCode())
+		}
 
 		// Advisory: the verdict is whatever it was without a registry.
 		if !strings.Contains(md, "Verdict:") {
@@ -730,4 +740,175 @@ func verdictLine(md string) string {
 		}
 	}
 	return ""
+}
+
+// TestPRReviewTouchedCountsFromRealGitDiff asserts the numbers the section
+// prints, computed from an actual `git diff` rather than a hand-fed list.
+//
+// Nothing did that before, which is how two wrong-number bugs survived: git
+// quotes non-ASCII and space-bearing paths by default, so they never matched the
+// linker's raw UTF-8 paths, and a two-dot diff against a base that has moved on
+// attributed mainline commits to the change.
+func TestPRReviewTouchedCountsFromRealGitDiff(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cite := func(id string) string {
+		return "package p\n\n// upholds " + id + ".\nfunc F() {}\n"
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n\n### INV-2: Two\n\n**Statement:** Second.\n")
+	write("a/a.go", cite("INV-1"))
+	write("b/b.go", cite("INV-1"))
+	write("c/c.go", cite("INV-2"))
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "base")
+	base := git("rev-parse", "HEAD")
+
+	// The change: touch one of INV-1's two files, and add a third whose path
+	// needs quoting under git's default core.quotePath.
+	write("a/a.go", cite("INV-1")+"\n// touched\n")
+	write("café/naïve.go", cite("INV-1"))
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "head")
+	head := git("rev-parse", "HEAD")
+
+	// Mainline moves on, touching INV-2's only file. A diff from base rather than
+	// from the merge base would credit this change with it.
+	git("checkout", "--quiet", "-b", "mainline", base)
+	write("c/c.go", cite("INV-2")+"\n// unrelated\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "mainline moves")
+	movedBase := git("rev-parse", "HEAD")
+	git("checkout", "--quiet", "-")
+
+	out := filepath.Join(t.TempDir(), "bundle")
+	cmd := exec.Command(bin, "pr-review", repo, movedBase, head, "--out", out)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	b, err := os.ReadFile(filepath.Join(out, "review.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Registry struct {
+			Rows []struct {
+				ID                 string `json:"id"`
+				CitingFilesTouched int    `json:"citingFilesTouched"`
+				CitingFilesTotal   int    `json:"citingFilesTotal"`
+			} `json:"rows"`
+		} `json:"registry"`
+	}
+	if err := json.Unmarshal(b, &res); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]int{}
+	total := map[string]int{}
+	for _, r := range res.Registry.Rows {
+		byID[r.ID] = r.CitingFilesTouched
+		total[r.ID] = r.CitingFilesTotal
+	}
+
+	// INV-1: three citing files at head (a, b, café/naïve), two of them touched —
+	// and the quoted path must be one of them.
+	if total["INV-1"] != 3 {
+		t.Errorf("INV-1 citing files = %d, want 3", total["INV-1"])
+	}
+	if byID["INV-1"] != 2 {
+		t.Errorf("INV-1 touched = %d, want 2 — a path needing git quoting was likely dropped", byID["INV-1"])
+	}
+	// INV-2 was touched only by mainline, not by this change.
+	if _, ok := byID["INV-2"]; ok {
+		t.Errorf("INV-2 appears as touched (%d); mainline touched it, not this change", byID["INV-2"])
+	}
+}
+
+// TestPRReviewReportsDeletedAnchors: removing an invariant's citation site is the
+// change most likely to leave a declared promise unguarded, and counts read at
+// head cannot see it — the file is gone.
+func TestPRReviewReportsDeletedAnchors(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n")
+	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() {}\n")
+	write("b/b.go", "package b\n\n// also upholds INV-1.\nfunc B() {}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "base")
+	base := git("rev-parse", "HEAD")
+
+	if err := os.RemoveAll(filepath.Join(repo, "b")); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "delete an anchor")
+	head := git("rev-parse", "HEAD")
+
+	out := filepath.Join(t.TempDir(), "bundle")
+	cmd := exec.Command(bin, "pr-review", repo, base, head, "--out", out)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	md, err := os.ReadFile(filepath.Join(out, "review.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(md), "touched no file citing a declared invariant") {
+		t.Errorf("deleting an anchor read as inaction:\n%s", md)
+	}
+	if !strings.Contains(string(md), "deletes files that cited `INV-1` (1)") {
+		t.Errorf("the deleted anchor is not reported:\n%s", md)
+	}
 }

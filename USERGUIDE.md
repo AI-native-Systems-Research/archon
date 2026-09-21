@@ -473,22 +473,36 @@ a section reporting which declared invariants the change exposes:
 ```
 ### Declared invariants — registry
 
-Registry: `docs/contributing/standards/invariants.md` at `d77764f5…` — 23 declared,
-22 of 23 anchored (18 LINKED, 4 TEST ONLY, 1 UNLINKED), 318 Go files scanned.
+Registry: `docs/contributing/standards/invariants.md` at `d77764f520568b6c67616ca178b214fe288be7fd` — 23 declared, 22 of 23 anchored (18 LINKED, 4 TEST ONLY, 1 UNLINKED), 318 Go files scanned.
 
-| ID | Status | files touched | named tests touched |
+| ID | Status | citing files touched | named tests in touched files |
 |---|---|---|---|
 | `INV-6` | LINKED | 15 of 90 | 1 of 3 |
 | `INV-13` | LINKED | 8 of 20 | 0 of 5 |
+| …nine more rows… | | | |
 | `INV-PD-2` | UNLINKED | — | — |
 
 `INV-PD-2` is declared but cited in no file.
 ```
 
+(Twelve rows in full; abridged here. Every number above is from that pinned commit,
+and `demo/flow1-pr-review`'s golden holds the whole table.)
+
 Rows are the invariants worth a reviewer's attention: the ones this change touched,
-most-exposed first, plus any declared invariant nothing in the repo cites. "15 of
-90 files, 1 of 3 named tests" is the useful shape — a wide change to INV-6's
-footprint that barely moved its tests.
+ordered by how many citing files it touched, plus any declared invariant nothing in
+the repo cites. That ordering is an absolute count rather than a proportion, so
+`4 of 18` sits above `2 of 5`. "15 of 90 files, 1 of 3 named tests" is the useful
+shape — a wide change to INV-6's footprint that barely moved its tests.
+
+Two limits worth knowing. "Named tests in touched files" is exactly that: the link
+data carries `file:function`, not line ranges, so a change elsewhere in the same
+file counts. And because the footprint is read at the head commit, a file the change
+*deletes* appears in no column — so deleted citation sites get their own line,
+since removing an invariant's last anchor is the change most likely to leave a
+declared promise unguarded.
+
+Files touched are computed from the merge base of `<base>` and `<head>`, so a base
+that has moved on does not get its commits attributed to this change.
 
 **You do not have to pass the flag.** With none, archon probes
 `docs/contributing/standards/invariants.md`, then `docs/invariants.md`, then
@@ -496,8 +510,9 @@ footprint that barely moved its tests.
 
 | situation | behaviour |
 |---|---|
-| no flag, no registry at a conventional path | **no section**, bundle byte-identical to before this existed |
+| no flag, no registry at a conventional path | **no section**, bundle byte-identical to before this existed; the paths probed are named on stderr |
 | no flag, registry found | section rendered, **naming the path it used** |
+| no flag, registry found but unparseable | **warning on stderr, no section.** `pr-review` is report-only, so a mistyped heading in a docs PR must not delete the architectural review |
 | `--invariants <path>`, file present | section rendered from that path |
 | `--invariants <path>`, missing or unparseable | **hard error** — you asked for something that is not there |
 | registry parses, nothing cites any ID | section rendered reporting `0 of N anchored` — a finding, not an empty result |
@@ -505,8 +520,11 @@ footprint that barely moved its tests.
 The path is printed in the section for a reason: if the doc is renamed, the section
 would otherwise vanish and every later review would look normal.
 
-The section is **advisory**. It cannot change the verdict, `dist`, or the exit code
-— same tier as contract clauses. A test asserts that.
+The section is **advisory**: it cannot change the verdict, `dist`, or the exit code
+— same tier as contract clauses. `TestRegistryIsAdvisory` builds the same change
+twice, with and without a registry, and compares the verdict, the counts, the plan
+ratchet that carries `dist`, the review.md prose and the review.json key set; the
+exit code is covered in `TestPRReviewRegistryDiscovery`.
 
 **What you'll see — a boundary-moving PR** (inference-sim #1546, which decoupled
 `sim/saturation`):

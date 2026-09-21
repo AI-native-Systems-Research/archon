@@ -27,8 +27,18 @@ type RegistryRow struct {
 	Status             invariant.Status `json:"status"`
 	CitingFilesTouched int              `json:"citingFilesTouched"`
 	CitingFilesTotal   int              `json:"citingFilesTotal"`
-	NamedTestsTouched  int              `json:"namedTestsTouched"`
-	NamedTestsTotal    int              `json:"namedTestsTotal"`
+
+	// AnchorsRemoved counts files the change deletes that cited this ID at the
+	// base commit. Without it, deleting an invariant's only anchor renders
+	// identically to a whitespace-only commit: the totals are read at head, where
+	// the deleted file no longer appears, so it can never be "touched".
+	AnchorsRemoved int `json:"anchorsRemoved,omitempty"`
+	// NamedTestsInTouchedFiles counts named tests whose *file* the change
+	// touched. It is not "tests that changed": the link data carries file:func,
+	// not line ranges, so a hunk elsewhere in the same file counts here. The
+	// column is labelled to match what is measured.
+	NamedTestsInTouchedFiles int `json:"namedTestsInTouchedFiles"`
+	NamedTestsTotal          int `json:"namedTestsTotal"`
 }
 
 // RegistrySection is the advisory declared-invariant report.
@@ -37,7 +47,8 @@ type RegistryRow struct {
 // promises)" section, which renders delta.InvariantChange — extracted test
 // functions. Those two share a word and nothing else, so this one names the
 // registry in its heading and keeps its numbers out of Counts, where
-// Counts.Invariants already means the other concept and CI consumers parse it.
+// Counts.Invariants is already the other concept and changing its meaning would
+// break any consumer reading it.
 //
 // No count is stored. Every total is derived from the linked registry, for the
 // reason invariant.Result gives for doing the same: a stored copy can contradict
@@ -104,7 +115,7 @@ func (s *RegistrySection) MarshalJSON() ([]byte, error) {
 //
 // A nil registry yields a nil section, which is how "no registry found" stays
 // byte-identical to the output before this existed.
-func buildRegistrySection(reg *invariant.Result, changedFiles []string) *RegistrySection {
+func buildRegistrySection(reg *invariant.Result, changedFiles []string, removedAnchors map[string][]string) *RegistrySection {
 	if reg == nil {
 		return nil
 	}
@@ -136,29 +147,37 @@ func buildRegistrySection(reg *invariant.Result, changedFiles []string) *Registr
 				namedTouched++
 			}
 		}
+		removed := len(removedAnchors[l.Invariant.ID])
 		unlinked := l.Status() == invariant.StatusUnlinked
-		if touched == 0 && namedTouched == 0 && !unlinked {
+		if touched == 0 && namedTouched == 0 && removed == 0 && !unlinked {
 			// Anchored and untouched: nothing here for a reviewer to act on.
 			continue
 		}
 		sec.Rows = append(sec.Rows, RegistryRow{
-			ID:                 l.Invariant.ID,
-			Status:             l.Status(),
-			CitingFilesTouched: touched,
-			CitingFilesTotal:   len(files),
-			NamedTestsTouched:  namedTouched,
-			NamedTestsTotal:    len(l.NamedTests),
+			ID:                       l.Invariant.ID,
+			Status:                   l.Status(),
+			CitingFilesTouched:       touched,
+			CitingFilesTotal:         len(files),
+			AnchorsRemoved:           removed,
+			NamedTestsInTouchedFiles: namedTouched,
+			NamedTestsTotal:          len(l.NamedTests),
 		})
 	}
 
-	// Most-exposed first, so the first row is the one worth reading. Ties break
-	// on ID so the output is stable.
+	// Most files touched first, so the widest-reaching row is on top. This is an
+	// absolute count, not a proportion: 4 of 18 outranks 2 of 5. Ties break on ID
+	// so the output is stable.
 	sort.SliceStable(sec.Rows, func(i, j int) bool {
+		if sec.Rows[i].AnchorsRemoved != sec.Rows[j].AnchorsRemoved {
+			// A removed anchor outranks any amount of touching: it is the change
+			// most likely to leave a declared promise unguarded.
+			return sec.Rows[i].AnchorsRemoved > sec.Rows[j].AnchorsRemoved
+		}
 		if sec.Rows[i].CitingFilesTouched != sec.Rows[j].CitingFilesTouched {
 			return sec.Rows[i].CitingFilesTouched > sec.Rows[j].CitingFilesTouched
 		}
-		if sec.Rows[i].NamedTestsTouched != sec.Rows[j].NamedTestsTouched {
-			return sec.Rows[i].NamedTestsTouched > sec.Rows[j].NamedTestsTouched
+		if sec.Rows[i].NamedTestsInTouchedFiles != sec.Rows[j].NamedTestsInTouchedFiles {
+			return sec.Rows[i].NamedTestsInTouchedFiles > sec.Rows[j].NamedTestsInTouchedFiles
 		}
 		return sec.Rows[i].ID < sec.Rows[j].ID
 	})
@@ -196,18 +215,29 @@ func writeRegistrySection(b *strings.Builder, sec *RegistrySection) {
 		return
 	}
 
-	b.WriteString("| ID | Status | files touched | named tests touched |\n")
+	b.WriteString("| ID | Status | citing files touched | named tests in touched files |\n")
 	b.WriteString("|---|---|---|---|\n")
 	for _, r := range sec.Rows {
-		if r.CitingFilesTotal == 0 && r.NamedTestsTotal == 0 {
+		if r.CitingFilesTotal == 0 && r.NamedTestsTotal == 0 && r.AnchorsRemoved == 0 {
 			fmt.Fprintf(b, "| `%s` | %s | — | — |\n", r.ID, r.Status)
 			continue
 		}
 		fmt.Fprintf(b, "| `%s` | %s | %d of %d | %d of %d |\n",
 			r.ID, r.Status, r.CitingFilesTouched, r.CitingFilesTotal,
-			r.NamedTestsTouched, r.NamedTestsTotal)
+			r.NamedTestsInTouchedFiles, r.NamedTestsTotal)
 	}
 	b.WriteString("\n")
+
+	var removed []string
+	for _, r := range sec.Rows {
+		if r.AnchorsRemoved > 0 {
+			removed = append(removed, fmt.Sprintf("`%s` (%d)", r.ID, r.AnchorsRemoved))
+		}
+	}
+	if len(removed) > 0 {
+		fmt.Fprintf(b, "**This change deletes files that cited %s.** Those files are gone at head, so they count in no column above.\n\n",
+			strings.Join(removed, ", "))
+	}
 
 	var unlinked []string
 	for _, r := range sec.Rows {
