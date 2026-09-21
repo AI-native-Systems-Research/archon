@@ -65,7 +65,10 @@ round, asked what the plan makes expensive to change later. Same grammar as step
 condition is what the plan says it will touch, not whether you expect a sibling PR to care.
 
 Fresh counts twice: not an agent that has already reviewed this work, and not one told what you
-think the answer is. Say in the PR that the plan was reviewed, or that it did not need to be.
+think the answer is. Bring the findings to the human along with the plan, including any you are not
+taking and why — otherwise "the plan was reviewed" covers having ignored all of them, and the person
+approving never sees what they are approving over. Say in the PR that the plan was reviewed, or that
+it did not need to be.
 
 **These findings are input to the plan, not step 6 findings.** They do not count as rounds, and
 none of them can be an open must-fix issue blocking the merge — step 6's accounting starts when
