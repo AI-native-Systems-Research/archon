@@ -29,6 +29,7 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 	"github.com/AI-native-Systems-Research/archon/internal/health"
 	"github.com/AI-native-Systems-Research/archon/internal/impact"
+	"github.com/AI-native-Systems-Research/archon/internal/invariant"
 	"github.com/AI-native-Systems-Research/archon/internal/plan"
 	"github.com/AI-native-Systems-Research/archon/internal/reflexion"
 	"github.com/AI-native-Systems-Research/archon/internal/render"
@@ -56,6 +57,8 @@ func main() {
 		cmdImpact(os.Args[2:])
 	case "health":
 		cmdHealth(os.Args[2:])
+	case "invariants":
+		cmdInvariants(os.Args[2:])
 	case "reflexion":
 		cmdReflexion(os.Args[2:])
 	case "pr-review":
@@ -240,6 +243,206 @@ func cmdHealth(args []string) {
 	}
 }
 
+// conventionalRegistryPaths is the probe order issue #65 specifies. Auto-discovery
+// itself is Part 3; naming them in the error is what makes the omission
+// actionable rather than a bare usage dump.
+var conventionalRegistryPaths = []string{
+	"docs/contributing/standards/invariants.md",
+	"docs/invariants.md",
+	"INVARIANTS.md",
+}
+
+// cmdInvariants reports what a repository has behind each declared invariant.
+func cmdInvariants(args []string) {
+	jsonOut := false
+	commit := ""
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--json":
+			jsonOut = true
+		case a == "--at", strings.HasPrefix(a, "--at="):
+			// An empty value in either spelling would scan the working tree and
+			// drop the commit line — a pinned invocation silently becoming
+			// unpinned, which is how `--at "$SHA"` with an unset SHA reports a
+			// live scan as a completed pinned run.
+			if a == "--at" {
+				if i+1 >= len(args) {
+					fatal("--at takes a value: --at <commit>")
+				}
+				i++
+				commit = args[i]
+			} else {
+				commit = strings.TrimPrefix(a, "--at=")
+			}
+			if commit == "" {
+				fatal("--at takes a value: --at <commit>")
+			}
+			// "--at --json" would otherwise take the flag as the commit, and
+			// `git rev-parse --json^{commit}` exits 0 echoing its argument back,
+			// so the SHA check below would pass on a value that is not a commit.
+			if strings.HasPrefix(commit, "-") {
+				fatal("--at takes a commit, not a flag: %s", commit)
+			}
+		case strings.HasPrefix(a, "-"):
+			// A mistyped flag must not become a positional. "--jsonn" used to be
+			// dropped in silence: the caller asked for JSON and got a table.
+			fatal("unknown flag %s", a)
+		default:
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) < 1 {
+		usage()
+	}
+	if len(pos) > 2 {
+		fatal("too many arguments: archon-go invariants <repo> <registry-path>\n"+
+			"       got %d positional arguments: %s", len(pos), strings.Join(pos, " "))
+	}
+	repo := pos[0]
+	if len(pos) < 2 {
+		fatal("registry path required: archon-go invariants <repo> <registry-path>\n"+
+			"       conventional locations are %s\n"+
+			"       (auto-discovery lands with the pr-review integration)",
+			strings.Join(conventionalRegistryPaths, ", "))
+	}
+	// The registry is resolved inside <repo>, and under --at inside that commit's
+	// tree. An absolute path, or a relative one that climbs out, would read a
+	// registry that is not in the repo at any commit while the report still
+	// claimed to be pinned.
+	if filepath.IsAbs(pos[1]) {
+		fatal("registry path must be repo-relative, not %s — it is resolved inside <repo>, and under --at inside that commit's tree", pos[1])
+	}
+	registry := filepath.ToSlash(filepath.Clean(pos[1]))
+	if registry == ".." || strings.HasPrefix(registry, "../") {
+		fatal("registry path must stay inside <repo>: %s escapes it", pos[1])
+	}
+
+	res, err := linkInvariants(repo, registry, commit)
+	if err != nil {
+		fatal("invariants: %v", err)
+	}
+	if err := res.Validate(); err != nil {
+		fatal("refusing to publish this report: %v", err)
+	}
+	if jsonOut {
+		printJSON(res)
+		return
+	}
+	if err := invariant.Render(os.Stdout, res); err != nil {
+		fatal("write report: %v", err)
+	}
+}
+
+// linkInvariants reads the registry and links it, optionally at a commit.
+//
+// It returns errors rather than calling fatal so that the worktree --at creates
+// is always removed: fatal is os.Exit, which runs no deferred function, and a
+// leaked worktree stays registered in the target repository's .git metadata
+// where nothing but `git worktree list` reveals it.
+func linkInvariants(repo, registry, commit string) (invariant.Result, error) {
+	var zero invariant.Result
+	work := repo
+
+	if commit != "" {
+		// git worktree add checks out the repository root, so a <repo> that is a
+		// subdirectory would silently read the root's registry and scan the whole
+		// tree — same exit code, same "registry:" line, different numbers.
+		top, err := output(repo, "git", "rev-parse", "--show-toplevel")
+		if err != nil {
+			return zero, fmt.Errorf("%s is not a git repository: %w", repo, err)
+		}
+		abs, err := filepath.Abs(repo)
+		if err != nil {
+			return zero, err
+		}
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		if topResolved, err := filepath.EvalSymlinks(top); err == nil {
+			top = topResolved
+		}
+		if abs != top {
+			return zero, fmt.Errorf("--at needs the repository root, not a subdirectory; pass %s and a registry path relative to it", top)
+		}
+
+		// Record the resolved SHA, not the ref: "commit: main" claims a pin the
+		// report does not have, and main moves.
+		sha, err := output(repo, "git", "rev-parse", "--verify", commit+"^{commit}")
+		if err != nil {
+			return zero, fmt.Errorf("no such commit %q in %s: %w", commit, repo, err)
+		}
+		commit = sha
+
+		// git worktree add does not initialize submodules, so code living in one
+		// is absent from the scan and its invariants come back UNLINKED — a
+		// false finding with nothing in the report to hint at it. Say so on
+		// stderr, which keeps stdout byte-comparable.
+		if sub, err := output(repo, "git", "submodule", "status"); err == nil && sub != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s has submodules; --at checks out a worktree without them, so code in a submodule is not scanned and its invariants may report UNLINKED\n", repo)
+		}
+
+		tmp, cleanup := checkoutWorktree(repo, commit)
+		defer cleanup()
+		work = tmp
+	}
+
+	// Cleaning the path rejects "../", but a committed symlink can still point
+	// out of the tree — and under --at that means a report printing a pinned SHA
+	// over content read live from disk. Resolve both sides and compare.
+	full := filepath.Join(work, registry)
+	if resolved, err := filepath.EvalSymlinks(full); err == nil {
+		base, err := filepath.EvalSymlinks(work)
+		if err != nil {
+			return zero, err
+		}
+		if rel, err := filepath.Rel(base, resolved); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return zero, fmt.Errorf("registry %s resolves outside the tree being read (%s); a symlink out of the repository cannot be pinned", registry, resolved)
+		}
+	}
+
+	src, err := os.ReadFile(full)
+	if err != nil {
+		// Report the path the caller asked for; the temp worktree prefix is an
+		// implementation detail they never typed.
+		where := repo
+		if commit != "" {
+			where = fmt.Sprintf("%s at %s", repo, commit)
+		}
+		return zero, fmt.Errorf("registry %s not found in %s", registry, where)
+	}
+
+	// The registry is recorded under the path the caller asked for. Handing
+	// ParseFile a temp worktree path would put that machine-specific path into
+	// every Invariant's Scope and Source, and so into --json, into Key(), and
+	// into any golden output.
+	invs, err := invariant.ParseMarkdown(src, registry, registry)
+	if err != nil {
+		return zero, err
+	}
+	links, scanned, err := invariant.LinkRepo(work, invs)
+	if err != nil {
+		return zero, err
+	}
+	return invariant.Result{
+		Registry:     registry,
+		Commit:       commit,
+		FilesScanned: scanned,
+		Links:        links,
+	}, nil
+}
+
+// output runs a command and returns its trimmed stdout.
+func output(dir, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `archon-go — package-altitude architecture graphs and deltas
 
@@ -264,6 +467,13 @@ func usage() {
                                                 PASS/FAIL per contract  (--json)
   archon-go health <repo|graph.json> [commit]   coupling, cycles, god-modules,
                                                 blast-radius hotspots  (--json)
+  archon-go invariants <repo> <registry-path>   declared invariants vs the code and
+                                                tests citing their IDs: LINKED /
+                                                TEST ONLY / UNLINKED  (--json)
+      --at <commit>                             read registry and code at one
+                                                commit (a flag, not a positional,
+                                                because the second positional is
+                                                already the registry path)
   archon-go reflexion <repo|graph.json> <layers.json> [commit]  declared layering
                                                 vs actual code; report violations (--json)
   archon-go render <repo|graph.json> [commit]   draw the architecture

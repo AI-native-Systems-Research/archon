@@ -6,9 +6,18 @@ ARCHON="${ARCHON:-archon-go}"
 BLIS_REPO="${BLIS_REPO:-}"
 PASS=0
 FAIL=0
+SKIPPED=""
 
 red()   { printf "\033[31m%s\033[0m\n" "$1"; }
 green() { printf "\033[32m%s\033[0m\n" "$1"; }
+
+# skip records a check that did not run, so the summary cannot say ALL DEMOS PASS
+# while the only real-data golden in a flow went uncompared.
+skip() {
+    echo "  SKIP: $1"
+    SKIPPED="$SKIPPED
+  - $1"
+}
 
 check() {
     local name="$1" actual="$2" expected="$3"
@@ -24,7 +33,7 @@ check() {
 
 echo "=== Flow 1: PR Review (BLIS #1546) ==="
 if [ -z "$BLIS_REPO" ]; then
-    echo "  SKIP: set BLIS_REPO=/path/to/blis to run Flow 1"
+    skip "Flow 1 (2 checks) — set BLIS_REPO=/path/to/blis"
     echo "  (e.g., BLIS_REPO=/abs/path/to/blis ./demo/run-all.sh)"
     echo "  NOTE: this flow's goldens record one absolute repo path, so they only"
     echo "        reproduce from that checkout; elsewhere expect these 2 to fail."
@@ -81,7 +90,7 @@ $ARCHON plan compile --stats "$F3/kv-offload.archon" > /dev/null 2> /tmp/demo-fl
 check "flow3 plan compile --stats (19)" /tmp/demo-flow3-stats.txt "$F3/expected-stats.txt"
 
 if [ -z "$BLIS_REPO" ]; then
-    echo "  SKIP: the rest of Flow 3 needs BLIS_REPO=/path/to/blis"
+    skip "the rest of Flow 3 (8 checks) — needs BLIS_REPO=/path/to/blis"
 else
     # Health. Checkable since #59 made the row order total; before that, rows
     # with an equal blast radius came out in a different order every run.
@@ -118,9 +127,37 @@ else
 fi
 
 echo ""
+echo "=== Flow 4: Declared Invariants ==="
+F4="$SCRIPT_DIR/flow4-invariants"
+
+# The fixture checks need no BLIS checkout, so unlike flow 1 and most of flow 3
+# these two run in CI. They are what pin the --json shape.
+$ARCHON invariants "$F4/fixture" invariants.md > /tmp/demo-flow4-fixture.txt
+check "flow4 fixture table" /tmp/demo-flow4-fixture.txt "$F4/expected-fixture.txt"
+
+$ARCHON invariants "$F4/fixture" invariants.md --json > /tmp/demo-flow4-fixture.json
+check "flow4 fixture --json" /tmp/demo-flow4-fixture.json "$F4/expected-fixture.json"
+
+if [ -z "$BLIS_REPO" ]; then
+    skip "flow4 BLIS golden — needs BLIS_REPO=/path/to/blis"
+else
+    # Pinned with --at, so the registry and the code are both read at one commit
+    # and the numbers cannot drift as BLIS moves.
+    $ARCHON invariants "$BLIS_REPO" docs/contributing/standards/invariants.md \
+        --at 73a17c00f84f28623e254a625f1f5298bb8c8a38 > /tmp/demo-flow4-blis.txt
+    check "flow4 BLIS at pinned commit 73a17c00" /tmp/demo-flow4-blis.txt "$F4/expected-blis.txt"
+fi
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+if [ -n "$SKIPPED" ]; then
+    # Named, not just counted: a skipped golden is an unverified claim, and a
+    # banner over a silent skip is how one goes unnoticed. Printed before the
+    # failure exit too, so a red run still says what it did not check.
+    printf "NOT VERIFIED (skipped):%s\n" "$SKIPPED"
+fi
 if [ $FAIL -gt 0 ]; then
     red "DEMO FAILED — output differs from golden files."
     exit 1
 fi
-green "ALL DEMOS PASS"
+green "ALL CHECKS THAT RAN PASS"

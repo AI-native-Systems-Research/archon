@@ -330,6 +330,70 @@ REFLEXION MODEL — declared layering vs actual code
 
 An upward dependency (a leaf importing an entry package) counts as a violation.
 
+### invariants — declared invariants vs the code and tests citing them
+
+Many repositories write down the properties the system must uphold, give each an ID,
+and then cite those IDs in comments. This follows the IDs: it reports which declared
+invariants have production code behind them, which have only tests, and which exist
+nowhere but the document declaring them. Nothing is inferred from code structure and
+no model is involved.
+
+```sh
+./archon-go invariants $BLIS_REPO docs/contributing/standards/invariants.md \
+    --at 73a17c00f84f28623e254a625f1f5298bb8c8a38
+```
+
+`--at` reads the registry **and** the code at one commit, so the numbers cannot drift
+as the repo moves. It is a flag rather than a trailing positional commit — unlike
+`health $R <commit>` — because the second positional here is already the registry
+path, and guessing whether an argument is a path or a commit is the kind of silent
+wrong answer this command exists to surface.
+
+**What you'll see** (abridged; at that commit the registry declares 34):
+
+```
+DECLARED INVARIANTS
+  registry: docs/contributing/standards/invariants.md (34 declared)
+  commit:   73a17c00f84f28623e254a625f1f5298bb8c8a38
+  scanned:  446 Go files
+
+  ID           STATUS     CODE  TEST  CITES  NAMED
+  INV-1        LINKED       14    31    143     14
+  INV-7        LINKED        8     0     16      0
+  INV-L4       LINKED        3     2     11      0
+  INV-L6       UNLINKED      0     0      0      0
+  NS-6         LINKED        3     4     21      6
+
+  32 of 34 anchored — 32 LINKED, 0 TEST ONLY, 2 UNLINKED
+
+  tests named for an invariant:
+    INV-1        sim/cluster/cluster_tenant_test.go:TestTenantAdmission_INV1_BudgetShedConservation
+                 sim/cluster/cluster_tier_test.go:TestGAIELegacy_INV1_Conservation
+```
+
+`scanned` is the denominator: "nothing is anchored" means something very different over
+446 Go files than over three. `CODE` and `TEST` count files; `CITES` counts occurrences.
+`NAMED` counts test functions whose *name* embeds the ID (`INV-6` → `TestINV6_Determinism`),
+listed underneath rather than in a column because an invariant can have a dozen of them.
+
+The two useful readings are the extremes. `INV-L6: UNLINKED` means **no `.go` file names
+that ID** — not that the invariant is untested. BLIS's registry says exactly this about
+INV-L6 and INV-L7: both have tests, but "neither test nor production site names the ID",
+so there is no way to find them from the ID. That is the gap the status reports. A
+citation in markdown, YAML or a shell script counts for nothing either, since only `.go`
+files are scanned.
+
+At the other extreme, `0 of N anchored` is the most useful thing this can tell a repo that
+has just written a registry and not yet cited any of it.
+
+Under `--at`, `<repo>` must be the repository root: `git worktree` checks out the root, so a
+subdirectory would read the root's registry and scan the whole tree. The command refuses
+that rather than guessing. It also warns if the repo has submodules, whose code a worktree
+does not include.
+
+Add `--json` for the machine-readable form; each link carries its derived `status`, so
+a consumer never recomputes it.
+
 ### contract — snapshot an allow-list baseline
 
 ```sh

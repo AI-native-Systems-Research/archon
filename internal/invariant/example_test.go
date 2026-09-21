@@ -38,7 +38,7 @@ func TestExample_ParseAndLink(t *testing.T) {
 	t.Logf("PARSED (%d entries, scope %q):\n%s", len(invs), invs[0].Scope, b.String())
 
 	// --- LINK ---
-	links, err := LinkRepo(fixtureRepo, invs)
+	links, _, err := LinkRepo(fixtureRepo, invs)
 	if err != nil {
 		t.Fatal(err)
 	}

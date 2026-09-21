@@ -44,11 +44,13 @@ const (
 
 // Link is what the code and tests say about one invariant.
 type Link struct {
-	Invariant  Invariant `json:"invariant"`
-	CodeFiles  []string  `json:"code_files,omitempty"`  // non-test files citing the ID
-	TestFiles  []string  `json:"test_files,omitempty"`  // _test.go files citing the ID
-	NamedTests []string  `json:"named_tests,omitempty"` // test funcs whose name embeds the ID
-	Citations  int       `json:"citations"`             // total occurrences of the ID across both file sets
+	Invariant Invariant `json:"invariant"`
+	CodeFiles []string  `json:"code_files,omitempty"` // non-test files citing the ID
+	TestFiles []string  `json:"test_files,omitempty"` // _test.go files citing the ID
+	// NamedTests holds "<repo-relative file>:<FuncName>" entries. The separator
+	// is the FINAL colon: a path may contain one, a Go function name may not.
+	NamedTests []string `json:"named_tests,omitempty"`
+	Citations  int      `json:"citations"` // total occurrences of the ID across both file sets
 }
 
 // Status derives from where the ID appears. A test merely named for an

@@ -125,6 +125,7 @@ graph LR
 archon-go health $R                    # cycles, god-modules, blast radius
 archon-go impact $R .../sim/kv         # what depends on this package?
 archon-go reflexion $R layers.json     # does code match declared layering?
+archon-go invariants $R docs/contributing/standards/invariants.md  # declared invariants with code behind them?
 archon-go evidence $R                  # are interface contracts test-covered?
 ```
 
