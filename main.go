@@ -278,6 +278,12 @@ func cmdInvariants(args []string) {
 			if commit == "" {
 				fatal("--at takes a value: --at <commit>")
 			}
+			// "--at --json" would otherwise take the flag as the commit, and
+			// `git rev-parse --json^{commit}` exits 0 echoing its argument back,
+			// so the SHA check below would pass on a value that is not a commit.
+			if strings.HasPrefix(commit, "-") {
+				fatal("--at takes a commit, not a flag: %s", commit)
+			}
 		case strings.HasPrefix(a, "-"):
 			// A mistyped flag must not become a positional. "--jsonn" used to be
 			// dropped in silence: the caller asked for JSON and got a table.
@@ -362,7 +368,7 @@ func linkInvariants(repo, registry, commit string) (invariant.Result, error) {
 
 		// Record the resolved SHA, not the ref: "commit: main" claims a pin the
 		// report does not have, and main moves.
-		sha, err := output(repo, "git", "rev-parse", commit+"^{commit}")
+		sha, err := output(repo, "git", "rev-parse", "--verify", commit+"^{commit}")
 		if err != nil {
 			return zero, fmt.Errorf("no such commit %q in %s: %w", commit, repo, err)
 		}
@@ -381,7 +387,21 @@ func linkInvariants(repo, registry, commit string) (invariant.Result, error) {
 		work = tmp
 	}
 
-	src, err := os.ReadFile(filepath.Join(work, registry))
+	// Cleaning the path rejects "../", but a committed symlink can still point
+	// out of the tree — and under --at that means a report printing a pinned SHA
+	// over content read live from disk. Resolve both sides and compare.
+	full := filepath.Join(work, registry)
+	if resolved, err := filepath.EvalSymlinks(full); err == nil {
+		base, err := filepath.EvalSymlinks(work)
+		if err != nil {
+			return zero, err
+		}
+		if rel, err := filepath.Rel(base, resolved); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return zero, fmt.Errorf("registry %s resolves outside the tree being read (%s); a symlink out of the repository cannot be pinned", registry, resolved)
+		}
+	}
+
+	src, err := os.ReadFile(full)
 	if err != nil {
 		// Report the path the caller asked for; the temp worktree prefix is an
 		// implementation detail they never typed.

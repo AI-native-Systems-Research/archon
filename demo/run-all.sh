@@ -150,13 +150,14 @@ fi
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+if [ -n "$SKIPPED" ]; then
+    # Named, not just counted: a skipped golden is an unverified claim, and a
+    # banner over a silent skip is how one goes unnoticed. Printed before the
+    # failure exit too, so a red run still says what it did not check.
+    printf "NOT VERIFIED (skipped):%s\n" "$SKIPPED"
+fi
 if [ $FAIL -gt 0 ]; then
     red "DEMO FAILED — output differs from golden files."
     exit 1
-fi
-if [ -n "$SKIPPED" ]; then
-    # Named, not just counted: a skipped golden is an unverified claim, and
-    # "ALL DEMOS PASS" over a silent skip is how one goes unnoticed.
-    printf "NOT VERIFIED (skipped):%s\n" "$SKIPPED"
 fi
 green "ALL CHECKS THAT RAN PASS"

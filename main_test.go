@@ -489,3 +489,84 @@ func TestInvariantsAtCommit(t *testing.T) {
 		t.Errorf("failed --at runs leaked worktrees:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
+
+// TestInvariantsAtRejectsUnpinnable covers the two ways a report could print a
+// pinned SHA over content that is not pinned.
+func TestInvariantsAtRejectsUnpinnable(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+	outside := t.TempDir()
+
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(outside, "reg.md"), []byte("### INV-OUT: Outside\n\n**Statement:** Not in the repo.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "core"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"docs/invariants.md": "### INV-1: One\n\n**Statement:** First.\n",
+		"core/engine.go":     "package core\n\n// Conserve upholds INV-1.\nfunc Conserve() {}\n",
+	} {
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A committed symlink pointing out of the repository: cleaning the path
+	// cannot see it, so only resolving it does.
+	if err := os.Symlink(filepath.Join(outside, "reg.md"), filepath.Join(repo, "escape.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "first")
+
+	run := func(args ...string) (string, string, int) {
+		t.Helper()
+		cmd := exec.Command(bin, append([]string{"invariants", repo}, args...)...)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return stdout.String(), stderr.String(), code
+	}
+
+	t.Run("a symlink out of the repo cannot be pinned", func(t *testing.T) {
+		stdout, stderr, code := run("escape.md", "--at", "HEAD")
+		if code == 0 {
+			t.Errorf("accepted a registry symlinked outside the repo:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, "outside the tree") {
+			t.Errorf("stderr should say why, got %q", stderr)
+		}
+	})
+
+	t.Run("--at does not swallow a following flag", func(t *testing.T) {
+		// git rev-parse "--json^{commit}" exits 0 echoing its argument back, so
+		// the SHA resolution below would have accepted this.
+		_, stderr, code := run("docs/invariants.md", "--at", "--json")
+		if code == 0 {
+			t.Error("--at took a flag as its commit")
+		}
+		if !strings.Contains(stderr, "not a flag") {
+			t.Errorf("stderr should say why, got %q", stderr)
+		}
+	})
+}
