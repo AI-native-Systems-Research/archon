@@ -60,9 +60,11 @@ This is your contract with the reviewer. If you can't write this clearly, you do
 
 ### 4. Implement + Test
 
-Write the code. Include at least one test that proves the issue is resolved.
+Write the test first and watch it fail, then write the code. The bar either way is: if someone reverts your fix, a test should fail.
 
-You don't need strict TDD, but the bar is: if someone reverts your fix, a test should fail.
+**Why test-first is the default and not a preference.** On #66 the tests were written after the package and passed on their first run — they described behaviour I had already watched work. Review then found a code-fence bug that parsed 9 of a registry's 34 entries with no error, and a test-name matcher that credited invariants to English words. Both were in paths my own tests never asserted on, because I only asserted what I had already seen. A test written first is a claim about what the code must do; a test written afterwards records what it happens to do, and cannot fail in the places you did not think of.
+
+Where the input shape is genuinely unknown — a parser for a format you have to go read first — probe until you know it, then write the test before the implementation rather than after. Probing is not a licence to skip the order.
 
 **For feature PRs:** Include at least one test that shows concrete input → output when run with `go test -v -run TestXxx`. A reviewer should be able to run that one command and see exactly what goes in and what comes out — no guessing.
 
