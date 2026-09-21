@@ -1170,3 +1170,73 @@ func TestPRReviewDeletedAnchorsRespectTheScanSet(t *testing.T) {
 		t.Errorf("unscanned deletions and a rename were reported as removed anchors:\n%s", md)
 	}
 }
+
+// TestPRReviewFromSubdirectoryWithGitConfig: the report must not depend on the
+// reviewed repository's git config or on where inside the checkout it was invoked.
+// diff.relative makes git emit cwd-relative paths, which match nothing on the
+// registry side, and the deleted-anchor line then disappears in silence.
+func TestPRReviewFromSubdirectoryWithGitConfig(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	// Both defaults flipped, so a report that leans on either is caught.
+	git("config", "diff.relative", "true")
+	git("config", "diff.renames", "false")
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n")
+	write("sub/keep.go", "package sub\n\n// upholds INV-1 here.\nfunc Keep() {}\n")
+	write("sub/gone.go", "package sub\n\n// upholds INV-1 there too.\nfunc Gone() {}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "base")
+	base := git("rev-parse", "HEAD")
+
+	if err := os.Remove(filepath.Join(repo, "sub/gone.go")); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "delete an anchor")
+	head := git("rev-parse", "HEAD")
+
+	// Invoked from a subdirectory, which the command documents as supported.
+	out := filepath.Join(t.TempDir(), "bundle")
+	cmd := exec.Command(bin, "pr-review", ".", base, head, "--out", out)
+	cmd.Dir = filepath.Join(repo, "sub")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	md, err := os.ReadFile(filepath.Join(out, "review.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(md), "deletes files that cited `INV-1` (1)") {
+		t.Errorf("the deleted anchor went unreported from a subdirectory:\n%s", md)
+	}
+	if !strings.Contains(string(md), "| `INV-1` | LINKED | 0 of 1 |") {
+		t.Errorf("counts are wrong from a subdirectory:\n%s", md)
+	}
+}

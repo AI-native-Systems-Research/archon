@@ -779,9 +779,12 @@ func cmdPRReview(args []string) {
 		fmt.Fprintf(os.Stderr, "      loading plan from %s\n", planPath)
 		opts.PlanGraph = loadPlanGraph(planPath)
 	}
-	opts.Registry, opts.ChangedFiles = loadRegistryForReview(opts.Repo, opts.Base, opts.Head, registryPath, registryExplicit)
+	// Resolved once, because every git call below must run from the same place:
+	// paths from one and lookups from another silently stop matching.
+	repoRoot := gitToplevel(opts.Repo)
+	opts.Registry, opts.ChangedFiles = loadRegistryForReview(repoRoot, opts.Base, opts.Head, registryPath, registryExplicit)
 	if opts.Registry != nil {
-		opts.RemovedAnchors = removedAnchors(opts.Repo, opts.Base, opts.Head, invariantsOf(opts.Registry))
+		opts.RemovedAnchors = removedAnchors(repoRoot, opts.Base, opts.Head, invariantsOf(opts.Registry))
 	}
 
 	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
@@ -808,13 +811,6 @@ func cmdPRReview(args []string) {
 // the architectural review. Only an explicitly requested path is fatal, because
 // there the caller asked for something specific.
 func loadRegistryForReview(repo, base, head, path string, explicit bool) (*invariant.Result, []string) {
-	// git worktree and git cat-file both work from the repository root, and
-	// linkInvariants refuses a subdirectory outright. Resolving here keeps
-	// `pr-review .` working from anywhere inside a checkout.
-	if top, err := output(repo, "git", "rev-parse", "--show-toplevel"); err == nil && top != "" {
-		repo = top
-	}
-
 	if explicit {
 		// Same guards as the invariants subcommand: the path is resolved inside
 		// the commit's tree, so an absolute or climbing path would read something
@@ -892,7 +888,7 @@ func removedAnchors(repo, base, head string, invs []invariant.Invariant) map[str
 	// -M explicitly: with diff.renames=false in the reviewed repo, a rename is
 	// reported as a delete and would be announced as a removed anchor that never
 	// went away — and the bundle's bytes would depend on that repo's git config.
-	out, err := output(repo, "git", "diff", "-z", "-M", "--name-only", "--diff-filter=D", from, head)
+	out, err := output(repo, "git", "diff", "-z", "-M", "--no-relative", "--name-only", "--diff-filter=D", from, head)
 	if err != nil || out == "" {
 		return nil
 	}
@@ -928,6 +924,18 @@ func removedAnchors(repo, base, head string, invs []invariant.Invariant) map[str
 	return removed
 }
 
+// gitToplevel resolves a path inside a checkout to the repository root.
+//
+// git worktree and git cat-file both operate from the root, and linkInvariants
+// refuses a subdirectory outright, so resolving keeps `pr-review .` working from
+// anywhere inside a checkout.
+func gitToplevel(repo string) string {
+	if top, err := output(repo, "git", "rev-parse", "--show-toplevel"); err == nil && top != "" {
+		return top
+	}
+	return repo
+}
+
 // changedFiles lists the repo-relative paths a change touches.
 //
 // It diffs from the merge base rather than from <base> directly. A two-dot diff
@@ -936,8 +944,10 @@ func removedAnchors(repo, base, head string, invs []invariant.Invariant) map[str
 // never went near. The graph delta tolerates that (it is a symmetric comparison of
 // two trees); "files this change touched" is a causal claim and does not.
 //
-// core.quotePath is on by default, which renders a path containing non-ASCII or a
-// space as an escaped, quoted string — and those never compare equal to the raw
+// --no-relative because diff.relative=true in the reviewed repo makes git emit
+// cwd-relative paths, which then match nothing on the registry side. core.quotePath
+// is likewise on by default, rendering a path containing non-ASCII or a space as an
+// escaped, quoted string — and those never compare equal to the raw
 // UTF-8 paths the linker produces, so every such file silently fails to match.
 // -z sidesteps the quoting entirely.
 func changedFiles(repo, base, head string) ([]string, error) {
@@ -945,7 +955,7 @@ func changedFiles(repo, base, head string) ([]string, error) {
 	if mb, err := output(repo, "git", "merge-base", base, head); err == nil && mb != "" {
 		from = mb
 	}
-	out, err := output(repo, "git", "diff", "-z", "-M", "--name-only", from, head)
+	out, err := output(repo, "git", "diff", "-z", "-M", "--no-relative", "--name-only", from, head)
 	if err != nil {
 		return nil, err
 	}
