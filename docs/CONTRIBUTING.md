@@ -58,6 +58,18 @@ Write 3-5 bullets covering:
 
 This is your contract with the reviewer. If you can't write this clearly, you don't understand the issue yet — go back to step 2.
 
+**Review the plan first when the PR pins something.** If it establishes an interface other PRs will
+build on, or commits a golden file, send the micro-plan to a **fresh** pr-review-toolkit agent
+before bringing it to a human — one agent, one round, and ask it what the plan makes expensive to
+change later. Fresh counts twice: not an agent that has already reviewed this work, and not one
+told what you think the answer is. Say in the PR that the plan was reviewed, or that it did not
+need to be.
+
+Otherwise skip this and let step 6 do the work. Reviewing a plan document is lower yield than
+reviewing code — we have tried it, and it mostly surfaced what code review caught anyway. The
+exception is narrow on purpose: a wrong interface or a wrong golden costs a sentence now and a
+follow-up PR once a sibling depends on it.
+
 ### 4. Implement + Test
 
 Write the test first and watch it fail, then write the code. The floor is unchanged: if someone reverts your fix, a test should fail.
