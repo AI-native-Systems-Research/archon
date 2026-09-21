@@ -184,11 +184,11 @@ in round two were round one's *fixes*, each a new guard that rejected valid inpu
   round on the post-fix code, or overruled by a named human in the PR. **A PR with an open
   must-fix finding does not merge, at any round count.** The named human is the escape hatch for a
   finding you believe is simply wrong.
-- **Name the SHA the last round reviewed**, taken at dispatch and equal to HEAD at merge. A clean
-  round on code you then changed is not a clean round. Exactly two changes are carved out of that,
-  and nothing else is: an update from `main`, if
-  `git diff <reviewed-sha> HEAD -- $(git diff --name-only origin/main...HEAD)` is empty; and **that
-  round's own non-blocking suggestions**, applied as written. Every round produces suggestions, so
+- **Name the SHA the last round reviewed**, taken at dispatch. A clean round on code you then
+  changed is not a clean round. Exactly two changes are carved out of that, and nothing else is: an
+  update from `main`, if `git diff <reviewed-sha> HEAD -- $(git diff --name-only origin/main...HEAD)`
+  is empty; and **that round's own non-blocking suggestions** — list which ones you applied, so the
+  carve-out is checkable in the same way a dismissal is. Every round produces suggestions, so
   treating those as invalidating gives the loop no end. Anything else you push — a refactor, a bug
   you spotted yourself, a conflict resolution, work the round never saw — voids the round, whatever
   its severity would have been.
