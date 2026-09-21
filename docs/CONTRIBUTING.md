@@ -126,20 +126,23 @@ This step is not scoped by size: step 5 above applies to Medium+ feature PRs, th
 exceptions. What scales is depth, not whether the gate exists.
 
 **The review must come from pr-review-toolkit.** Either invoke `/pr-review-toolkit:review-pr`, or
-dispatch its agents directly with the Agent tool — `pr-review-toolkit:code-reviewer` is the
-default, and add others where the change calls for them:
+dispatch its agents directly with the Agent tool. `pr-review-toolkit:code-reviewer` is the default.
+If the change matches a row below, **that agent runs too** — the table is an obligation, not a
+menu, and the PR should say which rows you judged not to apply:
 
-| Add | When the change involves |
+| Agent | Runs when the change involves |
 |---|---|
 | `silent-failure-hunter` | error handling, fallbacks, catch blocks, anything that can return an empty result |
 | `type-design-analyzer` | new exported types, or types other PRs will build on |
 | `pr-test-analyzer` | test coverage you are unsure of |
 | `comment-analyzer` | new doc comments making claims about behaviour |
 
-Reading your own diff again is not this step, whatever you conclude from it. Say in the PR which
-route you used and which agents ran, so "the review ran" is checkable rather than asserted.
+Say in the PR which route you used and which agents ran, so "the review ran" is checkable rather
+than asserted.
 
-### Briefing the reviewer
+#### Briefing the reviewer
+
+Every PR gets at least one round. "Small" means one agent, not a thinner brief.
 
 The canned prompt below is the floor, not the target. An agent starts with none of your context,
 so a thin brief buys a thin review — and a reviewer that only *reads* the guards will report that
@@ -155,14 +158,13 @@ Review this PR against the linked issue. Check:
 For anything beyond a small PR, add:
 
 - **What the code is for**, in enough detail that the agent can judge correctness rather than
-  style, and **what the worst failure mode is** — for archon it is usually output that looks clean
-  while being wrong, so say that.
+  style, and **what the worst failure mode would be**.
 - **Ground truth it can check numbers against**: a fixture whose expected counts are known, a
   document that states facts about itself, a real checkout it can run against.
 - **An instruction to break the guards, not read them** — construct input that produces a
   plausible-but-wrong answer. This is where the findings that matter come from.
-- **Where to put probes** (`$(mktemp -d)` or temp files it deletes) and that the tree must be left
-  clean.
+- **That probes go in `$(mktemp -d)` and the tree is left clean** — agents have left probe files
+  in the worktree that a stray `git add -A` would have committed.
 - **Not your conclusions.** Brief it on the problem, never on what you think the answer is,
   otherwise a green verdict only tells you the agent agreed with you.
 
@@ -170,26 +172,37 @@ Reason about each finding first, then fix the valid ones. **List any finding you
 PR, with the reason** — otherwise "fix if they are valid" lets an author dismiss everything and
 still claim the step ran, and a dismissal nobody can see is not a dismissal.
 
-### When the loop ends
+#### When the loop ends
 
 **Fixes get reviewed too.** The loop ends on a round that found no must-fix issues *and reviewed
 the code you are actually merging* — not on a round whose fixes you then applied unreviewed. A fix
 written under review pressure is exactly where the next bug goes: on #66, both must-fix findings
 in round two were round one's *fixes*, each a new guard that rejected valid input.
 
+Three clauses, because each closes a way to report a clean round without having had one:
+
+- **Must-fix means the reviewing agent called it must-fix**, not you. You may still dismiss such a
+  finding with a reason, but a dismissed must-fix finding does not make the round clean: the next
+  round has to see the resolution and not raise it again. Otherwise the dismissal power above
+  quietly becomes the power to end the loop.
+- **Name the commit SHA the last round reviewed.** If HEAD moves after it — a new commit, a rebase,
+  a merge from `main`, a one-line doc tweak — that SHA is no longer the code you are merging, and
+  the round no longer counts.
+- **A PR with an open must-fix finding does not merge, at any round count.** Three rounds is a
+  ceiling that signals a design problem, not a permit to merge on the third. If round three still
+  produces must-fix findings, stop, leave the PR in draft, and raise it with a human; more rounds
+  will keep finding symptoms.
+
 Tell a later round it is reviewing fixes and name them, so it checks those rather than
 re-deriving the original findings.
-
-Three rounds is the ceiling, and reaching it is a signal rather than a permit. If round three
-still produces must-fix findings, stop and raise it with a human: at that point the design is
-wrong and more rounds will keep finding symptoms.
 
 Verifying your own work is not a substitute: your verification can be wrong in a way that looks
 right. On #62 the tests, the demos and a hand-written sweep all passed while the PR shipped a
 false claim about golden-file coverage; run late, the review found it in minutes (#63).
 
 State in the PR that the step ran — "step 6: N rounds, M findings, K fixed, M-K dismissed with
-reasons; last round clean" — so the gate is auditable. Silence is indistinguishable from having
+reasons; last round clean at <sha>", or "round 3 escalated to <human>, not merged" — so the gate is
+auditable. Silence is indistinguishable from having
 skipped it, and "findings, fixed" without the round count hides whether the fixes were ever
 looked at.
 
