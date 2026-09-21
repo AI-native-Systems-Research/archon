@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,125 @@ func TestCallgraphSubcommand(t *testing.T) {
 		second, _, _ := runCG(t, bin)
 		if first != second {
 			t.Error("two runs on identical input produced different output")
+		}
+	})
+}
+
+// runInv invokes the invariants subcommand.
+func runInv(t *testing.T, bin string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, append([]string{"invariants"}, args...)...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("running %v: %v", args, err)
+	}
+	return stdout.String(), stderr.String(), code
+}
+
+// invFixture is a tiny repo whose registry and citations are committed under
+// demo/flow4-invariants, so these checks need no BLIS checkout and run in CI.
+const invFixture = "demo/flow4-invariants/fixture"
+
+func TestInvariantsSubcommand(t *testing.T) {
+	bin := buildArchon(t)
+
+	t.Run("prints the table and the totals", func(t *testing.T) {
+		stdout, stderr, code := runInv(t, bin, invFixture, "invariants.md")
+		if code != 0 {
+			t.Fatalf("exit %d; stderr %q", code, stderr)
+		}
+		for _, want := range []string{"DECLARED INVARIANTS", "invariants.md", "INV-1", "LINKED", "UNLINKED", "anchored"} {
+			if !strings.Contains(stdout, want) {
+				t.Errorf("stdout missing %q:\n%s", want, stdout)
+			}
+		}
+	})
+
+	t.Run("--json carries the derived status", func(t *testing.T) {
+		stdout, stderr, code := runInv(t, bin, invFixture, "invariants.md", "--json")
+		if code != 0 {
+			t.Fatalf("exit %d; stderr %q", code, stderr)
+		}
+		var res struct {
+			Registry string `json:"registry"`
+			Links    []struct {
+				Status    string `json:"status"`
+				Citations int    `json:"citations"`
+				Invariant struct {
+					ID    string `json:"id"`
+					Scope string `json:"scope"`
+				} `json:"invariant"`
+			} `json:"links"`
+			Totals struct {
+				Linked, TestOnly, Unlinked int
+			} `json:"totals"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+			t.Fatalf("--json is not valid JSON: %v\n%s", err, stdout)
+		}
+		if res.Registry != "invariants.md" {
+			t.Errorf("registry = %q", res.Registry)
+		}
+		if len(res.Links) == 0 {
+			t.Fatal("no links in JSON")
+		}
+		for _, l := range res.Links {
+			if l.Status == "" {
+				t.Errorf("%s has no status field", l.Invariant.ID)
+			}
+			// The scope is the registry as asked for, never a temp worktree.
+			if strings.HasPrefix(l.Invariant.Scope, "/") {
+				t.Errorf("%s scope is absolute: %q", l.Invariant.ID, l.Invariant.Scope)
+			}
+		}
+	})
+
+	t.Run("omitting the registry names the conventional paths", func(t *testing.T) {
+		stdout, stderr, code := runInv(t, bin, invFixture)
+		if code == 0 {
+			t.Errorf("exit 0 with no registry given; stdout %q", stdout)
+		}
+		for _, want := range []string{"docs/contributing/standards/invariants.md", "docs/invariants.md", "INVARIANTS.md"} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr should name %q, got %q", want, stderr)
+			}
+		}
+	})
+
+	t.Run("an absolute registry path with --at is refused", func(t *testing.T) {
+		// Reading code at a commit and the registry from the working tree is a
+		// silent mismatch, so it is refused rather than guessed at.
+		_, stderr, code := runInv(t, bin, ".", "/etc/hosts", "--at", "HEAD")
+		if code == 0 {
+			t.Error("an absolute registry path with --at should be refused")
+		}
+		if !strings.Contains(stderr, "repo-relative") {
+			t.Errorf("stderr should say why, got %q", stderr)
+		}
+	})
+
+	t.Run("a bad --at fails loudly", func(t *testing.T) {
+		_, stderr, code := runInv(t, bin, ".", "docs/invariants.md", "--at", "definitely-not-a-commit")
+		if code == 0 {
+			t.Error("exit 0 for a commit that does not exist")
+		}
+		if stderr == "" {
+			t.Error("a bad commit should say something on stderr")
+		}
+	})
+
+	t.Run("--at without a value does not fall through", func(t *testing.T) {
+		_, stderr, code := runInv(t, bin, invFixture, "invariants.md", "--at")
+		if code == 0 {
+			t.Error("bare --at should not be accepted")
+		}
+		if !strings.Contains(stderr, "takes a value") {
+			t.Errorf("stderr should say what is wrong, got %q", stderr)
 		}
 	})
 }

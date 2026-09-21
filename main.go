@@ -29,6 +29,7 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/graph"
 	"github.com/AI-native-Systems-Research/archon/internal/health"
 	"github.com/AI-native-Systems-Research/archon/internal/impact"
+	"github.com/AI-native-Systems-Research/archon/internal/invariant"
 	"github.com/AI-native-Systems-Research/archon/internal/plan"
 	"github.com/AI-native-Systems-Research/archon/internal/reflexion"
 	"github.com/AI-native-Systems-Research/archon/internal/render"
@@ -56,6 +57,8 @@ func main() {
 		cmdImpact(os.Args[2:])
 	case "health":
 		cmdHealth(os.Args[2:])
+	case "invariants":
+		cmdInvariants(os.Args[2:])
 	case "reflexion":
 		cmdReflexion(os.Args[2:])
 	case "pr-review":
@@ -240,6 +243,82 @@ func cmdHealth(args []string) {
 	}
 }
 
+// conventionalRegistryPaths is the probe order issue #65 specifies. Auto-discovery
+// itself is Part 3; naming them in the error is what makes the omission
+// actionable rather than a bare usage dump.
+var conventionalRegistryPaths = []string{
+	"docs/contributing/standards/invariants.md",
+	"docs/invariants.md",
+	"INVARIANTS.md",
+}
+
+// cmdInvariants reports what a repository has behind each declared invariant.
+func cmdInvariants(args []string) {
+	jsonOut := false
+	commit := ""
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--json":
+			jsonOut = true
+		case a == "--at":
+			if i+1 >= len(args) {
+				fatal("--at takes a value: --at <commit>")
+			}
+			i++
+			commit = args[i]
+		case strings.HasPrefix(a, "--at="):
+			commit = strings.TrimPrefix(a, "--at=")
+		default:
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) < 1 {
+		usage()
+	}
+	repo := pos[0]
+	if len(pos) < 2 {
+		fatal("registry path required: archon-go invariants <repo> <registry-path>\n"+
+			"       conventional locations are %s\n"+
+			"       (auto-discovery lands with the pr-review integration)",
+			strings.Join(conventionalRegistryPaths, ", "))
+	}
+	registry := filepath.ToSlash(pos[1])
+	if filepath.IsAbs(pos[1]) {
+		fatal("registry path must be repo-relative, not %s — otherwise --at would read code at one commit and the registry from the working tree", pos[1])
+	}
+
+	// The registry is read from the same tree as the code, and recorded under the
+	// path the caller asked for. Handing ParseFile a temp worktree path would put
+	// that machine-specific path into every Invariant's Scope and Source, and so
+	// into --json and any golden output.
+	work := repo
+	if commit != "" {
+		tmp, cleanup := checkoutWorktree(repo, commit)
+		defer cleanup()
+		work = tmp
+	}
+	src, err := os.ReadFile(filepath.Join(work, registry))
+	if err != nil {
+		fatal("read registry %s: %v", registry, err)
+	}
+	invs, err := invariant.ParseMarkdown(src, registry, registry)
+	if err != nil {
+		fatal("%v", err)
+	}
+	links, err := invariant.LinkRepo(work, invs)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	res := invariant.Result{Registry: registry, Commit: commit, Links: links, Totals: invariant.Count(links)}
+	if jsonOut {
+		printJSON(res)
+		return
+	}
+	invariant.Render(os.Stdout, res)
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `archon-go — package-altitude architecture graphs and deltas
 
@@ -264,6 +343,13 @@ func usage() {
                                                 PASS/FAIL per contract  (--json)
   archon-go health <repo|graph.json> [commit]   coupling, cycles, god-modules,
                                                 blast-radius hotspots  (--json)
+  archon-go invariants <repo> [registry-path]   declared invariants vs the code and
+                                                tests citing their IDs: LINKED /
+                                                TEST ONLY / UNLINKED  (--json)
+      --at <commit>                             read registry and code at one
+                                                commit (a flag, not a positional,
+                                                because the second positional is
+                                                already the registry path)
   archon-go reflexion <repo|graph.json> <layers.json> [commit]  declared layering
                                                 vs actual code; report violations (--json)
   archon-go render <repo|graph.json> [commit]   draw the architecture

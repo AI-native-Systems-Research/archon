@@ -1,0 +1,13 @@
+DECLARED INVARIANTS
+  registry: invariants.md (4 declared)
+
+  ID           STATUS     CODE  TEST  CITES  NAMED
+  INV-1        LINKED        1     0      1      1
+  INV-2        TEST ONLY     0     1      1      0
+  INV-6        LINKED        1     0      2      0
+  INV-99       UNLINKED      0     0      0      0
+
+  3 of 4 anchored — 2 LINKED, 1 TEST ONLY, 1 UNLINKED
+
+  tests named for an invariant:
+    INV-1        core/engine_test.go:TestINV1_Conservation

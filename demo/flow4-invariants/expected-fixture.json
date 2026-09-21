@@ -1,0 +1,70 @@
+{
+  "registry": "invariants.md",
+  "links": [
+    {
+      "invariant": {
+        "id": "INV-1",
+        "scope": "invariants.md",
+        "title": "Request Conservation",
+        "statement": "Every request that enters the system is accounted for exactly once.",
+        "tier": "h3",
+        "source": "invariants.md:16"
+      },
+      "code_files": [
+        "core/engine.go"
+      ],
+      "named_tests": [
+        "core/engine_test.go:TestINV1_Conservation"
+      ],
+      "citations": 1,
+      "status": "LINKED"
+    },
+    {
+      "invariant": {
+        "id": "INV-2",
+        "scope": "invariants.md",
+        "title": "Request Lifecycle",
+        "statement": "Requests transition `queued -\u003e running -\u003e completed`, with no invalid transitions.",
+        "tier": "h3",
+        "source": "invariants.md:20"
+      },
+      "test_files": [
+        "lifecycle/lifecycle_test.go"
+      ],
+      "citations": 1,
+      "status": "TEST ONLY"
+    },
+    {
+      "invariant": {
+        "id": "INV-6",
+        "scope": "invariants.md",
+        "title": "Determinism",
+        "statement": "Two runs of one configuration produce byte-identical output.",
+        "tier": "h4",
+        "source": "invariants.md:26"
+      },
+      "code_files": [
+        "core/engine.go"
+      ],
+      "citations": 2,
+      "status": "LINKED"
+    },
+    {
+      "invariant": {
+        "id": "INV-99",
+        "scope": "invariants.md",
+        "title": "",
+        "statement": "Capacity bound: at every point in the run, `|resident items| \u003c= configured capacity`.",
+        "tier": "table",
+        "source": "invariants.md:36"
+      },
+      "citations": 0,
+      "status": "UNLINKED"
+    }
+  ],
+  "totals": {
+    "linked": 2,
+    "test_only": 1,
+    "unlinked": 1
+  }
+}

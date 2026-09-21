@@ -118,6 +118,28 @@ else
 fi
 
 echo ""
+echo "=== Flow 4: Declared Invariants ==="
+F4="$SCRIPT_DIR/flow4-invariants"
+
+# The fixture checks need no BLIS checkout, so unlike flow 1 and most of flow 3
+# these two run in CI. They are what pin the --json shape.
+$ARCHON invariants "$F4/fixture" invariants.md > /tmp/demo-flow4-fixture.txt
+check "flow4 fixture table" /tmp/demo-flow4-fixture.txt "$F4/expected-fixture.txt"
+
+$ARCHON invariants "$F4/fixture" invariants.md --json > /tmp/demo-flow4-fixture.json
+check "flow4 fixture --json" /tmp/demo-flow4-fixture.json "$F4/expected-fixture.json"
+
+if [ -z "$BLIS_REPO" ]; then
+    echo "  SKIP: the BLIS check needs BLIS_REPO=/path/to/blis"
+else
+    # Pinned with --at, so the registry and the code are both read at one commit
+    # and the numbers cannot drift as BLIS moves.
+    $ARCHON invariants "$BLIS_REPO" docs/contributing/standards/invariants.md \
+        --at 73a17c00f84f28623e254a625f1f5298bb8c8a38 > /tmp/demo-flow4-blis.txt 2>&1
+    check "flow4 BLIS at 73a17c00 (34 declared)" /tmp/demo-flow4-blis.txt "$F4/expected-blis.txt"
+fi
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [ $FAIL -gt 0 ]; then
     red "DEMO FAILED — output differs from golden files."

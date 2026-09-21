@@ -330,6 +330,59 @@ REFLEXION MODEL — declared layering vs actual code
 
 An upward dependency (a leaf importing an entry package) counts as a violation.
 
+### invariants — declared invariants vs the code and tests citing them
+
+Many repositories write down the properties the system must uphold, give each an ID,
+and then cite those IDs in comments. This follows the IDs: it reports which declared
+invariants have production code behind them, which have only tests, and which exist
+nowhere but the document declaring them. Nothing is inferred from code structure and
+no model is involved.
+
+```sh
+./archon-go invariants $BLIS_REPO docs/contributing/standards/invariants.md \
+    --at 73a17c00f84f28623e254a625f1f5298bb8c8a38
+```
+
+`--at` reads the registry **and** the code at one commit, so the numbers cannot drift
+as the repo moves. It is a flag rather than a trailing positional commit — unlike
+`health $R <commit>` — because the second positional here is already the registry
+path, and guessing whether an argument is a path or a commit is the kind of silent
+wrong answer this command exists to surface.
+
+**What you'll see** (abridged; 34 rows in full):
+
+```
+DECLARED INVARIANTS
+  registry: docs/contributing/standards/invariants.md (34 declared)
+  commit:   73a17c00f84f28623e254a625f1f5298bb8c8a38
+
+  ID           STATUS     CODE  TEST  CITES  NAMED
+  INV-1        LINKED       14    31    143     14
+  INV-7        LINKED        8     0     16      0
+  INV-L4       LINKED        3     2     11      0
+  INV-L6       UNLINKED      0     0      0      0
+  NS-6         LINKED        3     4     21      6
+
+  32 of 34 anchored — 32 LINKED, 0 TEST ONLY, 2 UNLINKED
+
+  tests named for an invariant:
+    INV-1        sim/cluster/inv1_conservation_test.go:TestINV1_AggregateLocalDetection
+                 sim/inv1_conservation_test.go:TestINV1Accounted
+```
+
+`CODE` and `TEST` count files; `CITES` counts occurrences, which is the number a repo
+otherwise maintains by hand. `NAMED` counts test functions whose *name* embeds the ID
+(`INV-6` → `TestINV6_Determinism`), listed underneath rather than in a column because
+one BLIS invariant has fourteen of them.
+
+The two useful readings are the extremes. `INV-L6: UNLINKED` is a declared promise with
+nothing pointing at it — here it agrees with what BLIS's own registry says about that
+entry. And `0 of N anchored` is the most useful thing this can tell a repo that has
+just written a registry and not yet cited any of it.
+
+Add `--json` for the machine-readable form; each link carries its derived `status`, so
+a consumer never recomputes it.
+
 ### contract — snapshot an allow-list baseline
 
 ```sh
