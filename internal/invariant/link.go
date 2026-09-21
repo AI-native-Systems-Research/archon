@@ -58,14 +58,18 @@ var skipDir = map[string]bool{".git": true, "vendor": true, "node_modules": true
 // that is not a directory, or one containing no Go files at all, is an error
 // rather than a repository-wide UNLINKED verdict.
 //
+// The second return is the number of Go files scanned. A verdict of "nothing is
+// anchored" means something very different over 1,800 files than over three, and
+// without the count the two are byte-identical.
+//
 // Returned links are in the order of invs; every slice inside them is sorted and
 // de-duplicated, and no map iteration reaches the result.
-func LinkRepo(root string, invs []Invariant) ([]Link, error) {
+func LinkRepo(root string, invs []Invariant) ([]Link, int, error) {
 	byNorm := map[string]string{} // upper-cased normalized ID -> ID
 	for _, inv := range invs {
 		n := strings.ToUpper(normalizeID(inv.ID))
 		if prev, ok := byNorm[n]; ok && prev != inv.ID {
-			return nil, fmt.Errorf("invariants %s and %s are indistinguishable in test names (both normalize to %s)", prev, inv.ID, n)
+			return nil, 0, fmt.Errorf("invariants %s and %s are indistinguishable in test names (both normalize to %s)", prev, inv.ID, n)
 		}
 		byNorm[n] = inv.ID
 	}
@@ -90,12 +94,12 @@ func LinkRepo(root string, invs []Invariant) ([]Link, error) {
 	// routinely reached through a symlink.
 	walkRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", root, err)
+		return nil, 0, fmt.Errorf("resolve %s: %w", root, err)
 	}
 	if fi, err := os.Stat(walkRoot); err != nil {
-		return nil, fmt.Errorf("stat %s: %w", root, err)
+		return nil, 0, fmt.Errorf("stat %s: %w", root, err)
 	} else if !fi.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", root)
+		return nil, 0, fmt.Errorf("%s is not a directory", root)
 	}
 
 	scanned := 0
@@ -155,14 +159,14 @@ func LinkRepo(root string, invs []Invariant) ([]Link, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("scan %s: %w", root, err)
+		return nil, 0, fmt.Errorf("scan %s: %w", root, err)
 	}
 	// Reporting every invariant UNLINKED is the loudest thing this package can
 	// say about a repository. It must not be what a caller gets for pointing at
 	// a docs directory, an empty checkout, or a tree whose Go files all live
 	// somewhere the walk skips.
 	if scanned == 0 {
-		return nil, fmt.Errorf("scan %s: no Go files found", root)
+		return nil, 0, fmt.Errorf("scan %s: no Go files found", root)
 	}
 
 	for i := range links {
@@ -170,7 +174,7 @@ func LinkRepo(root string, invs []Invariant) ([]Link, error) {
 		links[i].TestFiles = sortedUnique(links[i].TestFiles)
 		links[i].NamedTests = sortedUnique(links[i].NamedTests)
 	}
-	return links, nil
+	return links, scanned, nil
 }
 
 // namedFor returns the IDs a test function is named for. Separators may be

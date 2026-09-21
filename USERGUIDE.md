@@ -349,12 +349,13 @@ as the repo moves. It is a flag rather than a trailing positional commit — unl
 path, and guessing whether an argument is a path or a commit is the kind of silent
 wrong answer this command exists to surface.
 
-**What you'll see** (abridged; 34 rows in full):
+**What you'll see** (abridged; at that commit the registry declares 34):
 
 ```
 DECLARED INVARIANTS
   registry: docs/contributing/standards/invariants.md (34 declared)
   commit:   73a17c00f84f28623e254a625f1f5298bb8c8a38
+  scanned:  446 Go files
 
   ID           STATUS     CODE  TEST  CITES  NAMED
   INV-1        LINKED       14    31    143     14
@@ -366,19 +367,29 @@ DECLARED INVARIANTS
   32 of 34 anchored — 32 LINKED, 0 TEST ONLY, 2 UNLINKED
 
   tests named for an invariant:
-    INV-1        sim/cluster/inv1_conservation_test.go:TestINV1_AggregateLocalDetection
-                 sim/inv1_conservation_test.go:TestINV1Accounted
+    INV-1        sim/cluster/cluster_tenant_test.go:TestTenantAdmission_INV1_BudgetShedConservation
+                 sim/cluster/cluster_tier_test.go:TestGAIELegacy_INV1_Conservation
 ```
 
-`CODE` and `TEST` count files; `CITES` counts occurrences, which is the number a repo
-otherwise maintains by hand. `NAMED` counts test functions whose *name* embeds the ID
-(`INV-6` → `TestINV6_Determinism`), listed underneath rather than in a column because
-one BLIS invariant has fourteen of them.
+`scanned` is the denominator: "nothing is anchored" means something very different over
+446 Go files than over three. `CODE` and `TEST` count files; `CITES` counts occurrences.
+`NAMED` counts test functions whose *name* embeds the ID (`INV-6` → `TestINV6_Determinism`),
+listed underneath rather than in a column because an invariant can have a dozen of them.
 
-The two useful readings are the extremes. `INV-L6: UNLINKED` is a declared promise with
-nothing pointing at it — here it agrees with what BLIS's own registry says about that
-entry. And `0 of N anchored` is the most useful thing this can tell a repo that has
-just written a registry and not yet cited any of it.
+The two useful readings are the extremes. `INV-L6: UNLINKED` means **no `.go` file names
+that ID** — not that the invariant is untested. BLIS's registry says exactly this about
+INV-L6 and INV-L7: both have tests, but "neither test nor production site names the ID",
+so there is no way to find them from the ID. That is the gap the status reports. A
+citation in markdown, YAML or a shell script counts for nothing either, since only `.go`
+files are scanned.
+
+At the other extreme, `0 of N anchored` is the most useful thing this can tell a repo that
+has just written a registry and not yet cited any of it.
+
+Under `--at`, `<repo>` must be the repository root: `git worktree` checks out the root, so a
+subdirectory would read the root's registry and scan the whole tree. The command refuses
+that rather than guessing. It also warns if the repo has submodules, whose code a worktree
+does not include.
 
 Add `--json` for the machine-readable form; each link carries its derived `status`, so
 a consumer never recomputes it.

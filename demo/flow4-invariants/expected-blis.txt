@@ -1,6 +1,7 @@
 DECLARED INVARIANTS
   registry: docs/contributing/standards/invariants.md (34 declared)
   commit:   73a17c00f84f28623e254a625f1f5298bb8c8a38
+  scanned:  446 Go files
 
   ID           STATUS     CODE  TEST  CITES  NAMED
   INV-1        LINKED       14    31    143     14

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -182,7 +183,15 @@ func TestInvariantsSubcommand(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit %d; stderr %q", code, stderr)
 		}
-		for _, want := range []string{"DECLARED INVARIANTS", "invariants.md", "INV-1", "LINKED", "UNLINKED", "anchored"} {
+		// Whole rows and the exact totals line. "LINKED" is a substring of
+		// "UNLINKED", so loose substring checks pass even when every status is
+		// wrong — and the number is this command's entire product.
+		for _, want := range []string{
+			"INV-1        LINKED        1     0      1      1",
+			"INV-2        TEST ONLY     0     1      1      0",
+			"INV-99       UNLINKED      0     0      0      0",
+			"  3 of 4 anchored — 2 LINKED, 1 TEST ONLY, 1 UNLINKED",
+		} {
 			if !strings.Contains(stdout, want) {
 				t.Errorf("stdout missing %q:\n%s", want, stdout)
 			}
@@ -205,7 +214,9 @@ func TestInvariantsSubcommand(t *testing.T) {
 				} `json:"invariant"`
 			} `json:"links"`
 			Totals struct {
-				Linked, TestOnly, Unlinked int
+				Linked   int `json:"linked"`
+				TestOnly int `json:"test_only"`
+				Unlinked int `json:"unlinked"`
 			} `json:"totals"`
 		}
 		if err := json.Unmarshal([]byte(stdout), &res); err != nil {
@@ -217,14 +228,31 @@ func TestInvariantsSubcommand(t *testing.T) {
 		if len(res.Links) == 0 {
 			t.Fatal("no links in JSON")
 		}
+		want := map[string]struct {
+			status string
+			cites  int
+		}{
+			"INV-1":  {"LINKED", 1},
+			"INV-2":  {"TEST ONLY", 1},
+			"INV-6":  {"LINKED", 2},
+			"INV-99": {"UNLINKED", 0},
+		}
 		for _, l := range res.Links {
-			if l.Status == "" {
-				t.Errorf("%s has no status field", l.Invariant.ID)
+			w, ok := want[l.Invariant.ID]
+			if !ok {
+				t.Errorf("unexpected invariant %s", l.Invariant.ID)
+				continue
+			}
+			if l.Status != w.status || l.Citations != w.cites {
+				t.Errorf("%s = %s/%d cites, want %s/%d", l.Invariant.ID, l.Status, l.Citations, w.status, w.cites)
 			}
 			// The scope is the registry as asked for, never a temp worktree.
 			if strings.HasPrefix(l.Invariant.Scope, "/") {
 				t.Errorf("%s scope is absolute: %q", l.Invariant.ID, l.Invariant.Scope)
 			}
+		}
+		if res.Totals.Linked != 2 || res.Totals.TestOnly != 1 || res.Totals.Unlinked != 1 {
+			t.Errorf("totals = %+v, want 2/1/1", res.Totals)
 		}
 	})
 
@@ -252,13 +280,75 @@ func TestInvariantsSubcommand(t *testing.T) {
 		}
 	})
 
-	t.Run("a bad --at fails loudly", func(t *testing.T) {
-		_, stderr, code := runInv(t, bin, ".", "docs/invariants.md", "--at", "definitely-not-a-commit")
+	t.Run("a bad --at fails for the right reason", func(t *testing.T) {
+		// Against a registry that exists, so the failure cannot be the registry
+		// being missing — which is what made this pass before while --at itself
+		// had no working coverage at all.
+		_, stderr, code := runInv(t, bin, ".", "demo/flow4-invariants/fixture/invariants.md", "--at", "definitely-not-a-commit")
 		if code == 0 {
 			t.Error("exit 0 for a commit that does not exist")
 		}
-		if stderr == "" {
-			t.Error("a bad commit should say something on stderr")
+		if !strings.Contains(stderr, "definitely-not-a-commit") {
+			t.Errorf("stderr should name the bad commit, got %q", stderr)
+		}
+	})
+
+	t.Run("--at with an empty value is refused, both spellings", func(t *testing.T) {
+		// `--at "$SHA"` with an unset SHA is how a script produces this, and
+		// accepting it reports a live working-tree scan as a pinned run.
+		for _, spelling := range [][]string{{"--at", ""}, {"--at="}} {
+			args := append([]string{invFixture, "invariants.md"}, spelling...)
+			_, stderr, code := runInv(t, bin, args...)
+			if code == 0 {
+				t.Errorf("%v should be refused", spelling)
+			}
+			if !strings.Contains(stderr, "takes a value") {
+				t.Errorf("%v: stderr should say what is wrong, got %q", spelling, stderr)
+			}
+		}
+	})
+
+	t.Run("--at= with no value is refused", func(t *testing.T) {
+		// Accepting it scanned the working tree and dropped the commit line: a
+		// pinned invocation silently becoming unpinned.
+		_, stderr, code := runInv(t, bin, invFixture, "invariants.md", "--at=")
+		if code == 0 {
+			t.Error("--at= should be refused")
+		}
+		if !strings.Contains(stderr, "takes a value") {
+			t.Errorf("stderr should say what is wrong, got %q", stderr)
+		}
+	})
+
+	t.Run("a mistyped flag is refused, not treated as a path", func(t *testing.T) {
+		_, stderr, code := runInv(t, bin, invFixture, "invariants.md", "--jsonn")
+		if code == 0 {
+			t.Error("--jsonn should be refused; the caller asked for JSON")
+		}
+		if !strings.Contains(stderr, "unknown flag") {
+			t.Errorf("stderr should name the flag, got %q", stderr)
+		}
+	})
+
+	t.Run("a registry path escaping the repo is refused", func(t *testing.T) {
+		// Relative but climbing out reads a registry that is in the repo at no
+		// commit, while the report still claims to be pinned.
+		_, stderr, code := runInv(t, bin, invFixture, "../../../etc/hosts", "--at", "HEAD")
+		if code == 0 {
+			t.Error("an escaping registry path should be refused")
+		}
+		if !strings.Contains(stderr, "escapes") {
+			t.Errorf("stderr should say why, got %q", stderr)
+		}
+	})
+
+	t.Run("a third positional is refused, not ignored", func(t *testing.T) {
+		_, stderr, code := runInv(t, bin, invFixture, "invariants.md", "other.md")
+		if code == 0 {
+			t.Error("a third positional should be refused rather than silently dropped")
+		}
+		if !strings.Contains(stderr, "too many arguments") {
+			t.Errorf("stderr should say what is wrong, got %q", stderr)
 		}
 	})
 
@@ -271,4 +361,131 @@ func TestInvariantsSubcommand(t *testing.T) {
 			t.Errorf("stderr should say what is wrong, got %q", stderr)
 		}
 	})
+}
+
+// TestInvariantsAtCommit is the coverage that was missing entirely: nothing
+// exercised a *successful* --at, so making the flag inert, or reading the
+// registry from the working tree while scanning the commit, left the whole suite
+// green while the report claimed a pin it did not have.
+//
+// The fixture is a throwaway git repo with two commits whose registries differ,
+// so a run at the first commit must disagree with a run at HEAD.
+func TestInvariantsAtCommit(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+
+	// First commit: one invariant, cited.
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n")
+	write("core/engine.go", "package core\n\n// Conserve upholds INV-1.\nfunc Conserve() {}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "first")
+	first := git("rev-parse", "HEAD")
+
+	// Second commit: a second invariant, declared but cited nowhere.
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n\n### INV-2: Two\n\n**Statement:** Second.\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "second")
+
+	at := func(commit string) string {
+		t.Helper()
+		args := []string{"invariants", repo, "docs/invariants.md"}
+		if commit != "" {
+			args = append(args, "--at", commit)
+		}
+		cmd := exec.Command(bin, args...)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("invariants --at %s: %v\n%s", commit, err, stderr.String())
+		}
+		return stdout.String()
+	}
+
+	atFirst, atHead, unpinned := at(first), at("HEAD"), at("")
+
+	// The registry at the first commit declares one invariant; at HEAD, two. If
+	// --at were inert, or the registry came from the working tree, these would
+	// agree.
+	if !strings.Contains(atFirst, "(1 declared)") {
+		t.Errorf("at the first commit the registry declares 1 invariant:\n%s", atFirst)
+	}
+	if !strings.Contains(atHead, "(2 declared)") {
+		t.Errorf("at HEAD the registry declares 2:\n%s", atHead)
+	}
+	if !strings.Contains(atFirst, "1 of 1 anchored") {
+		t.Errorf("at the first commit, INV-1 is anchored:\n%s", atFirst)
+	}
+	if !strings.Contains(atHead, "1 of 2 anchored") {
+		t.Errorf("at HEAD, INV-2 is declared and cited nowhere:\n%s", atHead)
+	}
+
+	// The commit line carries the resolved SHA, not the ref: "commit: HEAD"
+	// claims a pin that moves.
+	head := git("rev-parse", "HEAD")
+	if !strings.Contains(atHead, "commit:   "+head) {
+		t.Errorf("--at HEAD should record the resolved SHA %s:\n%s", head, atHead)
+	}
+	if strings.Contains(atHead, "commit:   HEAD") {
+		t.Error("--at recorded the ref verbatim instead of resolving it")
+	}
+	if strings.Contains(unpinned, "commit:") {
+		t.Errorf("without --at there is no commit line:\n%s", unpinned)
+	}
+
+	// No temp worktree path anywhere in the output.
+	for _, out := range []string{atFirst, atHead} {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "archon-wt-") {
+				t.Errorf("temp worktree path leaked into output: %q", line)
+			}
+		}
+	}
+
+	// A subdirectory under --at would read the root registry and scan the whole
+	// tree while labelling the output identically, so it is refused.
+	cmd := exec.Command(bin, "invariants", filepath.Join(repo, "core"), "docs/invariants.md", "--at", "HEAD")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Error("--at on a subdirectory should be refused")
+	}
+	if !strings.Contains(stderr.String(), "repository root") {
+		t.Errorf("stderr should say why, got %q", stderr.String())
+	}
+
+	// Every failure under --at must still remove its worktree: fatal is
+	// os.Exit, which runs no deferred function, and a leaked worktree stays
+	// registered in the target repo's .git metadata.
+	before := git("worktree", "list")
+	for i := 0; i < 3; i++ {
+		c := exec.Command(bin, "invariants", repo, "docs/nope.md", "--at", "HEAD")
+		_ = c.Run()
+	}
+	if after := git("worktree", "list"); after != before {
+		t.Errorf("failed --at runs leaked worktrees:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
 }

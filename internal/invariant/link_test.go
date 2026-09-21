@@ -27,7 +27,7 @@ func fixtureInvariants() []Invariant {
 
 func linkFixture(t *testing.T) map[string]Link {
 	t.Helper()
-	links, err := LinkRepo(fixtureRepo, fixtureInvariants())
+	links, _, err := LinkRepo(fixtureRepo, fixtureInvariants())
 	if err != nil {
 		t.Fatalf("LinkRepo: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestLinkRepo_StatusesAndCounts(t *testing.T) {
 		t.Errorf("INV-99 should be empty, got %+v", got)
 	}
 
-	links, err := LinkRepo(fixtureRepo, fixtureInvariants())
+	links, _, err := LinkRepo(fixtureRepo, fixtureInvariants())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestLinkRepo_ScopeIsRespected(t *testing.T) {
 		t.Fatal("Key() must distinguish scopes")
 	}
 
-	links, err := LinkRepo(fixtureRepo, []Invariant{a, b})
+	links, _, err := LinkRepo(fixtureRepo, []Invariant{a, b})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestNamedFor_SeparatorSpellings(t *testing.T) {
 }
 
 func TestLinkRepo_IndistinguishableIDsAreAnError(t *testing.T) {
-	_, err := LinkRepo(fixtureRepo, []Invariant{
+	_, _, err := LinkRepo(fixtureRepo, []Invariant{
 		{ID: "INV-P2-1", Scope: "s"},
 		{ID: "INVP2-1", Scope: "s"},
 	})
@@ -235,12 +235,12 @@ func TestLinkRepo_IndistinguishableIDsAreAnError(t *testing.T) {
 }
 
 func TestLinkRepo_Deterministic(t *testing.T) {
-	first, err := LinkRepo(fixtureRepo, fixtureInvariants())
+	first, _, err := LinkRepo(fixtureRepo, fixtureInvariants())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
-		next, err := LinkRepo(fixtureRepo, fixtureInvariants())
+		next, _, err := LinkRepo(fixtureRepo, fixtureInvariants())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,7 +334,7 @@ func TestLinkRepo_SymlinkedRoot(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	links, err := LinkRepo(link, fixtureInvariants())
+	links, _, err := LinkRepo(link, fixtureInvariants())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestLinkRepo_BadRootIsAnError(t *testing.T) {
 		"a file, not a directory": filepath.Join(fixtureRepo, "core", "engine.go"),
 		"nonexistent":             filepath.Join(dir, "nope"),
 	} {
-		if _, err := LinkRepo(root, fixtureInvariants()); err == nil {
+		if _, _, err := LinkRepo(root, fixtureInvariants()); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}

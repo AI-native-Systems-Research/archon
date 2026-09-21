@@ -1,5 +1,6 @@
 DECLARED INVARIANTS
   registry: invariants.md (4 declared)
+  scanned:  3 Go files
 
   ID           STATUS     CODE  TEST  CITES  NAMED
   INV-1        LINKED        1     0      1      1

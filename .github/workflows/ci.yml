@@ -46,9 +46,12 @@ jobs:
       - name: Test
         run: go test ./...
 
-      # BLIS_REPO is deliberately left unset: flows 1 and 3 need a BLIS checkout
-      # and skip cleanly without it, while flow 2 still runs 7 real golden checks.
-      # run-all.sh exits 1 on any golden mismatch.
+      # BLIS_REPO is deliberately left unset: the checks needing a BLIS checkout
+      # skip cleanly without it, and 11 golden checks still run — flow 2, two
+      # file-only flow 3 checks, and flow 4's fixture table and --json.
+      # run-all.sh exits 1 on any golden mismatch and names what it skipped, so an
+      # unverified golden is visible rather than folded into a pass. What it cannot
+      # verify here is flow 1 and flow 4's BLIS goldens, which need the checkout.
       #
       # This job must never regenerate a golden file. Per docs/CONTRIBUTING.md a
       # golden change is a human decision — CI reports the diff and fails.

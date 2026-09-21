@@ -26,10 +26,16 @@ archon-go invariants "$BLIS_REPO" docs/contributing/standards/invariants.md \
 ```
 
 `--at` reads the registry *and* the code at one commit, so the numbers cannot
-drift as BLIS moves. The golden records 34 declared invariants, 32 anchored, and
-`INV-L6`/`INV-L7` UNLINKED — which is what BLIS's own registry says about itself
-("INV-L6 and INV-L7 have no code anchor"). Its citation counts also reproduce the
-count column that registry maintains by hand.
+drift as BLIS moves. At that commit the golden records 34 declared invariants, 32
+anchored, and `INV-L6`/`INV-L7` UNLINKED — which is what BLIS's own registry says
+about them ("INV-L6 and INV-L7 have no code anchor").
+
+The `CITES` column also matches the hand-maintained count column in that registry's
+LoRA table — 2, 1, 6, 11, 7, 0, 0 for `INV-L1`…`INV-L7`. Worth knowing that the
+agreement is narrower than it looks: that column covers 7 of the 34 entries, and
+BLIS derives it with `git grep` over all file types under `sim/` and `cmd/`, while
+this scans `.go` files repo-wide. The two agree because those IDs happen to appear
+in no non-Go file; they are not the same measurement.
 
 Unlike Flow 1, this golden contains no absolute path, so it reproduces from any
 checkout of BLIS that has the pinned commit.
