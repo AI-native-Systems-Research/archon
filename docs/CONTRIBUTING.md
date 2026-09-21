@@ -58,6 +58,27 @@ Write 3-5 bullets covering:
 
 This is your contract with the reviewer. If you can't write this clearly, you don't understand the issue yet — go back to step 2.
 
+**Review the plan first when the PR will pin something.** If the plan says it adds or changes an
+exported identifier, a flag, a subcommand, an on-disk format, or a file under `demo/*/`, send the
+micro-plan to a **fresh** pr-review-toolkit agent before bringing it to a human — one agent, one
+round, asked what the plan makes expensive to change later. Same grammar as step 6's table: the
+condition is what the plan says it will touch, not whether you expect a sibling PR to care.
+
+Fresh counts twice: not an agent that has already reviewed this work, and not one told what you
+think the answer is. Bring the findings to the human along with the plan, including any you are not
+taking and why — otherwise "the plan was reviewed" covers having ignored all of them, and the person
+approving never sees what they are approving over. Say in the PR that the plan was reviewed, or that
+it did not need to be.
+
+**These findings are input to the plan, not step 6 findings.** They do not count as rounds, and
+none of them can be an open must-fix issue blocking the merge — step 6's accounting starts when
+there is code. Human approval remains the gate that ends step 3.
+
+Otherwise skip this. Reviewing a plan document is lower yield than reviewing code — we have tried
+it broadly and it mostly surfaced what code review caught anyway. The exception is narrow because
+step 6 is too late for exactly one thing: by then the interface is written, and `type-design-analyzer`
+reviewing an implemented type cannot cheaply undo a sibling PR already built on it.
+
 ### 4. Implement + Test
 
 Write the test first and watch it fail, then write the code. The floor is unchanged: if someone reverts your fix, a test should fail.
