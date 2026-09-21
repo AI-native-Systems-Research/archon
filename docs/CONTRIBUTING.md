@@ -60,11 +60,11 @@ This is your contract with the reviewer. If you can't write this clearly, you do
 
 ### 4. Implement + Test
 
-Write the test first and watch it fail, then write the code. The bar either way is: if someone reverts your fix, a test should fail.
+Write the test first and watch it fail, then write the code. The floor is unchanged: if someone reverts your fix, a test should fail.
 
-**Test-first is the default, not a preference.** A test written first is a claim about what the code must do. A test written afterwards records what the code happens to do — it passes on the first run, and it cannot fail in the cases you did not think of. Those are precisely the cases review has to find instead, which is the expensive way to find them.
+**Test-first is the default, not a preference.** A test written first is a claim about what the code must do. A test written afterwards can only describe code that already exists — it cannot fail in the cases you did not think of. Those are precisely the cases review has to find instead, which is the expensive way to find them.
 
-Where the input shape is genuinely unknown — a parser for a format you have to go read first — probe until you know it, then write the test before the implementation. Probing is not a licence to invert the order afterwards.
+Where the input shape is genuinely unknown — a parser for a format you have to go read first — probe until you know it, then write the test before the implementation. Probe code is throwaway and does not appear in your diff; code you keep is implementation, and implementation comes after a failing test. If you used this carve-out, say so in the PR and name the format you had to read.
 
 **For feature PRs:** Include at least one test that shows concrete input → output when run with `go test -v -run TestXxx`. A reviewer should be able to run that one command and see exactly what goes in and what comes out — no guessing.
 
@@ -156,4 +156,4 @@ Planning to use that path is skipping the step.
 - **Scope is sacred.** Fix the issue, nothing more. No drive-by refactors.
 - **Tests prove intent.** Not coverage for coverage's sake — proof that the fix works. Written before the code, so they can fail.
 - **No overengineering.** Three lines of straightforward code beats an abstraction.
-- **A PR must be correct, and must claim only what is true.** Merging a bug is worse than merging nothing, and a PR description that overstates what was verified is worse than a bug, because it spends the reviewer's trust. Every number, every "unchanged", every checked box comes from a command you actually ran.
+- **A PR must be correct, and must claim only what is true.** Merging a bug is worse than merging nothing. Every number, every "unchanged", every checked box comes from a command you actually ran.
