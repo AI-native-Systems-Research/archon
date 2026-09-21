@@ -118,15 +118,33 @@ Show real output in the example, copied from a run, not written from memory.
 
 ### 6. Review with pr-review-toolkit (/pr-review-toolkit:review-pr) — every PR
 
-**Open the PR as a draft, run the review, then mark it ready.** In that order, so that
-"ready" means something other than the author has looked at this. Nothing merges without this
-step having run — a draft merged directly has skipped it just as surely.
+**Open the PR as a draft, run the review, then mark it ready.** In that order, so that "ready"
+means something other than the author has looked at this. Nothing merges without this step having
+run, and a draft merged directly has skipped it just as surely.
 
-This step is not scoped by size: step 5 above applies to Medium+ feature PRs, this one has no
-exceptions. What scales is depth, not whether the gate exists. The floor is mechanical — always
-invoke the skill; on a small PR one reviewing agent and one round is enough.
+Unlike step 5, this step is not scoped by size: what scales is depth, not whether the gate exists.
 
-Run the review skill with this prompt:
+**The review must come from pr-review-toolkit.** Either invoke `/pr-review-toolkit:review-pr`, or
+dispatch its agents directly with the Agent tool. `pr-review-toolkit:code-reviewer` is the default.
+If the change matches a row below, **that agent runs too** — the table is an obligation, not a
+menu, and the PR must say which rows you judged not to apply. The conditions are observable on the
+diff rather than matters of author confidence:
+
+| Agent | Runs when the diff |
+|---|---|
+| `silent-failure-hunter` | adds or changes error handling, a fallback, a catch block, or any path that can return an empty result |
+| `type-design-analyzer` | adds or changes an exported type |
+| `pr-test-analyzer` | adds or changes tests |
+| `comment-analyzer` | adds or changes prose stating how the tool behaves — doc comments included |
+
+#### Briefing the reviewer
+
+Every PR gets at least one round. "Small" means one agent *plus any row of the table above that
+applies*.
+
+The canned prompt below is the floor, not the target. An agent starts with none of your context,
+so a thin brief buys a thin review — and a reviewer that only *reads* the guards will report that
+they look right:
 
 ```
 Review this PR against the linked issue. Check:
@@ -135,16 +153,63 @@ Review this PR against the linked issue. Check:
 3. Is there any overengineering or unnecessary scope creep?
 ```
 
+For anything beyond a small PR, add:
+
+- **What the code is for**, in enough detail that the agent can judge correctness rather than
+  style, and **what the worst failure mode would be**.
+- **Ground truth it can check numbers against**: a fixture whose expected counts are known, a
+  document that states facts about itself, a real checkout it can run against.
+- **An instruction to break the guards, not read them** — construct input that produces a
+  plausible-but-wrong answer. This is where the findings that matter come from.
+- **That probes go in `$(mktemp -d)` and the tree is left clean** — agents have left probe files
+  in the worktree that a stray `git add -A` would have committed.
+- **Not your conclusions.** Brief it on the problem, never on what you think the answer is,
+  otherwise a green verdict only tells you the agent agreed with you.
+
 Reason about each finding first, then fix the valid ones. **List any finding you dismiss in the
 PR, with the reason** — otherwise "fix if they are valid" lets an author dismiss everything and
 still claim the step ran, and a dismissal nobody can see is not a dismissal.
 
-Verifying your own work is not a substitute: your verification can be wrong in a way that looks
-right. On #62 the tests, the demos and a hand-written sweep all passed while the PR shipped a
-false claim about golden-file coverage; run late, the review found it in minutes (#63).
+#### When the loop ends
 
-State in the PR that the step ran — "step 6: N findings, fixed" — so the gate is auditable.
-Silence is indistinguishable from having skipped it.
+**Fixes get reviewed too.** The loop ends on a round that found no must-fix issues *and reviewed
+the code you are actually merging* — not on a round whose fixes you then applied unreviewed. A fix
+written under review pressure is exactly where the next bug goes: on #66, both must-fix findings
+in round two were round one's *fixes*, each a new guard that rejected valid input.
+
+- **Must-fix means the reviewing agent called it must-fix**, not you. Otherwise the dismissal
+  power above is quietly the power to end the loop: dismiss everything as not-must-fix, list
+  reasons, report a clean round.
+- **A must-fix finding is open** until it is fixed, or dismissed *and* not raised again by a later
+  round on the post-fix code, or overruled by a named human in the PR. **A PR with an open
+  must-fix finding does not merge, at any round count.** The named human is the escape hatch for a
+  finding you believe is simply wrong.
+- **Name the SHA the last round reviewed**, taken at dispatch. A clean round on code you then
+  changed is not a clean round. Exactly two changes are carved out of that, and nothing else is: an
+  update from `main`, if `git diff <reviewed-sha> HEAD -- $(git diff --name-only origin/main...HEAD)`
+  is empty; and **that round's own non-blocking suggestions** — list which ones you applied, so the
+  carve-out is checkable in the same way a dismissal is. Every round produces suggestions, so
+  treating those as invalidating gives the loop no end. Anything else you push — a refactor, a bug
+  you spotted yourself, a conflict resolution, work the round never saw — voids the round, whatever
+  its severity would have been.
+- **Three rounds is a ceiling that signals a design problem**, not a permit to merge on the third.
+  If round three still produces must-fix findings, stop, leave the PR in draft, and raise it with a
+  human; more rounds will keep finding symptoms.
+
+Tell a later round it is reviewing fixes, name them, and name any finding you dismissed, so it can
+rule on the dismissal rather than re-deriving the original list.
+
+Verifying your own work is not a substitute — on #62 the tests, the demos and a hand-written sweep
+all passed while the PR shipped a false claim about golden-file coverage (#63).
+
+State in the PR that the step ran, so the gate is auditable rather than asserted — silence is
+indistinguishable from having skipped it:
+
+```
+step 6: <route, and which agents ran; which table rows you judged not to apply>.
+N rounds, M findings, K fixed, M-K dismissed with reasons.
+Last round clean at <sha>.        (or: round 3 escalated to <human>, not merged.)
+```
 
 If a PR ever does merge without this step, that is a broken rule rather than a second route
 through it: run the review on the merged commit and fix what it finds in a follow-up, promptly.
