@@ -43,20 +43,20 @@ func TestRegistrySection_CountsTouchedFilesAndNamedTests(t *testing.T) {
 	if sec == nil {
 		t.Fatal("no section")
 	}
-	if sec.Declared != 3 || sec.Anchored != 2 {
-		t.Errorf("declared/anchored = %d/%d, want 3/2", sec.Declared, sec.Anchored)
+	if sec.Declared() != 3 || sec.Anchored() != 2 {
+		t.Errorf("declared/anchored = %d/%d, want 3/2", sec.Declared(), sec.Anchored())
 	}
 
 	byID := map[string]RegistryRow{}
 	for _, r := range sec.Rows {
 		byID[r.ID] = r
 	}
-	if got := byID["INV-6"]; got.FilesTouched != 3 || got.FilesTotal != 4 || got.NamedTouched != 1 || got.NamedTotal != 2 {
-		t.Errorf("INV-6 = %+v, want 3/4 files and 1/2 named", got)
+	if got := byID["INV-6"]; got.CitingFilesTouched != 3 || got.CitingFilesTotal != 4 || got.NamedTestsTouched != 1 || got.NamedTestsTotal != 2 {
+		t.Errorf("INV-6 = %+v, want 3/4 citing files and 1/2 named", got)
 	}
 	// Declared, cited nowhere: a finding, so it appears even though the change
 	// cannot have touched it.
-	if got, ok := byID["INV-PD-2"]; !ok || got.Status != string(invariant.StatusUnlinked) {
+	if got, ok := byID["INV-PD-2"]; !ok || got.Status != invariant.StatusUnlinked {
 		t.Errorf("INV-PD-2 should be reported as UNLINKED, got %+v", got)
 	}
 	// Untouched and anchored: nothing for a reviewer to act on.
@@ -92,8 +92,8 @@ func TestRegistrySection_ZeroAnchoredIsAFinding(t *testing.T) {
 		reg.Links[i].CodeFiles, reg.Links[i].TestFiles, reg.Links[i].NamedTests, reg.Links[i].Citations = nil, nil, nil, 0
 	}
 	sec := buildRegistrySection(reg, changed)
-	if sec.Anchored != 0 || sec.Declared != 3 {
-		t.Fatalf("anchored/declared = %d/%d, want 0/3", sec.Anchored, sec.Declared)
+	if sec.Anchored() != 0 || sec.Declared() != 3 {
+		t.Fatalf("anchored/declared = %d/%d, want 0/3", sec.Anchored(), sec.Declared())
 	}
 
 	var b strings.Builder
@@ -217,23 +217,33 @@ func TestRegistrySection_JSONShape(t *testing.T) {
 		Commit        string `json:"commit"`
 		Declared      int    `json:"declared"`
 		Anchored      int    `json:"anchored"`
+		Linked        int    `json:"linked"`
+		TestOnly      int    `json:"testOnly"`
+		Unlinked      int    `json:"unlinked"`
 		FilesScanned  int    `json:"filesScanned"`
 		Rows          []struct {
-			ID           string `json:"id"`
-			Status       string `json:"status"`
-			FilesTouched int    `json:"filesTouched"`
+			ID                 string `json:"id"`
+			Status             string `json:"status"`
+			CitingFilesTouched int    `json:"citingFilesTouched"`
+			CitingFilesTotal   int    `json:"citingFilesTotal"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != invariant.SchemaVersion {
-		t.Errorf("schemaVersion = %d, want %d", got.SchemaVersion, invariant.SchemaVersion)
+	// This shape's own version, not invariant.Result's: bumping that one must not
+	// silently bump this.
+	if got.SchemaVersion != registrySchemaVersion {
+		t.Errorf("schemaVersion = %d, want %d", got.SchemaVersion, registrySchemaVersion)
 	}
 	if got.Registry != "docs/invariants.md" || got.Declared != 3 || got.Anchored != 2 || got.FilesScanned != 318 {
 		t.Errorf("header fields wrong: %+v", got)
 	}
-	if len(got.Rows) == 0 || got.Rows[0].ID != "INV-6" || got.Rows[0].FilesTouched != 3 {
+	// Derived, so they cannot disagree with the registry they came from.
+	if got.Anchored != got.Linked+got.TestOnly || got.Declared != got.Linked+got.TestOnly+got.Unlinked {
+		t.Errorf("totals are inconsistent: %+v", got)
+	}
+	if len(got.Rows) == 0 || got.Rows[0].ID != "INV-6" || got.Rows[0].CitingFilesTouched != 3 || got.Rows[0].CitingFilesTotal != 4 {
 		t.Errorf("rows wrong: %+v", got.Rows)
 	}
 }

@@ -1,6 +1,7 @@
 package review
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,16 +9,26 @@ import (
 	"github.com/AI-native-Systems-Research/archon/internal/invariant"
 )
 
+// registrySchemaVersion versions *this* shape, in *this* document. It is
+// deliberately not invariant.SchemaVersion: that versions the `archon invariants`
+// JSON, and borrowing it would mean a bump there silently bumping this, while a
+// change here could not bump without lying about that one.
+const registrySchemaVersion = 1
+
 // RegistryRow is one declared invariant this change has a reason to mention:
 // either the change touched a file citing it, or nothing in the repository cites
 // it at all.
+//
+// CitingFiles* counts the files that cite this ID, which is not the repo-wide
+// file count in the section header — the two would otherwise both read as
+// "files".
 type RegistryRow struct {
-	ID           string `json:"id"`
-	Status       string `json:"status"`
-	FilesTouched int    `json:"filesTouched"`
-	FilesTotal   int    `json:"filesTotal"`
-	NamedTouched int    `json:"namedTestsTouched"`
-	NamedTotal   int    `json:"namedTestsTotal"`
+	ID                 string           `json:"id"`
+	Status             invariant.Status `json:"status"`
+	CitingFilesTouched int              `json:"citingFilesTouched"`
+	CitingFilesTotal   int              `json:"citingFilesTotal"`
+	NamedTestsTouched  int              `json:"namedTestsTouched"`
+	NamedTestsTotal    int              `json:"namedTestsTotal"`
 }
 
 // RegistrySection is the advisory declared-invariant report.
@@ -28,21 +39,65 @@ type RegistryRow struct {
 // registry in its heading and keeps its numbers out of Counts, where
 // Counts.Invariants already means the other concept and CI consumers parse it.
 //
-// Field names are camelCase to match the rest of review.json, rather than
-// embedding invariant.Result or invariant.Totals, whose own JSON is snake_case —
-// one document should not mix both. SchemaVersion is carried across so a consumer
-// can still tell which shape it is reading.
+// No count is stored. Every total is derived from the linked registry, for the
+// reason invariant.Result gives for doing the same: a stored copy can contradict
+// what it summarises, and "32 of 3 anchored" is worse output than an error.
+// Rows holds only the invariants worth mentioning, so the totals could not be
+// derived from Rows alone — hence the registry is held rather than discarded.
+//
+// Wire names are camelCase to match the rest of review.json rather than the
+// snake_case of invariant.Result: one document should not mix both.
 type RegistrySection struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	Registry      string        `json:"registry"`
-	Commit        string        `json:"commit,omitempty"`
-	Declared      int           `json:"declared"`
-	Anchored      int           `json:"anchored"`
-	Linked        int           `json:"linked"`
-	TestOnly      int           `json:"testOnly"`
-	Unlinked      int           `json:"unlinked"`
-	FilesScanned  int           `json:"filesScanned"`
-	Rows          []RegistryRow `json:"rows"`
+	reg  *invariant.Result
+	Rows []RegistryRow
+}
+
+// Registry is the path the report was built from, as the caller asked for it.
+func (s *RegistrySection) Registry() string { return s.reg.Registry }
+
+// Commit is the commit the registry and the code were read at, if pinned.
+func (s *RegistrySection) Commit() string { return s.reg.Commit }
+
+// Declared is how many invariants the registry declares.
+func (s *RegistrySection) Declared() int { return len(s.reg.Links) }
+
+// Anchored is how many have anything at all behind them.
+func (s *RegistrySection) Anchored() int { return s.reg.Anchored() }
+
+// Totals counts the declared invariants by status.
+func (s *RegistrySection) Totals() invariant.Totals { return s.reg.Totals() }
+
+// FilesScanned is how many Go files the link scan read. It is the denominator
+// behind every status, and unrelated to a row's CitingFilesTotal.
+func (s *RegistrySection) FilesScanned() int { return s.reg.FilesScanned }
+
+// MarshalJSON emits the derived counts, so a consumer cannot be handed a summary
+// that disagrees with the registry it came from.
+func (s *RegistrySection) MarshalJSON() ([]byte, error) {
+	t := s.Totals()
+	return json.Marshal(struct {
+		SchemaVersion int           `json:"schemaVersion"`
+		Registry      string        `json:"registry"`
+		Commit        string        `json:"commit,omitempty"`
+		Declared      int           `json:"declared"`
+		Anchored      int           `json:"anchored"`
+		Linked        int           `json:"linked"`
+		TestOnly      int           `json:"testOnly"`
+		Unlinked      int           `json:"unlinked"`
+		FilesScanned  int           `json:"filesScanned"`
+		Rows          []RegistryRow `json:"rows"`
+	}{
+		SchemaVersion: registrySchemaVersion,
+		Registry:      s.Registry(),
+		Commit:        s.Commit(),
+		Declared:      s.Declared(),
+		Anchored:      s.Anchored(),
+		Linked:        t.Linked,
+		TestOnly:      t.TestOnly,
+		Unlinked:      t.Unlinked,
+		FilesScanned:  s.FilesScanned(),
+		Rows:          s.Rows,
+	})
 }
 
 // buildRegistrySection reports which declared invariants this change exposes.
@@ -58,24 +113,17 @@ func buildRegistrySection(reg *invariant.Result, changedFiles []string) *Registr
 		changed[f] = true
 	}
 
-	totals := reg.Totals()
-	sec := &RegistrySection{
-		SchemaVersion: invariant.SchemaVersion,
-		Registry:      reg.Registry,
-		Commit:        reg.Commit,
-		Declared:      len(reg.Links),
-		Anchored:      reg.Anchored(),
-		Linked:        totals.Linked,
-		TestOnly:      totals.TestOnly,
-		Unlinked:      totals.Unlinked,
-		FilesScanned:  reg.FilesScanned,
-		Rows:          []RegistryRow{},
-	}
-
+	sec := &RegistrySection{reg: reg, Rows: []RegistryRow{}}
 	for _, l := range reg.Links {
-		files := append(append([]string{}, l.CodeFiles...), l.TestFiles...)
+		// De-duplicated: LinkRepo puts a file in exactly one of these, but a
+		// double-counted path would inflate both the numerator and the
+		// denominator, which is the wrong-number class rather than a crash.
+		files := map[string]bool{}
+		for _, f := range append(append([]string{}, l.CodeFiles...), l.TestFiles...) {
+			files[f] = true
+		}
 		touched := 0
-		for _, f := range files {
+		for f := range files {
 			if changed[f] {
 				touched++
 			}
@@ -94,23 +142,23 @@ func buildRegistrySection(reg *invariant.Result, changedFiles []string) *Registr
 			continue
 		}
 		sec.Rows = append(sec.Rows, RegistryRow{
-			ID:           l.Invariant.ID,
-			Status:       string(l.Status()),
-			FilesTouched: touched,
-			FilesTotal:   len(files),
-			NamedTouched: namedTouched,
-			NamedTotal:   len(l.NamedTests),
+			ID:                 l.Invariant.ID,
+			Status:             l.Status(),
+			CitingFilesTouched: touched,
+			CitingFilesTotal:   len(files),
+			NamedTestsTouched:  namedTouched,
+			NamedTestsTotal:    len(l.NamedTests),
 		})
 	}
 
 	// Most-exposed first, so the first row is the one worth reading. Ties break
 	// on ID so the output is stable.
 	sort.SliceStable(sec.Rows, func(i, j int) bool {
-		if sec.Rows[i].FilesTouched != sec.Rows[j].FilesTouched {
-			return sec.Rows[i].FilesTouched > sec.Rows[j].FilesTouched
+		if sec.Rows[i].CitingFilesTouched != sec.Rows[j].CitingFilesTouched {
+			return sec.Rows[i].CitingFilesTouched > sec.Rows[j].CitingFilesTouched
 		}
-		if sec.Rows[i].NamedTouched != sec.Rows[j].NamedTouched {
-			return sec.Rows[i].NamedTouched > sec.Rows[j].NamedTouched
+		if sec.Rows[i].NamedTestsTouched != sec.Rows[j].NamedTestsTouched {
+			return sec.Rows[i].NamedTestsTouched > sec.Rows[j].NamedTestsTouched
 		}
 		return sec.Rows[i].ID < sec.Rows[j].ID
 	})
@@ -129,17 +177,18 @@ func writeRegistrySection(b *strings.Builder, sec *RegistrySection) {
 	// repo renaming the doc: the section disappears and every later review looks
 	// normal. Naming it turns a silent disable into something a reader notices.
 	at := ""
-	if sec.Commit != "" {
-		at = fmt.Sprintf(" at `%s`", sec.Commit)
+	if sec.Commit() != "" {
+		at = fmt.Sprintf(" at `%s`", sec.Commit())
 	}
+	t := sec.Totals()
 	fmt.Fprintf(b, "Registry: `%s`%s — %d declared, %d of %d anchored (%d LINKED, %d TEST ONLY, %d UNLINKED), %d Go files scanned.\n\n",
-		sec.Registry, at, sec.Declared, sec.Anchored, sec.Declared,
-		sec.Linked, sec.TestOnly, sec.Unlinked, sec.FilesScanned)
+		sec.Registry(), at, sec.Declared(), sec.Anchored(), sec.Declared(),
+		t.Linked, t.TestOnly, t.Unlinked, sec.FilesScanned())
 
-	if sec.Anchored == 0 {
+	if sec.Anchored() == 0 {
 		// The most useful thing archon can say to a repo that has written a
 		// registry and cited none of it, so it is stated rather than implied.
-		fmt.Fprintf(b, "**0 of %d anchored** — every declared invariant above exists only in the document declaring it.\n\n", sec.Declared)
+		fmt.Fprintf(b, "**0 of %d anchored** — every declared invariant above exists only in the document declaring it.\n\n", sec.Declared())
 	}
 
 	if len(sec.Rows) == 0 {
@@ -150,26 +199,27 @@ func writeRegistrySection(b *strings.Builder, sec *RegistrySection) {
 	b.WriteString("| ID | Status | files touched | named tests touched |\n")
 	b.WriteString("|---|---|---|---|\n")
 	for _, r := range sec.Rows {
-		if r.FilesTotal == 0 && r.NamedTotal == 0 {
+		if r.CitingFilesTotal == 0 && r.NamedTestsTotal == 0 {
 			fmt.Fprintf(b, "| `%s` | %s | — | — |\n", r.ID, r.Status)
 			continue
 		}
 		fmt.Fprintf(b, "| `%s` | %s | %d of %d | %d of %d |\n",
-			r.ID, r.Status, r.FilesTouched, r.FilesTotal, r.NamedTouched, r.NamedTotal)
+			r.ID, r.Status, r.CitingFilesTouched, r.CitingFilesTotal,
+			r.NamedTestsTouched, r.NamedTestsTotal)
 	}
 	b.WriteString("\n")
 
 	var unlinked []string
 	for _, r := range sec.Rows {
-		if r.Status == string(invariant.StatusUnlinked) {
+		if r.Status == invariant.StatusUnlinked {
 			unlinked = append(unlinked, "`"+r.ID+"`")
 		}
 	}
 	if len(unlinked) > 0 {
-		noun := "is declared but cited in no file"
+		verb := "is declared but cited in no file"
 		if len(unlinked) > 1 {
-			noun = "are declared but cited in no file"
+			verb = "are declared but cited in no file"
 		}
-		fmt.Fprintf(b, "%s %s.\n\n", strings.Join(unlinked, ", "), noun)
+		fmt.Fprintf(b, "%s %s.\n\n", strings.Join(unlinked, ", "), verb)
 	}
 }
