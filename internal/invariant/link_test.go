@@ -406,3 +406,29 @@ func TestNamedFor_FoldsCase(t *testing.T) {
 		}
 	}
 }
+
+// TestScannable is the predicate both the walk and pr-review's deleted-anchor
+// report consult. They used to decide independently, and the second one counted a
+// deleted vendored file as a removed anchor the scan had never read.
+func TestScannable(t *testing.T) {
+	for path, want := range map[string]bool{
+		"core/engine.go":           true,
+		"engine.go":                true,
+		"./engine.go":              true,
+		"core/engine_test.go":      true,
+		"core/engine.md":           false,
+		"core/_scratch.go":         false,
+		"vendor/dep/dep.go":        false,
+		"node_modules/x/y.go":      false,
+		"core/testdata/fixture.go": false,
+		"testdata/fixture.go":      false,
+		".hidden/hidden.go":        false,
+		"core/.hidden/hidden.go":   false,
+		"core/_internal/x.go":      false,
+		"a/b/c/deep.go":            true,
+	} {
+		if got := Scannable(path); got != want {
+			t.Errorf("Scannable(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

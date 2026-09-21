@@ -889,7 +889,10 @@ func removedAnchors(repo, base, head string, invs []invariant.Invariant) map[str
 	if mb, err := output(repo, "git", "merge-base", base, head); err == nil && mb != "" {
 		from = mb
 	}
-	out, err := output(repo, "git", "diff", "-z", "--name-only", "--diff-filter=D", from, head)
+	// -M explicitly: with diff.renames=false in the reviewed repo, a rename is
+	// reported as a delete and would be announced as a removed anchor that never
+	// went away — and the bundle's bytes would depend on that repo's git config.
+	out, err := output(repo, "git", "diff", "-z", "-M", "--name-only", "--diff-filter=D", from, head)
 	if err != nil || out == "" {
 		return nil
 	}
@@ -899,7 +902,11 @@ func removedAnchors(repo, base, head string, invs []invariant.Invariant) map[str
 	}
 	removed := map[string][]string{}
 	for _, f := range strings.Split(out, "\x00") {
-		if f == "" || !strings.HasSuffix(f, ".go") {
+		// The same predicate the scan uses: a deleted vendored file, testdata
+		// fixture or underscore-prefixed file was never an anchor, and reporting
+		// it as a removed one is a wrong number in the section's most prominent
+		// line.
+		if f == "" || !invariant.Scannable(f) {
 			continue
 		}
 		src, err := output(repo, "git", "show", from+":"+f)
@@ -938,7 +945,7 @@ func changedFiles(repo, base, head string) ([]string, error) {
 	if mb, err := output(repo, "git", "merge-base", base, head); err == nil && mb != "" {
 		from = mb
 	}
-	out, err := output(repo, "git", "diff", "-z", "--name-only", from, head)
+	out, err := output(repo, "git", "diff", "-z", "-M", "--name-only", from, head)
 	if err != nil {
 		return nil, err
 	}

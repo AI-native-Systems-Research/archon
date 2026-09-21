@@ -1089,3 +1089,84 @@ func TestPRReviewRegistryPinnedToHead(t *testing.T) {
 		}
 	})
 }
+
+// TestPRReviewDeletedAnchorsRespectTheScanSet: a deleted file that the link scan
+// would never have read was never an anchor, and announcing it as a removed one
+// puts a wrong number in the section's most prominent line — the deleted-anchor
+// row sorts above everything.
+func TestPRReviewDeletedAnchorsRespectTheScanSet(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Distinct bodies: byte-identical files make git's rename pairing ambiguous,
+	// which would make this test's rename case depend on which delete git happens
+	// to pair the new file with.
+	cite := func(tag string) string {
+		return "package p\n\n// upholds INV-1 (" + tag + ").\nfunc F" + tag + "() {}\n"
+	}
+
+	git("init", "--quiet")
+	// Rename detection must come from the flag, not from the reviewed repo.
+	git("config", "diff.renames", "false")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n")
+	write("keep/keep.go", cite("Keep"))
+	// None of these is ever scanned, so none is an anchor.
+	write("vendor/dep/dep.go", cite("Vendored"))
+	write("keep/testdata/fixture.go", cite("Fixture"))
+	write("keep/_scratch.go", cite("Scratch"))
+	write("moved/old.go", cite("Moved"))
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "base")
+	base := git("rev-parse", "HEAD")
+
+	for _, p := range []string{"vendor", "keep/testdata", "keep/_scratch.go"} {
+		if err := os.RemoveAll(filepath.Join(repo, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A rename, which git would call a delete+add with renames off.
+	write("moved/new.go", cite("Moved"))
+	if err := os.Remove(filepath.Join(repo, "moved/old.go")); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "delete unscanned files and rename one")
+	head := git("rev-parse", "HEAD")
+
+	out := filepath.Join(t.TempDir(), "bundle")
+	cmd := exec.Command(bin, "pr-review", repo, base, head, "--out", out)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	md, err := os.ReadFile(filepath.Join(out, "review.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(md), "deletes files that cited") {
+		t.Errorf("unscanned deletions and a rename were reported as removed anchors:\n%s", md)
+	}
+}
