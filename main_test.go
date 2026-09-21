@@ -912,3 +912,180 @@ func TestPRReviewReportsDeletedAnchors(t *testing.T) {
 		t.Errorf("the deleted anchor is not reported:\n%s", md)
 	}
 }
+
+// TestPRReviewRegistryPinnedToHead covers the guarantees that were structurally
+// invisible to the suite: every fixture repo had working tree == head, so reading
+// the dirty checkout instead of the commit passed every test.
+func TestPRReviewRegistryPinnedToHead(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	review := func(t *testing.T, extra ...string) (string, string) {
+		t.Helper()
+		out := filepath.Join(t.TempDir(), "bundle")
+		args := append([]string{"pr-review", repo, git("rev-parse", "HEAD~1"), git("rev-parse", "HEAD"), "--out", out}, extra...)
+		cmd := exec.Command(bin, args...)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("%v\n%s", err, stderr.String())
+		}
+		b, err := os.ReadFile(filepath.Join(out, "review.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b), stderr.String()
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n")
+	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() {}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "base")
+	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() {}\n\n// touched\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "head")
+	head := git("rev-parse", "HEAD")
+
+	t.Run("the section names the head commit", func(t *testing.T) {
+		md, _ := review(t)
+		if !strings.Contains(md, "at `"+head+"`") {
+			t.Errorf("the section must name the commit it read:\n%s", md)
+		}
+	})
+
+	t.Run("working-tree edits do not reach the report", func(t *testing.T) {
+		// An uncommitted second citing file would raise the denominator from 1 to
+		// 2 if the report read the checkout rather than the commit.
+		write("b/uncommitted.go", "package b\n\n// also upholds INV-1.\nfunc B() {}\n")
+		defer os.RemoveAll(filepath.Join(repo, "b"))
+		md, _ := review(t)
+		if !strings.Contains(md, "| `INV-1` | LINKED | 1 of 1 |") {
+			t.Errorf("an uncommitted citing file reached the counts:\n%s", md)
+		}
+	})
+
+	t.Run("an untracked registry is not discovered", func(t *testing.T) {
+		// docs/invariants.md is tracked here, so probe the case where the only
+		// candidate exists solely in the working tree.
+		bare := t.TempDir()
+		for _, a := range [][]string{{"init", "--quiet"}, {"config", "user.email", "t@e.com"}, {"config", "user.name", "t"}} {
+			cmd := exec.Command("git", a...)
+			cmd.Dir = bare
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", a, err, out)
+			}
+		}
+		for name, body := range map[string]string{
+			"go.mod": "module n\n\ngo 1.26.3\n",
+			"x/x.go": "package x\n\n// upholds INV-1.\nfunc X() {}\n",
+		} {
+			if err := os.MkdirAll(filepath.Join(bare, filepath.Dir(name)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bare, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, a := range [][]string{{"add", "-A"}, {"commit", "--quiet", "-m", "one"}} {
+			cmd := exec.Command("git", a...)
+			cmd.Dir = bare
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", a, err, out)
+			}
+		}
+		cmd := exec.Command("git", "rev-parse", "HEAD")
+		cmd.Dir = bare
+		shaOut, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sha := strings.TrimSpace(string(shaOut))
+		// Untracked, so it must not be discovered.
+		if err := os.WriteFile(filepath.Join(bare, "INVARIANTS.md"), []byte("### INV-1: One\n\n**Statement:** First.\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out := filepath.Join(t.TempDir(), "b2")
+		c := exec.Command(bin, "pr-review", bare, sha, sha, "--out", out)
+		var stderr strings.Builder
+		c.Stderr = &stderr
+		if err := c.Run(); err != nil {
+			t.Fatalf("%v\n%s", err, stderr.String())
+		}
+		b, err := os.ReadFile(filepath.Join(out, "review.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "Declared invariants") {
+			t.Errorf("an untracked registry was discovered:\n%s", b)
+		}
+		if !strings.Contains(stderr.String(), "no invariant registry at") {
+			t.Errorf("the absence should be stated on stderr, got %q", stderr.String())
+		}
+	})
+
+	t.Run("an explicit path wins over a conventional one", func(t *testing.T) {
+		// docs/invariants.md exists and would be discovered; the flag names a
+		// different file, and silently preferring the conventional one is a clean
+		// looking wrong answer.
+		write("docs/other.md", "### INV-77: Explicit\n\n**Statement:** Only in the explicit file.\n")
+		git("add", "-A")
+		git("commit", "--quiet", "-m", "add a second registry")
+		md, stderr := review(t, "--invariants", "docs/other.md")
+		if !strings.Contains(md, "`docs/other.md`") || strings.Contains(md, "`docs/invariants.md`") {
+			t.Errorf("the explicit path must be the one used:\n%s", md)
+		}
+		if !strings.Contains(md, "INV-77") {
+			t.Errorf("the explicit registry's invariant is missing:\n%s", md)
+		}
+		if strings.Contains(stderr, "found invariant registry") {
+			t.Errorf("discovery should not run when a path is given, got %q", stderr)
+		}
+	})
+
+	t.Run("probe order prefers the first conventional path", func(t *testing.T) {
+		write("INVARIANTS.md", "### INV-88: Last resort\n\n**Statement:** Should lose.\n")
+		git("add", "-A")
+		git("commit", "--quiet", "-m", "add a lower-priority registry")
+		md, _ := review(t)
+		if !strings.Contains(md, "`docs/invariants.md`") {
+			t.Errorf("docs/invariants.md ranks above INVARIANTS.md:\n%s", md)
+		}
+	})
+
+	t.Run("zero anchored renders through the binary", func(t *testing.T) {
+		write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n\n### INV-2: Two\n\n**Statement:** Second.\n")
+		if err := os.RemoveAll(filepath.Join(repo, "a")); err != nil {
+			t.Fatal(err)
+		}
+		write("a/a.go", "package a\n\n// no invariant is named here.\nfunc A() {}\n")
+		git("add", "-A")
+		git("commit", "--quiet", "-m", "nothing cites anything")
+		md, _ := review(t)
+		if !strings.Contains(md, "**0 of 2 anchored**") {
+			t.Errorf("0 of N anchored must render as a finding:\n%s", md)
+		}
+	})
+}

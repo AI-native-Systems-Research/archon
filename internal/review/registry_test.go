@@ -280,3 +280,107 @@ func TestRegistrySection_JSONShape(t *testing.T) {
 		t.Errorf("rows wrong: %+v", got.Rows)
 	}
 }
+
+// sectionFixture adds a row with deleted anchors to the base fixture, so one
+// rendering covers all four row kinds: touched, untouched-but-anchor-deleted,
+// excluded, and declared-but-uncited.
+func sectionFixture() (*invariant.Result, map[string][]string) {
+	reg := fixtureRegistry()
+	reg.Links = append(reg.Links, invariant.Link{
+		Invariant: invariant.Invariant{ID: "INV-13", Scope: "docs/invariants.md"},
+		CodeFiles: []string{"sim/keep.go"},
+		Citations: 3,
+	})
+	// Two files, one ID: a count taken from the number of *IDs* with removals
+	// would print (1) here.
+	return reg, map[string][]string{"INV-13": {"sim/gone_a.go", "sim/gone_b.go"}}
+}
+
+// wantSection is the rendered section, byte for byte. Every number in it is
+// derivable from sectionFixture by hand.
+//
+// This exists because the rendered markdown previously rested entirely on
+// demo/flow1-pr-review's golden, which CI never runs (BLIS_REPO is unset there).
+// Swapping a numerator with its denominator, dropping the deleted-anchor line, or
+// losing the row ordering all passed the suite.
+const wantSection = "### Declared invariants — registry\n" + `
+Registry: ` + "`docs/invariants.md`" + ` at ` + "`d77764f5`" + ` — 4 declared, 3 of 4 anchored (2 LINKED, 1 TEST ONLY, 1 UNLINKED), 318 Go files scanned.
+
+| ID | Status | citing files touched | named tests in touched files |
+|---|---|---|---|
+| ` + "`INV-13`" + ` | LINKED | 0 of 1 | 0 of 0 |
+| ` + "`INV-6`" + ` | LINKED | 3 of 4 | 1 of 2 |
+| ` + "`INV-PD-2`" + ` | UNLINKED | — | — |
+
+**This change deletes files that cited ` + "`INV-13`" + ` (2).** Those files are gone at head, so they count in no column above.
+
+` + "`INV-PD-2`" + ` is declared but cited in no file.
+
+`
+
+func TestRender_SectionIsExact(t *testing.T) {
+	reg, removed := sectionFixture()
+	var b strings.Builder
+	writeRegistrySection(&b, buildRegistrySection(reg, changed, removed))
+	if got := b.String(); got != wantSection {
+		t.Errorf("section changed:\n--- got ---\n%s\n--- want ---\n%s", got, wantSection)
+	}
+}
+
+// TestRender_DeletedAnchorOutranksTouching: removing a citation site is the change
+// most likely to leave a declared promise unguarded, so it sorts above any amount
+// of touching even though its touched count is zero.
+func TestRender_DeletedAnchorOutranksTouching(t *testing.T) {
+	reg, removed := sectionFixture()
+	sec := buildRegistrySection(reg, changed, removed)
+	if len(sec.Rows) == 0 || sec.Rows[0].ID != "INV-13" {
+		var ids []string
+		for _, r := range sec.Rows {
+			ids = append(ids, r.ID)
+		}
+		t.Errorf("rows = %v, want the deleted-anchor row first", ids)
+	}
+	if sec.Rows[0].AnchorsRemoved != 2 {
+		t.Errorf("AnchorsRemoved = %d, want 2 (two files, one ID)", sec.Rows[0].AnchorsRemoved)
+	}
+}
+
+// TestRender_NothingTouchedSaysSo: a registry whose invariants are all anchored and
+// none touched must say that, not render a bare header a reader could mistake for a
+// truncated section.
+func TestRender_NothingTouchedSaysSo(t *testing.T) {
+	reg := fixtureRegistry()
+	reg.Links = reg.Links[:2] // drop the uncited one, so there are no rows at all
+	var b strings.Builder
+	writeRegistrySection(&b, buildRegistrySection(reg, nil, nil))
+	out := b.String()
+	if !strings.Contains(out, "This change touched no file citing a declared invariant.") {
+		t.Errorf("want an explicit no-rows statement:\n%s", out)
+	}
+	if strings.Contains(out, "| ID | Status") {
+		t.Errorf("no rows, so no table:\n%s", out)
+	}
+}
+
+// TestRender_SectionRendersOnNoChange is the placement guarantee. The section is
+// most useful on a NO_CHANGE review — that is the majority verdict, and "0 of N
+// anchored" is exactly the finding an adopting repo needs there — but
+// renderMarkdown returns early for NO_CHANGE, so moving the call below that return
+// silently drops the section from most reviews.
+//
+// TestRegistryIsAdvisory cannot catch that: it compares the prose with the section
+// text removed, and string removal is position-independent.
+func TestRender_SectionRendersOnNoChange(t *testing.T) {
+	g := baseGraph()
+	d := delta.Compute(g, g)
+	reg, removed := sectionFixture()
+	res := Build(g, g, d, Options{LabelA: "base", LabelB: "head",
+		Registry: reg, ChangedFiles: changed, RemovedAnchors: removed})
+	if res.Verdict != NoChange {
+		t.Fatalf("fixture should be NO_CHANGE, got %s", res.Verdict)
+	}
+	md := renderMarkdown(res)
+	if !strings.Contains(md, wantSection) {
+		t.Errorf("the section is missing from a NO_CHANGE review:\n%s", md)
+	}
+}
