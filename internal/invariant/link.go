@@ -2,11 +2,15 @@ package invariant
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -156,11 +160,18 @@ func LinkRepo(root string, invs []Invariant) ([]Link, int, error) {
 		}
 		isTest := strings.HasSuffix(name, "_test.go")
 		src := string(b)
+		// Parse once per file, not once per ID: every citation in this file maps
+		// its byte offset to an enclosing scope through the same index.
+		idx := newScopeIndex(rel, src)
 
 		for id, ls := range byID {
-			n := len(patterns[id].FindAllStringIndex(src, -1))
-			if n == 0 {
+			locs := patterns[id].FindAllStringIndex(src, -1)
+			if len(locs) == 0 {
 				continue
+			}
+			sites := make([]CitationSite, 0, len(locs))
+			for _, loc := range locs {
+				sites = append(sites, idx.siteAt(loc[0]))
 			}
 			for _, l := range ls {
 				if isTest {
@@ -168,7 +179,8 @@ func LinkRepo(root string, invs []Invariant) ([]Link, int, error) {
 				} else {
 					l.CodeFiles = append(l.CodeFiles, rel)
 				}
-				l.Citations += n
+				l.Citations += len(locs)
+				l.CitationSites = append(l.CitationSites, sites...)
 			}
 		}
 
@@ -198,8 +210,100 @@ func LinkRepo(root string, invs []Invariant) ([]Link, int, error) {
 		links[i].CodeFiles = sortedUnique(links[i].CodeFiles)
 		links[i].TestFiles = sortedUnique(links[i].TestFiles)
 		links[i].NamedTests = sortedUnique(links[i].NamedTests)
+		// Ordered so the result never depends on map or walk iteration; kept, not
+		// de-duplicated, because two citations of the same ID in one scope are two
+		// citations, and the review side de-duplicates to scopes where it counts.
+		sort.Slice(links[i].CitationSites, func(a, b int) bool {
+			x, y := links[i].CitationSites[a], links[i].CitationSites[b]
+			if x.File != y.File {
+				return x.File < y.File
+			}
+			return x.Line < y.Line
+		})
 	}
 	return links, scanned, nil
+}
+
+// scopeIndex answers, for one source file, which scope encloses a citation at a
+// given byte offset. It parses the file once; a file that does not parse yields
+// only whole-file scopes, so a citation is degraded rather than dropped.
+type scopeIndex struct {
+	rel       string
+	src       string
+	lineCount int
+	parsed    bool
+	tf        *token.File
+	funcs     []scopeSpan
+	decls     []scopeSpan
+}
+
+// scopeSpan is an enclosing declaration's line range, inclusive.
+type scopeSpan struct {
+	start, end int
+	name       string // func name, "" for a declaration block
+}
+
+func newScopeIndex(rel, src string) *scopeIndex {
+	si := &scopeIndex{rel: rel, src: src, lineCount: strings.Count(src, "\n") + 1}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, rel, src, parser.ParseComments)
+	if err != nil {
+		// Unparseable: every citation here falls back to whole-file scope. A build
+		// tag, generics the toolchain accepts but this parser trips on, or genuinely
+		// broken source all land here — and dropping the citation would be worse than
+		// today, so it is kept at file granularity.
+		return si
+	}
+	si.parsed = true
+	si.tf = fset.File(f.Pos())
+	for _, d := range f.Decls {
+		switch decl := d.(type) {
+		case *ast.FuncDecl:
+			// The doc comment is part of the function's scope: most BLIS citations
+			// sit in a function's doc block, not its body, and a change there is a
+			// change to that function's documented contract.
+			start := decl.Pos()
+			if decl.Doc != nil {
+				start = decl.Doc.Pos()
+			}
+			si.funcs = append(si.funcs, scopeSpan{
+				start: si.tf.Line(start), end: si.tf.Line(decl.End()), name: decl.Name.Name})
+		case *ast.GenDecl:
+			start := decl.Pos()
+			if decl.Doc != nil {
+				start = decl.Doc.Pos()
+			}
+			si.decls = append(si.decls, scopeSpan{
+				start: si.tf.Line(start), end: si.tf.Line(decl.End())})
+		}
+	}
+	return si
+}
+
+// siteAt returns the citation site for a byte offset: enclosing function first,
+// then enclosing declaration block, then the whole file.
+func (si *scopeIndex) siteAt(off int) CitationSite {
+	line := si.lineOf(off)
+	if si.parsed {
+		for _, s := range si.funcs {
+			if s.start <= line && line <= s.end {
+				return CitationSite{File: si.rel, Line: line, Func: s.name, Start: s.start, End: s.end, Scope: "func"}
+			}
+		}
+		for _, s := range si.decls {
+			if s.start <= line && line <= s.end {
+				return CitationSite{File: si.rel, Line: line, Start: s.start, End: s.end, Scope: "decl"}
+			}
+		}
+	}
+	return CitationSite{File: si.rel, Line: line, Start: 1, End: si.lineCount, Scope: "file"}
+}
+
+func (si *scopeIndex) lineOf(off int) int {
+	if si.parsed && off >= 0 && off <= si.tf.Size() {
+		return si.tf.Line(si.tf.Pos(off))
+	}
+	return strings.Count(si.src[:off], "\n") + 1
 }
 
 // namedFor returns the IDs a test function is named for. Separators may be

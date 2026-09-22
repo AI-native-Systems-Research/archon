@@ -475,48 +475,53 @@ a section reporting which declared invariants the change exposes:
 
 Registry: `docs/contributing/standards/invariants.md` at `d77764f520568b6c67616ca178b214fe288be7fd` — 23 declared, 22 of 23 anchored (18 LINKED, 4 TEST ONLY, 1 UNLINKED), 318 Go files scanned.
 
-| ID | Status | citing files touched | named tests in touched files |
+| ID | Status | citing functions touched | named tests in touched files |
 |---|---|---|---|
-| `INV-13` | LINKED | 8 of 20 | 0 of 5 |
-| `INV-8` | LINKED | 2 of 5 | 1 of 1 |
-| `INV-3` | LINKED | 4 of 18 | 0 of 0 |
-| `INV-5` | LINKED | 3 of 15 | 1 of 2 |
-| `INV-6` | LINKED | 15 of 90 | 1 of 3 |
-| `INV-1` | LINKED | 5 of 32 | 0 of 6 |
-
-_5 more touched invariants did not clear the reporting threshold — see review.json._
+| `INV-11` | LINKED | 1 of 4 | 0 of 0 |
+| `INV-13` | LINKED | 5 of 30 | 0 of 5 |
+| `INV-6` | LINKED | 18 of 170 | 1 of 3 |
+| `INV-8` | LINKED | 1 of 14 | 1 of 1 |
+| `INV-3` | LINKED | 1 of 26 | 0 of 0 |
+| `INV-1` | LINKED | 1 of 70 | 0 of 6 |
+| `INV-5` | LINKED | 0 of 21 | 1 of 2 |
+| `INV-9` | LINKED | 0 of 11 | 1 of 3 |
 ```
 
 (Every number above is from that pinned commit, and `demo/flow1-pr-review`'s golden
-holds the whole table plus the footer's five hidden rows in its `review.json`.)
+holds the whole table in its `review.json`.)
 
-Rows are the invariants worth a reviewer's attention: the ones this change touched,
-**ranked by proportion — `touched / citing`, highest first** — not by raw count. An
-invariant cited across 90 files that a change touches 15 of (17%) is a wider but
-shallower exposure than one touched in 8 of 20 (40%), so the 40% row leads even
-though 8 < 15. The raw counts stay in the table as the evidence; only the ranking
-changed. Rows at an equal proportion break the tie on the raw touched count, then on ID.
+**Matching is function-scoped.** Each citation of an ID is attached to the smallest
+thing that encloses it — the **function** whose body or doc comment holds it, else
+the enclosing **declaration block** (a `const`/`var`/`type` group), else the **whole
+file** when it sits in a file-header comment (or the file does not parse). An
+invariant is reported only when a line the change actually edited lands inside one
+of those scopes. `citing functions touched` is `n of m`: `m` is how many distinct
+citation-bearing scopes the ID has, `n` how many a changed line reached. This is the
+point of the section over file-level counting — a hunk hundreds of lines from a
+citation no longer counts it, and a one-line edit inside a function whose doc comment
+cites the ID counts at full strength. Changed lines are the diff's **new-side**
+ranges, since citations live in the head tree; a pure deletion adds no new-side line
+and so touches no function.
 
-**The table is bounded so the signal is not buried in a tail.** A row appears only
-when it is a real exposure, by any one of: a **multi-file touch** (`touched ≥ 2`)
-that also reaches at least 10% of the citing files; **full coverage** — every file
-citing that invariant was changed, which counts at any size, `1 of 1` included; a
-**touched named test** — a test named for the invariant sits in a file the change
-edited (the event the last column exists for, so it shows whatever its proportion);
-or a **removed citation** (below). Everything else the change touched — a single
-incidental file citing a widely-cited invariant, or a diffuse touch well under 10% —
-did not clear that bar, so it collapses into the footer and is kept in full in
-`review.json`, where each row carries a `shown` flag saying whether it made the
-table. The footer reads "did not clear the reporting threshold" rather than "fell
-below" it: the hidden set mixes low-proportion touches with single-file touches that
-can sit above 10% (a `1 of 3` is 33%) yet still are not worth a row.
+Rows are **ranked by proportion — `touched / citing`, highest first** — not by raw
+count, so `1 of 4` (25%) leads `18 of 170` (11%) even though 1 < 18. The raw counts
+stay as the evidence. Rows at an equal proportion break the tie on the raw touched
+count, then on ID. A row shown only because a **named test** was touched has no
+function overlap (`0 of …`) and sorts below every row a changed line reached.
 
-Two limits worth knowing. "Named tests in touched files" is exactly that: the link
-data carries `file:function`, not line ranges, so a change elsewhere in the same
-file counts. And because the footprint is read at the head commit, a file the change
-*deletes* appears in no column — so deleted citation sites get their own line,
-since removing an invariant's last anchor is the change most likely to leave a
-declared promise unguarded, and that line always shows regardless of the threshold.
+**Every touched row renders** — there is no proportion threshold and no footer.
+Function-scoping is itself the filter: once a row means "a function carrying this
+ID's comment changed", every row is real, so there is nothing diffuse left to hide.
+(This replaced the earlier `touched/citing` threshold, which — now that the numerator
+is functions, not files — would have discarded true signal.)
+
+Two things worth knowing. "Named tests in touched files" stays file-level: the link
+data carries `file:function`, not line ranges, so a change elsewhere in the same file
+counts there (only the citation column moved to function scope). And because the
+footprint is read at the head commit, a file the change *deletes* appears in no
+column — so deleted citation sites get their own line, since removing an invariant's
+last anchor is the change most likely to leave a declared promise unguarded, and that
+line always shows.
 
 Standing `UNLINKED` invariants — declared but cited nowhere in the repo — are *not*
 listed here: that is a fact about the repository rather than this change, and it is

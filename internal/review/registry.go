@@ -15,32 +15,40 @@ import (
 // change here could not bump without lying about that one.
 //
 // v2: `rows` changed meaning from "the rendered table" to "every declared
-// invariant this change touched", of which the table is a filtered subset — a
-// consumer reads each row's `shown` to tell which appeared. A v1 consumer keying
-// off "rows == table" would be silently wrong, which is exactly what this bump
-// guards against.
-const registrySchemaVersion = 2
+// invariant this change touched", of which the table was a filtered subset.
+//
+// v3: matching moved from file granularity to function granularity (#77). The
+// `shown` flag and the proportion threshold it recorded are gone — every touched
+// row now renders — and the two count columns changed meaning and name, from
+// `citingFilesTouched`/`citingFilesTotal` to `citingFunctionsTouched`/
+// `citingFunctionsTotal`. A v2 consumer reading the old keys, or keying off
+// `shown`, would silently read nothing; the bump is what makes that a visible
+// break rather than a quiet one.
+const registrySchemaVersion = 3
 
-// citingFloorPercent is the minimum touched/citing proportion for a multi-file
-// touch to appear in the rendered table. Below it a touched invariant is real but
-// too diffuse to act on — a change touching 7 of 147 citing files (5%) — so it drops
-// to the footer while staying in review.json. It gates only the multi-file branch,
-// paired there with touched>=2; a single-file touch never rides proportion into the
-// table (a 1-of-3 is 33% but still one file), and full coverage bypasses it.
-const citingFloorPercent = 10
+// LineRange is a new-side line span a change touches, inclusive on both ends. It
+// is how the review side learns *where* in a file a change landed, which is what
+// lets a citation-bearing function be judged touched or not rather than the whole
+// file counting because it mentions an ID somewhere.
+type LineRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
 
 // RegistryRow is one declared invariant this change has a reason to mention:
-// either the change touched a file citing it, or nothing in the repository cites
-// it at all.
+// either a changed line landed in a function (or fallback scope) citing it, a
+// test named for it sits in a touched file, or the change deleted a file that
+// cited it.
 //
-// CitingFiles* counts the files that cite this ID, which is not the repo-wide
-// file count in the section header — the two would otherwise both read as
-// "files".
+// CitingFunctions* counts the citation-bearing *scopes* of this ID — functions,
+// or the declaration-block / whole-file scopes a citation falls back to — not the
+// repo-wide file count in the section header, and not files: a function is the
+// unit matching now works at.
 type RegistryRow struct {
-	ID                 string           `json:"id"`
-	Status             invariant.Status `json:"status"`
-	CitingFilesTouched int              `json:"citingFilesTouched"`
-	CitingFilesTotal   int              `json:"citingFilesTotal"`
+	ID                     string           `json:"id"`
+	Status                 invariant.Status `json:"status"`
+	CitingFunctionsTouched int              `json:"citingFunctionsTouched"`
+	CitingFunctionsTotal   int              `json:"citingFunctionsTotal"`
 
 	// AnchorsRemoved counts files the change deletes that cited this ID at the
 	// base commit. Without it, deleting an invariant's only anchor renders
@@ -48,18 +56,12 @@ type RegistryRow struct {
 	// the deleted file no longer appears, so it can never be "touched".
 	AnchorsRemoved int `json:"anchorsRemoved,omitempty"`
 	// NamedTestsInTouchedFiles counts named tests whose *file* the change
-	// touched. It is not "tests that changed": the link data carries file:func,
-	// not line ranges, so a hunk elsewhere in the same file counts here. The
-	// column is labelled to match what is measured.
+	// touched. It is not "tests that changed": the named-test link data carries
+	// file:func, not line ranges, so a hunk elsewhere in the same file counts
+	// here. This column stays file-level on purpose — #77 moved the citation
+	// column to function scope, not this one — and is labelled to match.
 	NamedTestsInTouchedFiles int `json:"namedTestsInTouchedFiles"`
 	NamedTestsTotal          int `json:"namedTestsTotal"`
-
-	// Shown is whether this row appears in the rendered markdown table. review.json
-	// carries every touched invariant — a superset of the table — so the remainder
-	// is reachable; a consumer regenerating the table reads this flag rather than
-	// re-deriving the significance-and-floor gate, which would then live in two
-	// places and drift. Rows with Shown false are counted in the section footer.
-	Shown bool `json:"shown"`
 }
 
 // RegistrySection is the advisory declared-invariant report.
@@ -100,7 +102,7 @@ func (s *RegistrySection) Anchored() int { return s.reg.Anchored() }
 func (s *RegistrySection) Totals() invariant.Totals { return s.reg.Totals() }
 
 // FilesScanned is how many Go files the link scan read. It is the denominator
-// behind every status, and unrelated to a row's CitingFilesTotal.
+// behind every status, and unrelated to a row's CitingFunctionsTotal.
 func (s *RegistrySection) FilesScanned() int { return s.reg.FilesScanned }
 
 // MarshalJSON emits the derived counts, so a consumer cannot be handed a summary
@@ -132,11 +134,37 @@ func (s *RegistrySection) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// scopeKey identifies one citation-bearing scope: a file plus a line span. Two
+// citations of the same ID in the same function share a key and count once, so
+// the numerator and denominator are functions (and fallback scopes), not raw
+// citations.
+type scopeKey struct {
+	file       string
+	start, end int
+}
+
+// scopeTouched reports whether a change reached a citation's scope. A whole-file
+// scope — the fallback for a header comment or an unparseable file — counts when
+// the file was changed at all, which is the pre-#77 behaviour that keeps such
+// citations from vanishing. A function or declaration scope counts only when a
+// changed line range overlaps its span.
+func scopeTouched(s invariant.CitationSite, changed map[string]bool, ranges map[string][]LineRange) bool {
+	if s.Scope == "file" {
+		return changed[s.File]
+	}
+	for _, r := range ranges[s.File] {
+		if r.Start <= s.End && s.Start <= r.End {
+			return true
+		}
+	}
+	return false
+}
+
 // buildRegistrySection reports which declared invariants this change exposes.
 //
 // A nil registry yields a nil section, which is how "no registry found" stays
 // byte-identical to the output before this existed.
-func buildRegistrySection(reg *invariant.Result, changedFiles []string, removedAnchors map[string][]string) *RegistrySection {
+func buildRegistrySection(reg *invariant.Result, changedFiles []string, changedRanges map[string][]LineRange, removedAnchors map[string][]string) *RegistrySection {
 	if reg == nil {
 		return nil
 	}
@@ -147,19 +175,21 @@ func buildRegistrySection(reg *invariant.Result, changedFiles []string, removedA
 
 	sec := &RegistrySection{reg: reg, Rows: []RegistryRow{}}
 	for _, l := range reg.Links {
-		// De-duplicated: LinkRepo puts a file in exactly one of these, but a
-		// double-counted path would inflate both the numerator and the
-		// denominator, which is the wrong-number class rather than a crash.
-		files := map[string]bool{}
-		for _, f := range append(append([]string{}, l.CodeFiles...), l.TestFiles...) {
-			files[f] = true
-		}
-		touched := 0
-		for f := range files {
-			if changed[f] {
-				touched++
+		// Count citation-bearing scopes, de-duplicated to distinct spans, and how
+		// many of them a changed line reached. A function cited three times is one
+		// scope; a citation that fell back to whole-file scope is one scope too.
+		total := map[scopeKey]bool{}
+		touchedScopes := map[scopeKey]bool{}
+		for _, s := range l.CitationSites {
+			k := scopeKey{s.File, s.Start, s.End}
+			total[k] = true
+			if scopeTouched(s, changed, changedRanges) {
+				touchedScopes[k] = true
 			}
 		}
+		touched := len(touchedScopes)
+		totalScopes := len(total)
+
 		namedTouched := 0
 		for _, n := range l.NamedTests {
 			// NamedTests entries are "<file>:<FuncName>"; the separator is the
@@ -170,47 +200,27 @@ func buildRegistrySection(reg *invariant.Result, changedFiles []string, removedA
 		}
 		removed := len(removedAnchors[l.Invariant.ID])
 		if touched == 0 && namedTouched == 0 && removed == 0 {
-			// Anchored and untouched — nothing to act on — or standing UNLINKED,
-			// which is true of the repo rather than this change and belongs to the
-			// audit surface (archon invariants). A citation this change *removed* is
-			// the one UNLINKED case that is an event, and it arrives via `removed`.
+			// No changed line reached a citing function, no named test's file was
+			// touched, and no citing file was deleted — nothing to act on. Standing
+			// UNLINKED belongs to the audit surface (archon invariants), not here.
 			continue
 		}
-		total := len(files)
-		// A row is shown when it is a real exposure, by any of four count-free or
-		// proportional signals:
-		//   - a removed anchor — the loudest finding, a promise this change may have
-		//     left unguarded;
-		//   - a touched named test — a test named for the invariant sits in a file the
-		//     change edited; the "named tests" column exists precisely for this event,
-		//     and it carries no proportion to threshold, so it shows on its own;
-		//   - full coverage — every file citing the invariant was changed, real signal
-		//     at any count, including 1 of 1;
-		//   - otherwise a multi-file touch (>=2) that also reaches the proportion
-		//     floor. Both halves are needed: the floor alone would admit a 1-of-3
-		//     (33%) single-file touch, and touched>=2 alone would keep a diffuse
-		//     touch like 7 of 147 (5%). The floor is compared by cross-multiplication
-		//     so nothing divides or rounds: touched/total >= p/100.
-		shown := removed > 0 ||
-			namedTouched > 0 ||
-			(total > 0 && touched == total) ||
-			(touched >= 2 && touched*100 >= total*citingFloorPercent)
 		sec.Rows = append(sec.Rows, RegistryRow{
 			ID:                       l.Invariant.ID,
 			Status:                   l.Status(),
-			CitingFilesTouched:       touched,
-			CitingFilesTotal:         total,
+			CitingFunctionsTouched:   touched,
+			CitingFunctionsTotal:     totalScopes,
 			AnchorsRemoved:           removed,
 			NamedTestsInTouchedFiles: namedTouched,
 			NamedTestsTotal:          len(l.NamedTests),
-			Shown:                    shown,
 		})
 	}
 
-	// Highest proportion first: touched/citing is the meaningful quantity, not the
-	// raw count. An invariant cited in 147 files that a change touches 7 of (5%) is
-	// close to unavoidable; one touched in 3 of 10 (30%) is a real signal. Raw counts
-	// stay in the output as the evidence, but the ranking is by proportion.
+	// Highest proportion first: touched/citing functions is the meaningful
+	// quantity, not the raw count. With matching now function-scoped every row is
+	// real (there is no threshold to clear), so the ranking's only job is to put
+	// the most-affected invariant first. Raw counts stay in the output as the
+	// evidence, but the ordering is by proportion.
 	sort.SliceStable(sec.Rows, func(i, j int) bool {
 		a, b := sec.Rows[i], sec.Rows[j]
 		if a.AnchorsRemoved != b.AnchorsRemoved {
@@ -218,20 +228,17 @@ func buildRegistrySection(reg *invariant.Result, changedFiles []string, removedA
 			// most likely to leave a declared promise unguarded.
 			return a.AnchorsRemoved > b.AnchorsRemoved
 		}
-		if a.Shown != b.Shown {
-			// Shown rows sort above the footer's hidden ones, so review.json lists
-			// the table first and the remainder after, in one ordered slice.
-			return a.Shown
-		}
-		// Proportion touched/citing, descending, by cross-multiplication so the
+		// Proportion touched/total, descending, by cross-multiplication so the
 		// ranking never divides and never rounds two near-equal ratios together.
-		lhs := a.CitingFilesTouched * b.CitingFilesTotal
-		rhs := b.CitingFilesTouched * a.CitingFilesTotal
+		// A row shown only by a touched named test has touched==0 and so sorts
+		// below any row a change actually reached.
+		lhs := a.CitingFunctionsTouched * b.CitingFunctionsTotal
+		rhs := b.CitingFunctionsTouched * a.CitingFunctionsTotal
 		if lhs != rhs {
 			return lhs > rhs
 		}
-		if a.CitingFilesTouched != b.CitingFilesTouched {
-			return a.CitingFilesTouched > b.CitingFilesTouched
+		if a.CitingFunctionsTouched != b.CitingFunctionsTouched {
+			return a.CitingFunctionsTouched > b.CitingFunctionsTouched
 		}
 		return a.ID < b.ID
 	})
@@ -265,38 +272,24 @@ func writeRegistrySection(b *strings.Builder, sec *RegistrySection) {
 	}
 
 	if len(sec.Rows) == 0 {
-		b.WriteString("This change touched no file citing a declared invariant.\n\n")
+		b.WriteString("This change touched no function citing a declared invariant.\n\n")
 		return
 	}
 
-	hidden := 0
+	// Every row renders: with function-scoped matching there is no diffuse tail to
+	// filter, so #74's proportion threshold and its footer are gone (#77).
+	b.WriteString("| ID | Status | citing functions touched | named tests in touched files |\n")
+	b.WriteString("|---|---|---|---|\n")
 	for _, r := range sec.Rows {
-		if !r.Shown {
-			hidden++
+		if r.CitingFunctionsTotal == 0 && r.NamedTestsTotal == 0 {
+			fmt.Fprintf(b, "| `%s` | %s | — | — |\n", r.ID, r.Status)
+			continue
 		}
+		fmt.Fprintf(b, "| `%s` | %s | %d of %d | %d of %d |\n",
+			r.ID, r.Status, r.CitingFunctionsTouched, r.CitingFunctionsTotal,
+			r.NamedTestsInTouchedFiles, r.NamedTestsTotal)
 	}
-
-	// The table renders only the rows that cleared the guard; the rest are counted
-	// in the footer and reachable in review.json. When every touched row is below
-	// the floor there is no table, only the footer — an honest "nothing rose above
-	// the threshold" rather than an empty header.
-	if hidden < len(sec.Rows) {
-		b.WriteString("| ID | Status | citing files touched | named tests in touched files |\n")
-		b.WriteString("|---|---|---|---|\n")
-		for _, r := range sec.Rows {
-			if !r.Shown {
-				continue
-			}
-			if r.CitingFilesTotal == 0 && r.NamedTestsTotal == 0 {
-				fmt.Fprintf(b, "| `%s` | %s | — | — |\n", r.ID, r.Status)
-				continue
-			}
-			fmt.Fprintf(b, "| `%s` | %s | %d of %d | %d of %d |\n",
-				r.ID, r.Status, r.CitingFilesTouched, r.CitingFilesTotal,
-				r.NamedTestsInTouchedFiles, r.NamedTestsTotal)
-		}
-		b.WriteString("\n")
-	}
+	b.WriteString("\n")
 
 	var removed []string
 	for _, r := range sec.Rows {
@@ -307,26 +300,5 @@ func writeRegistrySection(b *strings.Builder, sec *RegistrySection) {
 	if len(removed) > 0 {
 		fmt.Fprintf(b, "**This change deletes files that cited %s.** Those files are gone at head, so they count in no column above.\n\n",
 			strings.Join(removed, ", "))
-	}
-
-	// The demoted tail is stated as a count, with the full data one file away. It
-	// mixes two populations — a diffuse multi-file touch under the floor, and a
-	// single-file touch that is neither full coverage nor a named-test edit — so the
-	// wording says "did not clear the reporting threshold" rather than "fell below"
-	// it: not all of them are low-proportion (a 1-of-3 is 33%), but none cleared the
-	// compound guard. "more" only when a table precedes it; when every touched row is
-	// hidden there is nothing for them to be more than, and the count alone still
-	// distinguishes this from an untouched registry. Singular for a one-row tail.
-	if hidden > 0 {
-		noun := "invariants"
-		if hidden == 1 {
-			noun = "invariant"
-		}
-		more := "more "
-		if hidden == len(sec.Rows) {
-			more = ""
-		}
-		fmt.Fprintf(b, "_%d %stouched %s did not clear the reporting threshold — see review.json._\n\n",
-			hidden, more, noun)
 	}
 }

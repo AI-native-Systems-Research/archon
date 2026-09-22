@@ -798,9 +798,10 @@ func TestPRReviewTouchedCountsFromRealGitDiff(t *testing.T) {
 	git("commit", "--quiet", "-m", "base")
 	base := git("rev-parse", "HEAD")
 
-	// The change: touch one of INV-1's two files, and add a third whose path
-	// needs quoting under git's default core.quotePath.
-	write("a/a.go", cite("INV-1")+"\n// touched\n")
+	// The change: edit inside one of INV-1's two citing functions (a change
+	// outside func F would no longer count, now matching is function-scoped), and
+	// add a third file whose path needs quoting under git's default core.quotePath.
+	write("a/a.go", "package p\n\n// upholds INV-1.\nfunc F() { _ = 1 }\n")
 	write("café/naïve.go", cite("INV-1"))
 	git("add", "-A")
 	git("commit", "--quiet", "-m", "head")
@@ -829,9 +830,9 @@ func TestPRReviewTouchedCountsFromRealGitDiff(t *testing.T) {
 	var res struct {
 		Registry struct {
 			Rows []struct {
-				ID                 string `json:"id"`
-				CitingFilesTouched int    `json:"citingFilesTouched"`
-				CitingFilesTotal   int    `json:"citingFilesTotal"`
+				ID                     string `json:"id"`
+				CitingFunctionsTouched int    `json:"citingFunctionsTouched"`
+				CitingFunctionsTotal   int    `json:"citingFunctionsTotal"`
 			} `json:"rows"`
 		} `json:"registry"`
 	}
@@ -841,14 +842,15 @@ func TestPRReviewTouchedCountsFromRealGitDiff(t *testing.T) {
 	byID := map[string]int{}
 	total := map[string]int{}
 	for _, r := range res.Registry.Rows {
-		byID[r.ID] = r.CitingFilesTouched
-		total[r.ID] = r.CitingFilesTotal
+		byID[r.ID] = r.CitingFunctionsTouched
+		total[r.ID] = r.CitingFunctionsTotal
 	}
 
-	// INV-1: three citing files at head (a, b, café/naïve), two of them touched —
-	// and the quoted path must be one of them.
+	// INV-1: three citing functions at head (a, b, café/naïve), two of them touched
+	// — func F edited in a/a.go and the whole of the new café/naïve.go — and the
+	// quoted path must be one of them.
 	if total["INV-1"] != 3 {
-		t.Errorf("INV-1 citing files = %d, want 3", total["INV-1"])
+		t.Errorf("INV-1 citing functions = %d, want 3", total["INV-1"])
 	}
 	if byID["INV-1"] != 2 {
 		t.Errorf("INV-1 touched = %d, want 2 — a path needing git quoting was likely dropped", byID["INV-1"])
@@ -974,7 +976,9 @@ func TestPRReviewRegistryPinnedToHead(t *testing.T) {
 	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() {}\n")
 	git("add", "-A")
 	git("commit", "--quiet", "-m", "base")
-	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() {}\n\n// touched\n")
+	// Edit inside func A so the change reaches its citation under function-scoped
+	// matching; a comment appended after the function would no longer count.
+	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() { _ = 1 }\n")
 	git("add", "-A")
 	git("commit", "--quiet", "-m", "head")
 	head := git("rev-parse", "HEAD")
@@ -1559,4 +1563,53 @@ func captureStderr(t *testing.T, f func()) string {
 	out := <-done
 	_ = r.Close()
 	return out
+}
+
+// TestChangedRanges_NewSideLineNumbers pins that changedRanges reports the new
+// (head) side of each hunk, which is what corresponds to where citations live in
+// the head tree. The change inserts three lines after line 1, so the added lines
+// are 2..4 on the new side while the base side reports line 1 with a zero count.
+// A parser reading the base side would return line 1; asserting [2,4] is what
+// fails if the "+" group is ever swapped for the "-" one.
+func TestChangedRanges_NewSideLineNumbers(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+
+	write("foo.go", "package p\nline2\nline3\nline4\nline5\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "first")
+	out := exec.Command("git", "-C", repo, "rev-parse", "HEAD")
+	firstBytes, err := out.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.TrimSpace(string(firstBytes))
+
+	// Insert three lines after the first: on the new side they are lines 2..4.
+	write("foo.go", "package p\nNEW1\nNEW2\nNEW3\nline2\nline3\nline4\nline5\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "second")
+
+	ranges := changedRanges(repo, first, "HEAD")
+	got := ranges["foo.go"]
+	if len(got) != 1 || got[0].Start != 2 || got[0].End != 4 {
+		t.Fatalf("changedRanges(foo.go) = %+v, want one range [2,4] (new-side); a base-side parser would report line 1", got)
+	}
 }

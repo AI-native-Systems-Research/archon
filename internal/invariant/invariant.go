@@ -42,6 +42,34 @@ const (
 	StatusUnlinked Status = "UNLINKED"
 )
 
+// CitationSite is one occurrence of an invariant ID in source, attached to the
+// smallest enclosing scope archon can name. Start and End are 1-based line
+// numbers bounding that scope, inclusive; the review side treats a change that
+// overlaps [Start,End] as touching the citation, which is what moves matching
+// from "the file mentions the ID somewhere" to "a changed line is in the thing
+// the ID documents".
+//
+// Scope records which granularity the attachment reached, so a report can say
+// which fallback applied:
+//   - "func": the citation sits in a FuncDecl or its doc comment; Func names it.
+//   - "decl": no enclosing function, but a top-level declaration (const/var/type)
+//     block encloses it; Func is "".
+//   - "file": neither applied — a file-header or package-doc comment — or the file
+//     did not parse. The whole file is the scope, so any change to it counts, which
+//     is the pre-function-granularity behaviour and keeps such citations from
+//     silently vanishing from the report.
+//
+// Consumers switch on Scope, never on Func being empty: Func is "" for both decl
+// and file scopes, so it is not a discriminator.
+type CitationSite struct {
+	File  string
+	Line  int    // 1-based line of the citation itself
+	Func  string // enclosing function name, "" unless Scope == "func"
+	Start int    // 1-based first line of the enclosing scope, inclusive
+	End   int    // 1-based last line of the enclosing scope, inclusive
+	Scope string // "func" | "decl" | "file"
+}
+
 // Link is what the code and tests say about one invariant.
 type Link struct {
 	Invariant Invariant `json:"invariant"`
@@ -51,6 +79,13 @@ type Link struct {
 	// is the FINAL colon: a path may contain one, a Go function name may not.
 	NamedTests []string `json:"named_tests,omitempty"`
 	Citations  int      `json:"citations"` // total occurrences of the ID across both file sets
+
+	// CitationSites records where each citation sits and what scope encloses it.
+	// It is json:"-" on purpose: Link.MarshalJSON embeds every other field via a
+	// type alias, so serialising this would move the pinned `archon invariants`
+	// output. The review side reads it in-process; review.json carries only the
+	// derived per-invariant counts, not the sites.
+	CitationSites []CitationSite `json:"-"`
 }
 
 // Status derives from where the ID appears. A test merely named for an

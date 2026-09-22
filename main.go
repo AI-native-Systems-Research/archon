@@ -787,6 +787,7 @@ func cmdPRReview(args []string) {
 	opts.Registry, opts.ChangedFiles = loadRegistryForReview(repoRoot, opts.Base, opts.Head, registryPath, registryExplicit)
 	if opts.Registry != nil {
 		opts.RemovedAnchors = removedAnchors(repoRoot, opts.Base, opts.Head, invariantsOf(opts.Registry))
+		opts.ChangedRanges = changedRanges(repoRoot, opts.Base, opts.Head)
 	}
 
 	fmt.Fprintf(os.Stderr, "[4/5] building review (components, witnesses, contracts)...\n")
@@ -968,6 +969,80 @@ func changedFiles(repo, base, head string) ([]string, error) {
 		}
 	}
 	return files, nil
+}
+
+// changedRanges lists, per repo-relative path, the new-side line ranges a change
+// touches, parsed from the unified diff hunk headers. It is what lets the
+// declared-invariant section match a citation by the function a changed line
+// lands in, rather than by the file merely mentioning the ID somewhere.
+//
+// --unified=0 so a hunk's reported range is exactly the changed lines: with
+// context lines the range would spill past the edit, and a change near a function
+// boundary would spuriously overlap it — the opposite of the precision this
+// feature is for. The new-side (+) range is taken because citations are located
+// in the head tree; matching head citations against base-side (-) line numbers is
+// the subtle way to get the wrong answer. The merge-base is resolved exactly as
+// changedFiles does, so "this change" means the same span on both.
+//
+// A failure or empty diff yields nil, which the review side reads as "no line
+// information" and every citation then rests on its whole-file fallback — never a
+// crash, and never a silently empty section.
+func changedRanges(repo, base, head string) map[string][]review.LineRange {
+	from := base
+	if mb, err := output(repo, "git", "merge-base", base, head); err == nil && mb != "" {
+		from = mb
+	}
+	// core.quotePath=false so a path with non-ASCII or a space arrives as raw UTF-8
+	// in the "+++ b/…" line rather than an escaped, quoted string, which would then
+	// never compare equal to the citation paths the linker holds — the same hazard
+	// changedFiles sidesteps with -z. --unified=0 rules out -z here, so the config
+	// is set explicitly instead.
+	out, err := output(repo, "git", "-c", "core.quotePath=false", "diff", "--unified=0", "-M", "--no-relative", from, head)
+	if err != nil || out == "" {
+		return nil
+	}
+	// Same hunk grammar as internal/callgraph/render.go; kept separate on purpose
+	// (that one diffs the working tree for call-graph rendering and returns an
+	// internal type), so this is a deliberate second use, not an accidental fork.
+	hunk := regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
+	ranges := map[string][]review.LineRange{}
+	cur := ""
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "+++ ") {
+			p := strings.TrimPrefix(line, "+++ ")
+			if p == "/dev/null" {
+				cur = "" // a deletion has no new-side file
+				continue
+			}
+			cur = strings.TrimPrefix(p, "b/")
+			continue
+		}
+		if cur == "" {
+			continue
+		}
+		if m := hunk.FindStringSubmatch(line); m != nil {
+			start, _ := strconv.Atoi(m[1])
+			cnt := 1
+			if m[2] != "" {
+				cnt, _ = strconv.Atoi(m[2])
+			}
+			if cnt == 0 {
+				// A pure-deletion hunk reports +start,0: it adds no new-side line, so
+				// there is no head line for a citation to overlap. Skipping it is what
+				// "new-side line numbers throughout" means — counting a phantom line
+				// here would report a function as touched when the head tree it is
+				// matched against never changed inside it. This is the case that keeps
+				// INV-6 off BLIS #1725, where the only edits to determinism-citing
+				// functions are deletions.
+				continue
+			}
+			ranges[cur] = append(ranges[cur], review.LineRange{Start: start, End: start + cnt - 1})
+		}
+	}
+	if len(ranges) == 0 {
+		return nil
+	}
+	return ranges
 }
 
 // invariantsOf lists the declared invariants behind a linked result.
