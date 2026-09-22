@@ -10,17 +10,16 @@ Architectural change — a package boundary moved; an architecture review is req
 
 Registry: `docs/contributing/standards/invariants.md` at `d77764f520568b6c67616ca178b214fe288be7fd` — 23 declared, 22 of 23 anchored (18 LINKED, 4 TEST ONLY, 1 UNLINKED), 318 Go files scanned.
 
-| ID | Status | citing files touched | named tests in touched files |
+| ID | Status | citing functions touched | named tests in touched files |
 |---|---|---|---|
-| `INV-13` | LINKED | 8 of 20 | 0 of 5 |
-| `INV-8` | LINKED | 2 of 5 | 1 of 1 |
-| `INV-3` | LINKED | 4 of 18 | 0 of 0 |
-| `INV-5` | LINKED | 3 of 15 | 1 of 2 |
-| `INV-6` | LINKED | 15 of 90 | 1 of 3 |
-| `INV-1` | LINKED | 5 of 32 | 0 of 6 |
-| `INV-9` | LINKED | 1 of 8 | 1 of 3 |
-
-_4 more touched invariants did not clear the reporting threshold — see review.json._
+| `INV-11` | LINKED | 1 of 4 | 0 of 0 |
+| `INV-13` | LINKED | 5 of 30 | 0 of 5 |
+| `INV-6` | LINKED | 18 of 170 | 1 of 3 |
+| `INV-8` | LINKED | 1 of 14 | 1 of 1 |
+| `INV-3` | LINKED | 1 of 26 | 0 of 0 |
+| `INV-1` | LINKED | 1 of 70 | 0 of 6 |
+| `INV-5` | LINKED | 0 of 21 | 1 of 2 |
+| `INV-9` | LINKED | 0 of 11 | 1 of 3 |
 
 1 edge− · 2 surface · 1 schema · 4 invariant · 1 contract
 
@@ -379,7 +378,7 @@ graph LR
     }
   ],
   "registry": {
-    "schemaVersion": 2,
+    "schemaVersion": 3,
     "registry": "docs/contributing/standards/invariants.md",
     "commit": "d77764f520568b6c67616ca178b214fe288be7fd",
     "declared": 23,
@@ -390,103 +389,68 @@ graph LR
     "filesScanned": 318,
     "rows": [
       {
+        "id": "INV-11",
+        "status": "LINKED",
+        "citingFunctionsTouched": 1,
+        "citingFunctionsTotal": 4,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 0
+      },
+      {
         "id": "INV-13",
         "status": "LINKED",
-        "citingFilesTouched": 8,
-        "citingFilesTotal": 20,
+        "citingFunctionsTouched": 5,
+        "citingFunctionsTotal": 30,
         "namedTestsInTouchedFiles": 0,
-        "namedTestsTotal": 5,
-        "shown": true
-      },
-      {
-        "id": "INV-8",
-        "status": "LINKED",
-        "citingFilesTouched": 2,
-        "citingFilesTotal": 5,
-        "namedTestsInTouchedFiles": 1,
-        "namedTestsTotal": 1,
-        "shown": true
-      },
-      {
-        "id": "INV-3",
-        "status": "LINKED",
-        "citingFilesTouched": 4,
-        "citingFilesTotal": 18,
-        "namedTestsInTouchedFiles": 0,
-        "namedTestsTotal": 0,
-        "shown": true
-      },
-      {
-        "id": "INV-5",
-        "status": "LINKED",
-        "citingFilesTouched": 3,
-        "citingFilesTotal": 15,
-        "namedTestsInTouchedFiles": 1,
-        "namedTestsTotal": 2,
-        "shown": true
+        "namedTestsTotal": 5
       },
       {
         "id": "INV-6",
         "status": "LINKED",
-        "citingFilesTouched": 15,
-        "citingFilesTotal": 90,
+        "citingFunctionsTouched": 18,
+        "citingFunctionsTotal": 170,
         "namedTestsInTouchedFiles": 1,
-        "namedTestsTotal": 3,
-        "shown": true
+        "namedTestsTotal": 3
+      },
+      {
+        "id": "INV-8",
+        "status": "LINKED",
+        "citingFunctionsTouched": 1,
+        "citingFunctionsTotal": 14,
+        "namedTestsInTouchedFiles": 1,
+        "namedTestsTotal": 1
+      },
+      {
+        "id": "INV-3",
+        "status": "LINKED",
+        "citingFunctionsTouched": 1,
+        "citingFunctionsTotal": 26,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 0
       },
       {
         "id": "INV-1",
         "status": "LINKED",
-        "citingFilesTouched": 5,
-        "citingFilesTotal": 32,
+        "citingFunctionsTouched": 1,
+        "citingFunctionsTotal": 70,
         "namedTestsInTouchedFiles": 0,
-        "namedTestsTotal": 6,
-        "shown": true
+        "namedTestsTotal": 6
+      },
+      {
+        "id": "INV-5",
+        "status": "LINKED",
+        "citingFunctionsTouched": 0,
+        "citingFunctionsTotal": 21,
+        "namedTestsInTouchedFiles": 1,
+        "namedTestsTotal": 2
       },
       {
         "id": "INV-9",
         "status": "LINKED",
-        "citingFilesTouched": 1,
-        "citingFilesTotal": 8,
+        "citingFunctionsTouched": 0,
+        "citingFunctionsTotal": 11,
         "namedTestsInTouchedFiles": 1,
-        "namedTestsTotal": 3,
-        "shown": true
-      },
-      {
-        "id": "INV-11",
-        "status": "LINKED",
-        "citingFilesTouched": 1,
-        "citingFilesTotal": 4,
-        "namedTestsInTouchedFiles": 0,
-        "namedTestsTotal": 0,
-        "shown": false
-      },
-      {
-        "id": "INV-2",
-        "status": "TEST ONLY",
-        "citingFilesTouched": 1,
-        "citingFilesTotal": 5,
-        "namedTestsInTouchedFiles": 0,
-        "namedTestsTotal": 1,
-        "shown": false
-      },
-      {
-        "id": "INV-P2-2",
-        "status": "LINKED",
-        "citingFilesTouched": 1,
-        "citingFilesTotal": 5,
-        "namedTestsInTouchedFiles": 0,
-        "namedTestsTotal": 4,
-        "shown": false
-      },
-      {
-        "id": "INV-4",
-        "status": "LINKED",
-        "citingFilesTouched": 1,
-        "citingFilesTotal": 11,
-        "namedTestsInTouchedFiles": 0,
-        "namedTestsTotal": 0,
-        "shown": false
+        "namedTestsTotal": 3
       }
     ]
   },

@@ -85,10 +85,19 @@ type Options struct {
 	// which keeps this package free of any filesystem or git dependency.
 	Registry *invariant.Result
 
-	// ChangedFiles are the repo-relative paths this change touches, used only to
-	// report how much of each invariant's footprint the change reaches. Empty
-	// when Registry is nil.
+	// ChangedFiles are the repo-relative paths this change touches. They still
+	// drive the named-tests column and the whole-file citation-scope fallback;
+	// per-line matching is carried by ChangedRanges. Empty when Registry is nil.
 	ChangedFiles []string
+
+	// ChangedRanges maps a repo-relative path to the new-side line ranges this
+	// change touches, parsed from the diff. A citation-bearing function counts as
+	// touched only when one of these ranges overlaps its span — this is what makes
+	// matching function-scoped rather than file-scoped. New-side (head) ranges are
+	// used because citations are located in the head tree. A file present in
+	// ChangedFiles but absent here (a pure rename, or a mode change) touches no
+	// function, but still touches any whole-file-scoped citation it carries.
+	ChangedRanges map[string][]LineRange
 
 	// RemovedAnchors maps an invariant ID to the files this change deletes that
 	// cited it at the base commit. Those files do not exist at head, so they
@@ -241,7 +250,7 @@ func Build(gA, gB *graph.Graph, d *delta.Delta, opts Options) *Result {
 	}
 
 	// Advisory, and computed after the verdict so it cannot feed it.
-	res.Registry = buildRegistrySection(opts.Registry, opts.ChangedFiles, opts.RemovedAnchors)
+	res.Registry = buildRegistrySection(opts.Registry, opts.ChangedFiles, opts.ChangedRanges, opts.RemovedAnchors)
 
 	res.Verdict, res.Summary = verdict(d)
 	return res

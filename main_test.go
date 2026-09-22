@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/AI-native-Systems-Research/archon/internal/review"
 )
 
 // buildTool compiles archon-go so the flag table and the exit codes are
@@ -798,9 +801,10 @@ func TestPRReviewTouchedCountsFromRealGitDiff(t *testing.T) {
 	git("commit", "--quiet", "-m", "base")
 	base := git("rev-parse", "HEAD")
 
-	// The change: touch one of INV-1's two files, and add a third whose path
-	// needs quoting under git's default core.quotePath.
-	write("a/a.go", cite("INV-1")+"\n// touched\n")
+	// The change: edit inside one of INV-1's two citing functions (a change
+	// outside func F would no longer count, now matching is function-scoped), and
+	// add a third file whose path needs quoting under git's default core.quotePath.
+	write("a/a.go", "package p\n\n// upholds INV-1.\nfunc F() { _ = 1 }\n")
 	write("café/naïve.go", cite("INV-1"))
 	git("add", "-A")
 	git("commit", "--quiet", "-m", "head")
@@ -829,9 +833,9 @@ func TestPRReviewTouchedCountsFromRealGitDiff(t *testing.T) {
 	var res struct {
 		Registry struct {
 			Rows []struct {
-				ID                 string `json:"id"`
-				CitingFilesTouched int    `json:"citingFilesTouched"`
-				CitingFilesTotal   int    `json:"citingFilesTotal"`
+				ID                     string `json:"id"`
+				CitingFunctionsTouched int    `json:"citingFunctionsTouched"`
+				CitingFunctionsTotal   int    `json:"citingFunctionsTotal"`
 			} `json:"rows"`
 		} `json:"registry"`
 	}
@@ -841,14 +845,15 @@ func TestPRReviewTouchedCountsFromRealGitDiff(t *testing.T) {
 	byID := map[string]int{}
 	total := map[string]int{}
 	for _, r := range res.Registry.Rows {
-		byID[r.ID] = r.CitingFilesTouched
-		total[r.ID] = r.CitingFilesTotal
+		byID[r.ID] = r.CitingFunctionsTouched
+		total[r.ID] = r.CitingFunctionsTotal
 	}
 
-	// INV-1: three citing files at head (a, b, café/naïve), two of them touched —
-	// and the quoted path must be one of them.
+	// INV-1: three citing functions at head (a, b, café/naïve), two of them touched
+	// — func F edited in a/a.go and the whole of the new café/naïve.go — and the
+	// quoted path must be one of them.
 	if total["INV-1"] != 3 {
-		t.Errorf("INV-1 citing files = %d, want 3", total["INV-1"])
+		t.Errorf("INV-1 citing functions = %d, want 3", total["INV-1"])
 	}
 	if byID["INV-1"] != 2 {
 		t.Errorf("INV-1 touched = %d, want 2 — a path needing git quoting was likely dropped", byID["INV-1"])
@@ -974,7 +979,9 @@ func TestPRReviewRegistryPinnedToHead(t *testing.T) {
 	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() {}\n")
 	git("add", "-A")
 	git("commit", "--quiet", "-m", "base")
-	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() {}\n\n// touched\n")
+	// Edit inside func A so the change reaches its citation under function-scoped
+	// matching; a comment appended after the function would no longer count.
+	write("a/a.go", "package a\n\n// upholds INV-1.\nfunc A() { _ = 1 }\n")
 	git("add", "-A")
 	git("commit", "--quiet", "-m", "head")
 	head := git("rev-parse", "HEAD")
@@ -1559,4 +1566,224 @@ func captureStderr(t *testing.T, f func()) string {
 	out := <-done
 	_ = r.Close()
 	return out
+}
+
+// TestChangedRanges_NewSideLineNumbers pins that changedRanges reports the new
+// (head) side of each hunk, which is what corresponds to where citations live in
+// the head tree. The change inserts three lines after line 1, so the added lines
+// are 2..4 on the new side while the base side reports line 1 with a zero count.
+// A parser reading the base side would return line 1; asserting [2,4] is what
+// fails if the "+" group is ever swapped for the "-" one.
+func TestChangedRanges_NewSideLineNumbers(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+
+	write("foo.go", "package p\nline2\nline3\nline4\nline5\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "first")
+	out := exec.Command("git", "-C", repo, "rev-parse", "HEAD")
+	firstBytes, err := out.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.TrimSpace(string(firstBytes))
+
+	// Insert three lines after the first: on the new side they are lines 2..4.
+	write("foo.go", "package p\nNEW1\nNEW2\nNEW3\nline2\nline3\nline4\nline5\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "second")
+
+	ranges := changedRanges(repo, first, "HEAD")
+	got := ranges["foo.go"]
+	if len(got) != 1 || got[0].Start != 2 || got[0].End != 4 {
+		t.Fatalf("changedRanges(foo.go) = %+v, want one range [2,4] (new-side); a base-side parser would report line 1", got)
+	}
+}
+
+// gitRepoWith commits `initial` as foo.go, then commits `updated`, and returns
+// the ranges changedRanges reports for foo.go between the two.
+func gitRepoWith(t *testing.T, initial, updated string) []review.LineRange {
+	t.Helper()
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, "foo.go"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write(initial)
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "first")
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.TrimSpace(string(out))
+	write(updated)
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "second")
+	return changedRanges(repo, first, "HEAD")["foo.go"]
+}
+
+// TestChangedRanges_PureDeletionCounted pins the deliberate decision (issue #77
+// review) that a pure-deletion hunk (+N,0) is NOT dropped: deleting lines from a
+// function is a change to it, recorded at the surviving boundary line git reports.
+// An earlier revision skipped these, silently under-reporting a gutted function.
+func TestChangedRanges_PureDeletionCounted(t *testing.T) {
+	// Delete lines 3-4 of a 6-line file; the deletion abuts new-side line 2.
+	got := gitRepoWith(t,
+		"package p\nline2\nline3\nline4\nline5\nline6\n",
+		"package p\nline2\nline5\nline6\n")
+	if len(got) != 1 {
+		t.Fatalf("a pure deletion must produce exactly one boundary range; got %+v", got)
+	}
+	if got[0].Start != 2 || got[0].End != 2 {
+		t.Errorf("deletion boundary range = %+v, want [2,2] (the surviving new-side line the deletion abuts)", got[0])
+	}
+}
+
+// TestChangedRanges_MultipleHunksMultipleRanges pins that two disjoint edits in
+// one file yield two ranges, and that the +start,cnt arithmetic (Start+cnt-1) is
+// correct for a multi-line modification.
+func TestChangedRanges_MultipleHunksMultipleRanges(t *testing.T) {
+	// Two separate one-line edits, far apart, so they land in distinct hunks.
+	initial := "package p\n"
+	for i := 2; i <= 20; i++ {
+		initial += fmt.Sprintf("// line %d\n", i)
+	}
+	updated := strings.Replace(initial, "// line 3\n", "// line 3 EDITED\n", 1)
+	updated = strings.Replace(updated, "// line 17\n", "// line 17 EDITED\n", 1)
+	got := gitRepoWith(t, initial, updated)
+	if len(got) != 2 {
+		t.Fatalf("two disjoint edits must yield two ranges; got %+v", got)
+	}
+	// One-line modifications: each range is a single new-side line, [3,3] and [17,17].
+	if got[0].Start != 3 || got[0].End != 3 || got[1].Start != 17 || got[1].End != 17 {
+		t.Errorf("ranges = %+v, want [3,3] and [17,17]", got)
+	}
+}
+
+// TestChangedRanges_TopOfFileDeletionNotRecorded pins the +0,0 exception: a
+// deletion at the very top of the file (a header/import block removed above
+// everything) has no surviving head line below it to abut, so it records nothing
+// rather than clamping onto whatever scope now begins at line 1 — which would
+// falsely flag that function. Deleting the two header-comment lines yields the
+// hunk `@@ -1,2 +0,0 @@`, whose new-side start is 0.
+func TestChangedRanges_TopOfFileDeletionNotRecorded(t *testing.T) {
+	got := gitRepoWith(t,
+		"// header 1\n// header 2\npackage p\n\nfunc F() {}\n",
+		"package p\n\nfunc F() {}\n")
+	if len(got) != 0 {
+		t.Errorf("a top-of-file (+0,0) deletion must record no range; got %+v", got)
+	}
+}
+
+// TestPRReviewDeletionInsideCitingFunctionReports is the end-to-end proof that a
+// deletion inside a citing function flows through changedRanges into
+// buildRegistrySection and surfaces the invariant — the exact false negative the
+// pure-deletion fix exists to prevent, exercised through the real binary rather
+// than a hand-built range.
+func TestPRReviewDeletionInsideCitingFunctionReports(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n")
+	// F cites INV-1 in its doc comment and has a body with lines to delete.
+	write("a/a.go", "package a\n\n// F upholds INV-1.\nfunc F() {\n\tx := 1\n\ty := 2\n\t_ = x\n\t_ = y\n}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "base")
+	base := git("rev-parse", "HEAD")
+
+	// Delete two lines from inside F's body — a pure deletion, no additions.
+	write("a/a.go", "package a\n\n// F upholds INV-1.\nfunc F() {\n\tx := 1\n\t_ = x\n}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "delete inside F")
+	head := git("rev-parse", "HEAD")
+
+	out := filepath.Join(t.TempDir(), "bundle")
+	cmd := exec.Command(bin, "pr-review", repo, base, head, "--out", out)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	b, err := os.ReadFile(filepath.Join(out, "review.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Registry struct {
+			Rows []struct {
+				ID                     string `json:"id"`
+				CitingFunctionsTouched int    `json:"citingFunctionsTouched"`
+			} `json:"rows"`
+		} `json:"registry"`
+	}
+	if err := json.Unmarshal(b, &res); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, r := range res.Registry.Rows {
+		if r.ID == "INV-1" {
+			found = true
+			if r.CitingFunctionsTouched != 1 {
+				t.Errorf("INV-1 touched = %d, want 1 — the deletion inside F must count", r.CitingFunctionsTouched)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("INV-1 must be reported after a deletion inside its citing function F:\n%s", b)
+	}
 }
