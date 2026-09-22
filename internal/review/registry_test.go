@@ -55,10 +55,12 @@ func TestRegistrySection_CountsTouchedFilesAndNamedTests(t *testing.T) {
 	if got := byID["INV-6"]; got.CitingFilesTouched != 3 || got.CitingFilesTotal != 4 || got.NamedTestsInTouchedFiles != 1 || got.NamedTestsTotal != 2 {
 		t.Errorf("INV-6 = %+v, want 3/4 citing files and 1/2 named", got)
 	}
-	// Declared, cited nowhere: a finding, so it appears even though the change
-	// cannot have touched it.
-	if got, ok := byID["INV-PD-2"]; !ok || got.Status != invariant.StatusUnlinked {
-		t.Errorf("INV-PD-2 should be reported as UNLINKED, got %+v", got)
+	// Standing UNLINKED — declared and cited nowhere, true of the repo rather than
+	// this change — no longer renders in pr-review. It is the audit surface's job
+	// (archon invariants), and repeating it on every PR trains readers to skip the
+	// section. Only a citation this change *removed* is an event worth reporting.
+	if _, ok := byID["INV-PD-2"]; ok {
+		t.Error("standing UNLINKED INV-PD-2 should not be a pr-review row")
 	}
 	// Untouched and anchored: nothing for a reviewer to act on.
 	if _, ok := byID["INV-2"]; ok {
@@ -66,21 +68,23 @@ func TestRegistrySection_CountsTouchedFilesAndNamedTests(t *testing.T) {
 	}
 }
 
-// TestRegistrySection_RowsOrderedByExposure puts what the change touched most at
-// the top, so the first row is the one worth reading.
-func TestRegistrySection_RowsOrderedByExposure(t *testing.T) {
+// TestRegistrySection_RowsOrderedByProportion puts the highest touched/citing ratio
+// at the top, not the highest raw count. INV-9 cites one file and the change touched
+// it (1 of 1 = 100%); INV-6 is 3 of 4 = 75%. The old raw-count sort would rank INV-6
+// first on 3 > 1 — the exact inversion #74 fixes.
+func TestRegistrySection_RowsOrderedByProportion(t *testing.T) {
 	reg := fixtureRegistry()
 	reg.Links = append(reg.Links, invariant.Link{
 		Invariant: invariant.Invariant{ID: "INV-9", Scope: "docs/invariants.md"},
 		CodeFiles: []string{"unrelated/x.go"},
 	})
 	sec := buildRegistrySection(reg, changed, nil)
-	if len(sec.Rows) < 2 || sec.Rows[0].ID != "INV-6" {
+	if len(sec.Rows) < 2 || sec.Rows[0].ID != "INV-9" || sec.Rows[1].ID != "INV-6" {
 		var ids []string
 		for _, r := range sec.Rows {
 			ids = append(ids, r.ID)
 		}
-		t.Errorf("rows = %v, want INV-6 first", ids)
+		t.Errorf("rows = %v, want [INV-9 INV-6] (100%% before 75%%)", ids)
 	}
 }
 
@@ -103,8 +107,11 @@ func TestRegistrySection_ZeroAnchoredIsAFinding(t *testing.T) {
 	if !strings.Contains(out, "0 of 3 anchored") {
 		t.Errorf("want a \"0 of 3 anchored\" finding:\n%s", out)
 	}
-	if len(sec.Rows) != 3 {
-		t.Errorf("all three are unlinked, so all three are rows; got %d", len(sec.Rows))
+	// The header finding stands on its own; standing UNLINKED rows no longer
+	// render, so an all-unlinked registry produces no table rows — the "0 of N
+	// anchored" line is the whole report.
+	if len(sec.Rows) != 0 {
+		t.Errorf("standing UNLINKED rows should not render; got %d rows", len(sec.Rows))
 	}
 }
 
@@ -282,8 +289,10 @@ func TestRegistrySection_JSONShape(t *testing.T) {
 }
 
 // sectionFixture adds a row with deleted anchors to the base fixture, so one
-// rendering covers all four row kinds: touched, untouched-but-anchor-deleted,
-// excluded, and declared-but-uncited.
+// rendering covers the row kinds that render: touched, and
+// untouched-but-anchor-deleted. The declared-but-uncited INV-PD-2 is in the
+// registry but no longer renders as a row — standing UNLINKED is the audit
+// surface's job — so it exercises the drop.
 func sectionFixture() (*invariant.Result, map[string][]string) {
 	reg := fixtureRegistry()
 	reg.Links = append(reg.Links, invariant.Link{
@@ -310,11 +319,8 @@ Registry: ` + "`docs/invariants.md`" + ` at ` + "`d77764f5`" + ` — 4 declared,
 |---|---|---|---|
 | ` + "`INV-13`" + ` | LINKED | 0 of 1 | 0 of 0 |
 | ` + "`INV-6`" + ` | LINKED | 3 of 4 | 1 of 2 |
-| ` + "`INV-PD-2`" + ` | UNLINKED | — | — |
 
 **This change deletes files that cited ` + "`INV-13`" + ` (2).** Those files are gone at head, so they count in no column above.
-
-` + "`INV-PD-2`" + ` is declared but cited in no file.
 
 `
 
@@ -382,5 +388,370 @@ func TestRender_SectionRendersOnNoChange(t *testing.T) {
 	md := renderMarkdown(res)
 	if !strings.Contains(md, wantSection) {
 		t.Errorf("the section is missing from a NO_CHANGE review:\n%s", md)
+	}
+}
+
+// blisPR1725Fixture reproduces the exact touched/citing counts archon reports on
+// BLIS PR #1725 — the acceptance test case in issue #74. Each invariant cites
+// `citing` synthetic files, of which the first `touched` are in the change, so
+// buildRegistrySection sees precisely the numbers the issue tabulates.
+func blisPR1725Fixture() (*invariant.Result, []string) {
+	specs := []struct {
+		id              string
+		touched, citing int
+	}{
+		{"INV-6", 7, 147}, {"INV-4", 3, 14}, {"INV-8", 3, 10},
+		{"INV-1", 2, 41}, {"INV-11", 1, 10}, {"INV-12", 1, 3},
+		{"INV-13", 1, 47}, {"INV-2", 1, 9}, {"INV-3", 1, 28},
+		{"INV-7", 1, 8}, {"INV-9", 1, 10},
+	}
+	var links []invariant.Link
+	var changedFiles []string
+	for _, s := range specs {
+		var files []string
+		for i := 0; i < s.citing; i++ {
+			f := fmt.Sprintf("sim/%s_f%d.go", s.id, i)
+			files = append(files, f)
+			if i < s.touched {
+				changedFiles = append(changedFiles, f)
+			}
+		}
+		links = append(links, invariant.Link{
+			Invariant: invariant.Invariant{ID: s.id, Scope: "docs/invariants.md"},
+			CodeFiles: files,
+		})
+	}
+	return &invariant.Result{Registry: "docs/invariants.md", FilesScanned: 431, Links: links}, changedFiles
+}
+
+// TestRankByProportion_BLIS1725 is the acceptance check named in #74: on that PR
+// INV-4 and INV-8 must be the top rows. Under the old raw-count sort INV-6 led at
+// 7 of 147; here the two invariants a reviewer actually wants rise to the top and
+// the diffuse tail sinks below the floor.
+func TestRankByProportion_BLIS1725(t *testing.T) {
+	reg, changedFiles := blisPR1725Fixture()
+	sec := buildRegistrySection(reg, changedFiles, nil)
+
+	// The rendered table is exactly the Shown rows, in row order.
+	var shown []string
+	for _, r := range sec.Rows {
+		if r.Shown {
+			shown = append(shown, r.ID)
+		}
+	}
+	if len(shown) != 2 || shown[0] != "INV-8" || shown[1] != "INV-4" {
+		t.Errorf("shown rows = %v, want [INV-8 INV-4] (proportion desc: 30%%, 21%%)", shown)
+	}
+
+	byID := map[string]RegistryRow{}
+	for _, r := range sec.Rows {
+		byID[r.ID] = r
+	}
+	// The high-proportion single-file touch the guard exists to stop: 1 of 3 = 33%
+	// would top a pure proportion sort, but touched < 2 and touched != citing.
+	if byID["INV-12"].Shown {
+		t.Error("INV-12 (1 of 3) is a single-file touch; it must not outrank a multi-file touch")
+	}
+	// Significant (touched >= 2) but too diffuse: 5% and 4.9% are below the 10% floor.
+	if byID["INV-6"].Shown || byID["INV-1"].Shown {
+		t.Errorf("INV-6 (7 of 147) and INV-1 (2 of 41) are below the floor; got shown=%v/%v",
+			byID["INV-6"].Shown, byID["INV-1"].Shown)
+	}
+
+	// review.json keeps every touched invariant so the remainder is reachable; the
+	// table is a subset, not the whole set.
+	if len(sec.Rows) != 11 {
+		t.Errorf("all 11 touched invariants must stay in Rows for review.json; got %d", len(sec.Rows))
+	}
+
+	var b strings.Builder
+	writeRegistrySection(&b, sec)
+	out := b.String()
+	if !strings.Contains(out, "_9 more touched invariants did not clear the reporting threshold — see review.json._") {
+		t.Errorf("want a footer counting the 9 hidden rows:\n%s", out)
+	}
+	// The table's first data row is INV-8, before INV-4, before anything else.
+	i8, i4, i6 := strings.Index(out, "| `INV-8` |"), strings.Index(out, "| `INV-4` |"), strings.Index(out, "| `INV-6` |")
+	if i8 < 0 || i4 < 0 || !(i8 < i4) {
+		t.Errorf("INV-8 must render above INV-4:\n%s", out)
+	}
+	if i6 >= 0 {
+		t.Errorf("INV-6 is below the floor and must not appear in the table:\n%s", out)
+	}
+}
+
+// TestSignificance_Guard pins the two halves of the rule that the acceptance check
+// alone does not exercise: full coverage (touched == citing) is real signal at any
+// count and bypasses the floor, while a single-file touch of a multi-file invariant
+// — the noise defect 2 exists to bound — is hidden even at a high proportion.
+func TestSignificance_Guard(t *testing.T) {
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 10,
+		Links: []invariant.Link{
+			// Full coverage at count 1: the change touched the only file citing it.
+			// Real signal at any count, so shown even though touched < 2.
+			{Invariant: invariant.Invariant{ID: "INV-SOLO", Scope: "docs/invariants.md"},
+				CodeFiles: []string{"sim/solo.go"}},
+			// Full coverage at count 2: shown.
+			{Invariant: invariant.Invariant{ID: "INV-PAIR", Scope: "docs/invariants.md"},
+				CodeFiles: []string{"sim/pair_a.go", "sim/pair_b.go"}},
+			// One of two citing files: 50%, above the floor, but a single-file touch
+			// of a multi-file invariant. This is the promotion the guard blocks.
+			{Invariant: invariant.Invariant{ID: "INV-HALF", Scope: "docs/invariants.md"},
+				CodeFiles: []string{"sim/half_a.go", "sim/half_b.go"}},
+		},
+	}
+	sec := buildRegistrySection(reg, []string{"sim/solo.go", "sim/pair_a.go", "sim/pair_b.go", "sim/half_a.go"}, nil)
+	byID := map[string]RegistryRow{}
+	for _, r := range sec.Rows {
+		byID[r.ID] = r
+	}
+	if !byID["INV-SOLO"].Shown {
+		t.Error("the change touched the only file citing INV-SOLO — full coverage is signal at any count")
+	}
+	if !byID["INV-PAIR"].Shown {
+		t.Error("2 of 2 citing files changed is full-coverage signal; it must be shown")
+	}
+	if byID["INV-HALF"].Shown {
+		t.Error("1 of 2 (50%) is a single-file touch of a multi-file invariant; the guard must hide it")
+	}
+}
+
+// TestRemovedLastAnchorRenders is defect 3's exception: standing UNLINKED does not
+// render, but an invariant whose *last* citation this change removed — UNLINKED at
+// head as a result — is an event about the change and must be reported loudly.
+func TestRemovedLastAnchorRenders(t *testing.T) {
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 10,
+		Links: []invariant.Link{
+			// UNLINKED at head: the change deleted its only citing file.
+			{Invariant: invariant.Invariant{ID: "INV-ERODED", Scope: "docs/invariants.md"}},
+		},
+	}
+	sec := buildRegistrySection(reg, nil, map[string][]string{"INV-ERODED": {"sim/gone.go"}})
+	if len(sec.Rows) != 1 || sec.Rows[0].ID != "INV-ERODED" || !sec.Rows[0].Shown {
+		t.Fatalf("a removed-last-anchor invariant must render; got %+v", sec.Rows)
+	}
+	var b strings.Builder
+	writeRegistrySection(&b, sec)
+	if out := b.String(); !strings.Contains(out, "deletes files that cited `INV-ERODED`") {
+		t.Errorf("want the deleted-anchor line reported loudly:\n%s", out)
+	}
+}
+
+// TestJSONHiddenRowsCarryShownFlag proves the JSON is a superset of the table and
+// that a consumer can tell which rows appeared without re-deriving the gate.
+func TestJSONHiddenRowsCarryShownFlag(t *testing.T) {
+	reg, changedFiles := blisPR1725Fixture()
+	sec := buildRegistrySection(reg, changedFiles, nil)
+	raw, err := json.Marshal(sec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		SchemaVersion int `json:"schemaVersion"`
+		Rows          []struct {
+			ID    string `json:"id"`
+			Shown bool   `json:"shown"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 2 {
+		t.Errorf("schemaVersion = %d, want 2 (rows now mean all-touched, not the table)", got.SchemaVersion)
+	}
+	shownByID := map[string]bool{}
+	for _, r := range got.Rows {
+		shownByID[r.ID] = r.Shown
+	}
+	if len(got.Rows) != 11 {
+		t.Errorf("review.json must carry all 11 touched rows; got %d", len(got.Rows))
+	}
+	if !shownByID["INV-8"] || shownByID["INV-6"] {
+		t.Errorf("shown flags wrong: INV-8=%v (want true), INV-6=%v (want false)", shownByID["INV-8"], shownByID["INV-6"])
+	}
+}
+
+// TestTouchedNamedTestIsShown: a test named for an invariant, in a file the change
+// edited, is the exact event the "named tests in touched files" column exists for.
+// It carries no citing-file proportion, so the proportion floor must not bury it —
+// the change touched a test guarding the promise, which a reviewer needs to see.
+func TestTouchedNamedTestIsShown(t *testing.T) {
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 10,
+		Links: []invariant.Link{
+			// Cited across many files; the change touched none of them, but it did
+			// touch a file holding a test named for the invariant. touched == 0.
+			{Invariant: invariant.Invariant{ID: "INV-GUARD", Scope: "docs/invariants.md"},
+				CodeFiles:  []string{"sim/a.go", "sim/b.go", "sim/c.go"},
+				NamedTests: []string{"sim/guard_test.go:TestINVGUARD_Holds"}},
+		},
+	}
+	sec := buildRegistrySection(reg, []string{"sim/guard_test.go"}, nil)
+	if len(sec.Rows) != 1 {
+		t.Fatalf("the touched named test must produce a row; got %d", len(sec.Rows))
+	}
+	if r := sec.Rows[0]; !r.Shown || r.NamedTestsInTouchedFiles != 1 || r.CitingFilesTouched != 0 {
+		t.Errorf("a touched named test must be shown regardless of citing proportion; got %+v", r)
+	}
+}
+
+// TestFloorBoundary pins the 10% comparison as inclusive: a multi-file touch at
+// exactly 10% shows, just under does not. In the acceptance fixture the only
+// exact-10% rows are single-file (killed by touched>=2), so the floor's own
+// boundary is otherwise never exercised — a flip of >= to > or *10 to *11 would
+// ship green without this.
+func TestFloorBoundary(t *testing.T) {
+	mk := func(id string, citing int) invariant.Link {
+		var files []string
+		for i := 0; i < citing; i++ {
+			files = append(files, fmt.Sprintf("sim/%s_%d.go", id, i))
+		}
+		return invariant.Link{Invariant: invariant.Invariant{ID: id, Scope: "docs/invariants.md"}, CodeFiles: files}
+	}
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 50,
+		Links:        []invariant.Link{mk("INV-AT", 20), mk("INV-UNDER", 21)},
+	}
+	// Touch exactly 2 files of each: INV-AT = 2/20 = 10% (shown), INV-UNDER = 2/21
+	// < 10% (hidden). Both have touched >= 2, so only the floor decides.
+	changedFiles := []string{"sim/INV-AT_0.go", "sim/INV-AT_1.go", "sim/INV-UNDER_0.go", "sim/INV-UNDER_1.go"}
+	sec := buildRegistrySection(reg, changedFiles, nil)
+	byID := map[string]RegistryRow{}
+	for _, r := range sec.Rows {
+		byID[r.ID] = r
+	}
+	if !byID["INV-AT"].Shown {
+		t.Error("2 of 20 = exactly 10% must show; the floor is inclusive")
+	}
+	if byID["INV-UNDER"].Shown {
+		t.Error("2 of 21 < 10% must be hidden")
+	}
+}
+
+// TestTieBreakOnTouchedCount: two rows at equal proportion break the tie on the raw
+// touched count, then ID. Nothing in the acceptance fixture ties, so this pins the
+// comparator's second and third keys.
+func TestTieBreakOnTouchedCount(t *testing.T) {
+	mk := func(id string, citing int) invariant.Link {
+		var files []string
+		for i := 0; i < citing; i++ {
+			files = append(files, fmt.Sprintf("sim/%s_%d.go", id, i))
+		}
+		return invariant.Link{Invariant: invariant.Invariant{ID: id, Scope: "docs/invariants.md"}, CodeFiles: files}
+	}
+	// INV-A 4/20 and INV-Z 2/10 are both 20%; the larger touch (INV-A) must lead.
+	// The IDs are chosen so alphabetical order (INV-A < INV-Z) *contradicts* the
+	// touched-count order — otherwise dropping the touched-count key entirely would
+	// still pass by falling through to the ID tiebreak.
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 50,
+		Links:        []invariant.Link{mk("INV-Z", 10), mk("INV-A", 20)},
+	}
+	var changedFiles []string
+	for i := 0; i < 2; i++ {
+		changedFiles = append(changedFiles, fmt.Sprintf("sim/INV-Z_%d.go", i))
+	}
+	for i := 0; i < 4; i++ {
+		changedFiles = append(changedFiles, fmt.Sprintf("sim/INV-A_%d.go", i))
+	}
+	sec := buildRegistrySection(reg, changedFiles, nil)
+	if len(sec.Rows) != 2 || sec.Rows[0].ID != "INV-A" || sec.Rows[1].ID != "INV-Z" {
+		var ids []string
+		for _, r := range sec.Rows {
+			ids = append(ids, r.ID)
+		}
+		t.Errorf("equal proportion (20%%) must break on touched count (INV-A=4 before INV-Z=2), not ID: got %v", ids)
+	}
+}
+
+// TestNamedOnlyRowSortsBelowProportionRows: a row shown only because a named test
+// was touched has no citing proportion (touched==0), so it must sort below every
+// proportion-ranked row but above the hidden tail, and the footer must count the
+// hidden rows even when a named-only row is on the table. The flow1 golden exercises
+// this (INV-9), but CI does not run that golden without BLIS_REPO, so it is pinned
+// here too.
+func TestNamedOnlyRowSortsBelowProportionRows(t *testing.T) {
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 50,
+		Links: []invariant.Link{
+			// Proportion-shown: 2 of 4 = 50%, touched >= 2.
+			{Invariant: invariant.Invariant{ID: "INV-PROP", Scope: "docs/invariants.md"},
+				CodeFiles: []string{"sim/p0.go", "sim/p1.go", "sim/p2.go", "sim/p3.go"}},
+			// Named-only shown: no citing file touched, but a named test's file is.
+			{Invariant: invariant.Invariant{ID: "INV-NAMED", Scope: "docs/invariants.md"},
+				CodeFiles:  []string{"sim/n0.go", "sim/n1.go", "sim/n2.go"},
+				NamedTests: []string{"sim/named_test.go:TestINVNAMED_Holds"}},
+			// Hidden: single-file touch of a multi-file invariant.
+			{Invariant: invariant.Invariant{ID: "INV-HID", Scope: "docs/invariants.md"},
+				CodeFiles: []string{"sim/h0.go", "sim/h1.go", "sim/h2.go", "sim/h3.go", "sim/h4.go"}},
+		},
+	}
+	changedFiles := []string{"sim/p0.go", "sim/p1.go", "sim/named_test.go", "sim/h0.go"}
+	sec := buildRegistrySection(reg, changedFiles, nil)
+
+	var shown []string
+	for _, r := range sec.Rows {
+		if r.Shown {
+			shown = append(shown, r.ID)
+		}
+	}
+	if len(shown) != 2 || shown[0] != "INV-PROP" || shown[1] != "INV-NAMED" {
+		t.Errorf("named-only row must sort below the proportion row: want [INV-PROP INV-NAMED], got %v", shown)
+	}
+	var b strings.Builder
+	writeRegistrySection(&b, sec)
+	out := b.String()
+	if !strings.Contains(out, "_1 more touched invariant did not clear the reporting threshold — see review.json._") {
+		t.Errorf("footer must count the 1 hidden row while a named-only row is shown:\n%s", out)
+	}
+}
+
+// TestAllRowsHidden covers the render branch where every touched row is below the
+// guard: no table header (which would otherwise be an empty, misleading table), and
+// a footer that drops "more" — there is no table for the tail to be more than — while
+// the count still distinguishes this from a registry the change never touched.
+func TestAllRowsHidden(t *testing.T) {
+	mk := func(id string, citing int) invariant.Link {
+		var files []string
+		for i := 0; i < citing; i++ {
+			files = append(files, fmt.Sprintf("sim/%s_%d.go", id, i))
+		}
+		return invariant.Link{Invariant: invariant.Invariant{ID: id, Scope: "docs/invariants.md"}, CodeFiles: files}
+	}
+	// Three single-file touches of multi-file invariants: each touched == 1, none is
+	// full coverage or a named-test edit, so all three are hidden.
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 50,
+		Links:        []invariant.Link{mk("INV-A", 8), mk("INV-B", 9), mk("INV-C", 10)},
+	}
+	sec := buildRegistrySection(reg, []string{"sim/INV-A_0.go", "sim/INV-B_0.go", "sim/INV-C_0.go"}, nil)
+	if len(sec.Rows) != 3 {
+		t.Fatalf("all three are touched, so all three are rows; got %d", len(sec.Rows))
+	}
+	for _, r := range sec.Rows {
+		if r.Shown {
+			t.Fatalf("every row should be hidden; %s is shown", r.ID)
+		}
+	}
+	var b strings.Builder
+	writeRegistrySection(&b, sec)
+	out := b.String()
+	if strings.Contains(out, "| ID | Status") {
+		t.Errorf("no shown rows, so no table header:\n%s", out)
+	}
+	if !strings.Contains(out, "_3 touched invariants did not clear the reporting threshold — see review.json._") {
+		t.Errorf("want an all-hidden footer without \"more\":\n%s", out)
+	}
+	if strings.Contains(out, "more touched") {
+		t.Errorf("with no table, the footer must not say \"more\":\n%s", out)
 	}
 }

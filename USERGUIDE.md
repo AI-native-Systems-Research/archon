@@ -477,29 +477,51 @@ Registry: `docs/contributing/standards/invariants.md` at `d77764f520568b6c67616c
 
 | ID | Status | citing files touched | named tests in touched files |
 |---|---|---|---|
-| `INV-6` | LINKED | 15 of 90 | 1 of 3 |
 | `INV-13` | LINKED | 8 of 20 | 0 of 5 |
-| …nine more rows… | | | |
-| `INV-PD-2` | UNLINKED | — | — |
+| `INV-8` | LINKED | 2 of 5 | 1 of 1 |
+| `INV-3` | LINKED | 4 of 18 | 0 of 0 |
+| `INV-5` | LINKED | 3 of 15 | 1 of 2 |
+| `INV-6` | LINKED | 15 of 90 | 1 of 3 |
+| `INV-1` | LINKED | 5 of 32 | 0 of 6 |
 
-`INV-PD-2` is declared but cited in no file.
+_5 more touched invariants did not clear the reporting threshold — see review.json._
 ```
 
-(Twelve rows in full; abridged here. Every number above is from that pinned commit,
-and `demo/flow1-pr-review`'s golden holds the whole table.)
+(Every number above is from that pinned commit, and `demo/flow1-pr-review`'s golden
+holds the whole table plus the footer's five hidden rows in its `review.json`.)
 
 Rows are the invariants worth a reviewer's attention: the ones this change touched,
-ordered by how many citing files it touched, plus any declared invariant nothing in
-the repo cites. That ordering is an absolute count rather than a proportion, so
-`4 of 18` sits above `2 of 5`. "15 of 90 files, 1 of 3 named tests" is the useful
-shape — a wide change to INV-6's footprint that barely moved its tests.
+**ranked by proportion — `touched / citing`, highest first** — not by raw count. An
+invariant cited across 90 files that a change touches 15 of (17%) is a wider but
+shallower exposure than one touched in 8 of 20 (40%), so the 40% row leads even
+though 8 < 15. The raw counts stay in the table as the evidence; only the ranking
+changed. Rows at an equal proportion break the tie on the raw touched count, then on ID.
+
+**The table is bounded so the signal is not buried in a tail.** A row appears only
+when it is a real exposure, by any one of: a **multi-file touch** (`touched ≥ 2`)
+that also reaches at least 10% of the citing files; **full coverage** — every file
+citing that invariant was changed, which counts at any size, `1 of 1` included; a
+**touched named test** — a test named for the invariant sits in a file the change
+edited (the event the last column exists for, so it shows whatever its proportion);
+or a **removed citation** (below). Everything else the change touched — a single
+incidental file citing a widely-cited invariant, or a diffuse touch well under 10% —
+did not clear that bar, so it collapses into the footer and is kept in full in
+`review.json`, where each row carries a `shown` flag saying whether it made the
+table. The footer reads "did not clear the reporting threshold" rather than "fell
+below" it: the hidden set mixes low-proportion touches with single-file touches that
+can sit above 10% (a `1 of 3` is 33%) yet still are not worth a row.
 
 Two limits worth knowing. "Named tests in touched files" is exactly that: the link
 data carries `file:function`, not line ranges, so a change elsewhere in the same
 file counts. And because the footprint is read at the head commit, a file the change
 *deletes* appears in no column — so deleted citation sites get their own line,
 since removing an invariant's last anchor is the change most likely to leave a
-declared promise unguarded.
+declared promise unguarded, and that line always shows regardless of the threshold.
+
+Standing `UNLINKED` invariants — declared but cited nowhere in the repo — are *not*
+listed here: that is a fact about the repository rather than this change, and it is
+the `invariants` command's job to audit. The header totals still count them, and a
+citation *this* change removed is reported on its own line as above.
 
 Files touched are computed from the merge base of `<base>` and `<head>`, so a base
 that has moved on does not get its commits attributed to this change.

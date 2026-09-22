@@ -713,8 +713,15 @@ func TestPRReviewRegistryDiscovery(t *testing.T) {
 		if !strings.Contains(md, "`docs/invariants.md`") {
 			t.Errorf("the section must name the discovered path:\n%s", md)
 		}
-		if !strings.Contains(md, "`INV-99` is declared but cited in no file") {
-			t.Errorf("an uncited invariant is a finding:\n%s", md)
+		// Standing UNLINKED is no longer a per-row line in pr-review (#74): repeating
+		// it on every PR trains readers to skip the section, and it is the audit
+		// surface's job (archon invariants). The header totals still surface that one
+		// exists, so the finding is not lost — only moved out of the reviewer's way.
+		if strings.Contains(md, "is declared but cited in no file") {
+			t.Errorf("standing UNLINKED should not render as a per-row finding:\n%s", md)
+		}
+		if !strings.Contains(md, "1 UNLINKED") {
+			t.Errorf("the header totals should still report the uncited invariant:\n%s", md)
 		}
 		if !strings.Contains(stderr.String(), "found invariant registry at docs/invariants.md") {
 			t.Errorf("discovery should say what it found, got %q", stderr.String())
@@ -1060,8 +1067,12 @@ func TestPRReviewRegistryPinnedToHead(t *testing.T) {
 		if !strings.Contains(md, "`docs/other.md`") || strings.Contains(md, "`docs/invariants.md`") {
 			t.Errorf("the explicit path must be the one used:\n%s", md)
 		}
-		if !strings.Contains(md, "INV-77") {
-			t.Errorf("the explicit registry's invariant is missing:\n%s", md)
+		// INV-77 is uncited, so it no longer renders as a row (#74). The distinguishing
+		// content proof is the anchored count: other.md declares one uncited invariant
+		// (0 of 1 anchored), where the conventional docs/invariants.md would report its
+		// INV-1 as linked (1 of 1). "0 of 1 anchored" can only come from other.md.
+		if !strings.Contains(md, "0 of 1 anchored") {
+			t.Errorf("the section should reflect the explicit registry (INV-77, uncited):\n%s", md)
 		}
 		if strings.Contains(stderr, "found invariant registry") {
 			t.Errorf("discovery should not run when a path is given, got %q", stderr)
