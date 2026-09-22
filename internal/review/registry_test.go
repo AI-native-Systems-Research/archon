@@ -645,26 +645,72 @@ func TestTieBreakOnTouchedCount(t *testing.T) {
 		}
 		return invariant.Link{Invariant: invariant.Invariant{ID: id, Scope: "docs/invariants.md"}, CodeFiles: files}
 	}
-	// INV-BIG 4/20 and INV-SMALL 2/10 are both 20%; INV-BIG's larger touch leads.
+	// INV-A 4/20 and INV-Z 2/10 are both 20%; the larger touch (INV-A) must lead.
+	// The IDs are chosen so alphabetical order (INV-A < INV-Z) *contradicts* the
+	// touched-count order — otherwise dropping the touched-count key entirely would
+	// still pass by falling through to the ID tiebreak.
 	reg := &invariant.Result{
 		Registry:     "docs/invariants.md",
 		FilesScanned: 50,
-		Links:        []invariant.Link{mk("INV-SMALL", 10), mk("INV-BIG", 20)},
+		Links:        []invariant.Link{mk("INV-Z", 10), mk("INV-A", 20)},
 	}
 	var changedFiles []string
 	for i := 0; i < 2; i++ {
-		changedFiles = append(changedFiles, fmt.Sprintf("sim/INV-SMALL_%d.go", i))
+		changedFiles = append(changedFiles, fmt.Sprintf("sim/INV-Z_%d.go", i))
 	}
 	for i := 0; i < 4; i++ {
-		changedFiles = append(changedFiles, fmt.Sprintf("sim/INV-BIG_%d.go", i))
+		changedFiles = append(changedFiles, fmt.Sprintf("sim/INV-A_%d.go", i))
 	}
 	sec := buildRegistrySection(reg, changedFiles, nil)
-	if len(sec.Rows) != 2 || sec.Rows[0].ID != "INV-BIG" || sec.Rows[1].ID != "INV-SMALL" {
+	if len(sec.Rows) != 2 || sec.Rows[0].ID != "INV-A" || sec.Rows[1].ID != "INV-Z" {
 		var ids []string
 		for _, r := range sec.Rows {
 			ids = append(ids, r.ID)
 		}
-		t.Errorf("equal proportion (20%%) must break on touched count: want [INV-BIG INV-SMALL], got %v", ids)
+		t.Errorf("equal proportion (20%%) must break on touched count (INV-A=4 before INV-Z=2), not ID: got %v", ids)
+	}
+}
+
+// TestNamedOnlyRowSortsBelowProportionRows: a row shown only because a named test
+// was touched has no citing proportion (touched==0), so it must sort below every
+// proportion-ranked row but above the hidden tail, and the footer must count the
+// hidden rows even when a named-only row is on the table. The flow1 golden exercises
+// this (INV-9), but CI does not run that golden without BLIS_REPO, so it is pinned
+// here too.
+func TestNamedOnlyRowSortsBelowProportionRows(t *testing.T) {
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 50,
+		Links: []invariant.Link{
+			// Proportion-shown: 2 of 4 = 50%, touched >= 2.
+			{Invariant: invariant.Invariant{ID: "INV-PROP", Scope: "docs/invariants.md"},
+				CodeFiles: []string{"sim/p0.go", "sim/p1.go", "sim/p2.go", "sim/p3.go"}},
+			// Named-only shown: no citing file touched, but a named test's file is.
+			{Invariant: invariant.Invariant{ID: "INV-NAMED", Scope: "docs/invariants.md"},
+				CodeFiles:  []string{"sim/n0.go", "sim/n1.go", "sim/n2.go"},
+				NamedTests: []string{"sim/named_test.go:TestINVNAMED_Holds"}},
+			// Hidden: single-file touch of a multi-file invariant.
+			{Invariant: invariant.Invariant{ID: "INV-HID", Scope: "docs/invariants.md"},
+				CodeFiles: []string{"sim/h0.go", "sim/h1.go", "sim/h2.go", "sim/h3.go", "sim/h4.go"}},
+		},
+	}
+	changedFiles := []string{"sim/p0.go", "sim/p1.go", "sim/named_test.go", "sim/h0.go"}
+	sec := buildRegistrySection(reg, changedFiles, nil)
+
+	var shown []string
+	for _, r := range sec.Rows {
+		if r.Shown {
+			shown = append(shown, r.ID)
+		}
+	}
+	if len(shown) != 2 || shown[0] != "INV-PROP" || shown[1] != "INV-NAMED" {
+		t.Errorf("named-only row must sort below the proportion row: want [INV-PROP INV-NAMED], got %v", shown)
+	}
+	var b strings.Builder
+	writeRegistrySection(&b, sec)
+	out := b.String()
+	if !strings.Contains(out, "_1 more touched invariant did not clear the reporting threshold — see review.json._") {
+		t.Errorf("footer must count the 1 hidden row while a named-only row is shown:\n%s", out)
 	}
 }
 
