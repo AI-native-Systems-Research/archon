@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/AI-native-Systems-Research/archon/internal/callgraph"
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
@@ -1453,11 +1454,30 @@ func checkoutWorktree(repo, commit string) (string, func()) {
 	if err != nil {
 		fatal("mktemp: %v", err)
 	}
-	run(repo, "git", "worktree", "add", "--detach", "--quiet", tmp, commit)
-	return tmp, func() {
-		run(repo, "git", "worktree", "remove", "--force", tmp)
-		os.RemoveAll(tmp)
+	added := false
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			if added {
+				// Not run(): that calls fatal(), which would re-enter the drain
+				// and let one stuck worktree stop the rest from being removed.
+				cmd := exec.Command("git", "worktree", "remove", "--force", tmp)
+				cmd.Dir = repo
+				if out, err := cmd.CombinedOutput(); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: git worktree remove %s: %v\n%s", tmp, err, out)
+				}
+			}
+			os.RemoveAll(tmp)
+		})
 	}
+	// Registered before the checkout, not after: `git worktree add` calls fatal()
+	// when the commit is not in the repo — the likeliest failure of all — and by
+	// then the temp directory already exists. A registration at the call site, or
+	// anywhere after this line, still leaks that case.
+	onFatal(cleanup)
+	run(repo, "git", "worktree", "add", "--detach", "--quiet", tmp, commit)
+	added = true
+	return tmp, cleanup
 }
 
 func run(dir, name string, args ...string) {
@@ -1496,7 +1516,55 @@ func printJSON(v any) {
 	}
 }
 
+// Cleanups that must run even when the process exits through fatal().
+//
+// os.Exit runs no deferred function, so `defer cleanup()` covers only the success
+// path — and for a temporary git worktree the failure path is the one that
+// matters: it leaves a directory on disk and an entry registered in the *target*
+// repository's .git/worktrees, which `git worktree prune` will not clear while the
+// directory exists.
+var (
+	cleanupMu       sync.Mutex
+	pendingCleanups []func()
+	draining        bool
+)
+
+// onFatal registers a cleanup to run if the process exits through fatal().
+func onFatal(f func()) {
+	cleanupMu.Lock()
+	defer cleanupMu.Unlock()
+	pendingCleanups = append(pendingCleanups, f)
+}
+
+// runPendingCleanups drains the list, newest first.
+//
+// The draining flag makes a fatal() raised *by* a cleanup exit rather than
+// re-enter, and each cleanup runs inside its own recover so one that panics
+// cannot strand the rest.
+func runPendingCleanups() {
+	cleanupMu.Lock()
+	if draining {
+		cleanupMu.Unlock()
+		return
+	}
+	draining = true
+	todo := pendingCleanups
+	pendingCleanups = nil
+	cleanupMu.Unlock()
+
+	for i := len(todo) - 1; i >= 0; i-- {
+		func() {
+			defer func() { _ = recover() }()
+			todo[i]()
+		}()
+	}
+}
+
 func fatal(format string, args ...any) {
+	// The cause is printed first. A cleanup that fails, or one that blocks on a
+	// git index lock, must not bury the reason we are exiting — which is why this
+	// differs from the sketch in issue #71.
 	fmt.Fprintf(os.Stderr, "archon-go: "+format+"\n", args...)
+	runPendingCleanups()
 	os.Exit(1)
 }

@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -1238,5 +1240,105 @@ func TestPRReviewFromSubdirectoryWithGitConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(md), "| `INV-1` | LINKED | 0 of 1 |") {
 		t.Errorf("counts are wrong from a subdirectory:\n%s", md)
+	}
+}
+
+// TestWorktreeCleanupOnFatal is issue #71: commands that analyse an old commit
+// create a throwaway checkout with `git worktree add`, and every error path calls
+// fatal() — which is os.Exit, so the deferred cleanup never runs. Each failure
+// left a temp directory on disk and an entry registered in the *target* repo's
+// .git/worktrees, which `git worktree prune` will not clear while the directory
+// exists.
+func TestWorktreeCleanupOnFatal(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	// state captures everything a leak would show up in.
+	state := func() (string, []string) {
+		t.Helper()
+		entries, err := os.ReadDir(filepath.Join(repo, ".git", "worktrees"))
+		var names []string
+		if err == nil {
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+		}
+		sort.Strings(names)
+		return git("worktree", "list"), names
+	}
+	tempWorktrees := func() []string {
+		t.Helper()
+		matches, err := filepath.Glob(filepath.Join(os.TempDir(), "archon-wt-*"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.Strings(matches)
+		return matches
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	// No go.mod, so extraction fails — strictly *after* the worktree is created,
+	// which is what makes this test non-vacuous. A command that failed before the
+	// checkout would pass whether or not the bug is fixed.
+	if err := os.WriteFile(filepath.Join(repo, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "no go.mod here")
+	sha := git("rev-parse", "HEAD")
+
+	wantList, wantEntries := state()
+	before := tempWorktrees()
+
+	// Each of these reaches fatal() after checkoutWorktree has succeeded.
+	for _, args := range [][]string{
+		{"extract", repo, sha},
+		{"evidence", repo, sha},
+		{"health", repo, sha},
+	} {
+		for i := 0; i < 2; i++ {
+			cmd := exec.Command(bin, args...)
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				t.Fatalf("%v unexpectedly succeeded; this test needs it to fail after the worktree exists", args)
+			}
+			if !strings.Contains(stderr.String(), "module path") && !strings.Contains(stderr.String(), "load packages") {
+				t.Logf("%v failed with: %s", args, strings.TrimSpace(stderr.String()))
+			}
+		}
+	}
+
+	// A commit that does not exist: checkoutWorktree's own `git worktree add`
+	// fails, after os.MkdirTemp has already created the directory. This is the
+	// likeliest failure in practice and the one a cleanup registered only by the
+	// caller would still leak.
+	cmd := exec.Command(bin, "extract", repo, "0000000000000000000000000000000000000000")
+	cmd.Stderr = &strings.Builder{}
+	if err := cmd.Run(); err == nil {
+		t.Fatal("extract at a nonexistent commit should fail")
+	}
+
+	gotList, gotEntries := state()
+	if gotList != wantList {
+		t.Errorf("git worktree list changed:\nbefore:\n%s\nafter:\n%s", wantList, gotList)
+	}
+	if !reflect.DeepEqual(gotEntries, wantEntries) {
+		t.Errorf(".git/worktrees entries leaked: before %v, after %v", wantEntries, gotEntries)
+	}
+	if after := tempWorktrees(); len(after) != len(before) {
+		t.Errorf("temp worktree directories leaked: before %d, after %d\n%v", len(before), len(after), after)
 	}
 }
