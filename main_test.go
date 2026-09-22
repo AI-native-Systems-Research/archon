@@ -1296,6 +1296,9 @@ func TestWorktreeCleanupOnFatal(t *testing.T) {
 		}
 		return stderr.String()
 	}
+	// Only archon's own worktree directories. Asserting the whole redirected TMPDIR
+	// is empty would report an unrelated temp file as a leaked worktree, which is
+	// the sort of misleading message this change exists to remove.
 	leftovers := func() []string {
 		t.Helper()
 		entries, err := os.ReadDir(tmpdir)
@@ -1304,7 +1307,9 @@ func TestWorktreeCleanupOnFatal(t *testing.T) {
 		}
 		var names []string
 		for _, e := range entries {
-			names = append(names, e.Name())
+			if strings.HasPrefix(e.Name(), "archon-wt-") {
+				names = append(names, e.Name())
+			}
 		}
 		sort.Strings(names)
 		return names

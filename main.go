@@ -1564,9 +1564,10 @@ func onFatal(f func()) {
 // runPendingCleanups drains the list, newest first.
 //
 // Each cleanup runs inside its own recover, so one that panics cannot strand the
-// rest. The draining flag only prevents infinite recursion should a cleanup ever
-// call fatal(): that call still exits and abandons whatever is queued behind it,
-// which is why removeWorktree reports failures instead of calling fatal().
+// rest. The draining flag makes a second drain a no-op and stops infinite recursion
+// should a cleanup ever call fatal() — though that call still exits and abandons
+// whatever is queued behind it, which is why removeWorktree reports failures rather
+// than calling fatal().
 func runPendingCleanups() {
 	cleanupMu.Lock()
 	if draining {
