@@ -13,7 +13,21 @@ import (
 // deliberately not invariant.SchemaVersion: that versions the `archon invariants`
 // JSON, and borrowing it would mean a bump there silently bumping this, while a
 // change here could not bump without lying about that one.
-const registrySchemaVersion = 1
+//
+// v2: `rows` changed meaning from "the rendered table" to "every declared
+// invariant this change touched", of which the table is a filtered subset — a
+// consumer reads each row's `shown` to tell which appeared. A v1 consumer keying
+// off "rows == table" would be silently wrong, which is exactly what this bump
+// guards against.
+const registrySchemaVersion = 2
+
+// citingFloorPercent is the minimum touched/citing proportion for a row to appear
+// in the rendered table. Below it a touched invariant is real but too diffuse to
+// act on — INV-6 at 7 of 147 (5%) on BLIS #1725 — so it drops to the footer while
+// staying in review.json. Paired with the touched>=2 significance gate so a
+// high-proportion single-file touch (INV-12 at 1 of 3) cannot pass on proportion
+// alone.
+const citingFloorPercent = 10
 
 // RegistryRow is one declared invariant this change has a reason to mention:
 // either the change touched a file citing it, or nothing in the repository cites
@@ -39,6 +53,13 @@ type RegistryRow struct {
 	// column is labelled to match what is measured.
 	NamedTestsInTouchedFiles int `json:"namedTestsInTouchedFiles"`
 	NamedTestsTotal          int `json:"namedTestsTotal"`
+
+	// Shown is whether this row appears in the rendered markdown table. review.json
+	// carries every touched invariant — a superset of the table — so the remainder
+	// is reachable; a consumer regenerating the table reads this flag rather than
+	// re-deriving the significance-and-floor gate, which would then live in two
+	// places and drift. Rows with Shown false are counted in the section footer.
+	Shown bool `json:"shown"`
 }
 
 // RegistrySection is the advisory declared-invariant report.
@@ -148,38 +169,63 @@ func buildRegistrySection(reg *invariant.Result, changedFiles []string, removedA
 			}
 		}
 		removed := len(removedAnchors[l.Invariant.ID])
-		unlinked := l.Status() == invariant.StatusUnlinked
-		if touched == 0 && namedTouched == 0 && removed == 0 && !unlinked {
-			// Anchored and untouched: nothing here for a reviewer to act on.
+		if touched == 0 && namedTouched == 0 && removed == 0 {
+			// Anchored and untouched — nothing to act on — or standing UNLINKED,
+			// which is true of the repo rather than this change and belongs to the
+			// audit surface (archon invariants). A citation this change *removed* is
+			// the one UNLINKED case that is an event, and it arrives via `removed`.
 			continue
 		}
+		total := len(files)
+		// A row is shown when it clears the guard the issue specifies: a removed
+		// anchor (the loudest finding, always shown); OR a multi-file touch that also
+		// clears the proportion floor — the floor alone would promote a 1-of-3 = 33%
+		// single-file touch, and touched>=2 alone would keep INV-6's diffuse 7-of-147;
+		// OR full coverage, every citing file changed, which is real signal at any
+		// count and so bypasses the floor. The floor is compared by cross-
+		// multiplication so nothing divides or rounds: touched/total >= p/100.
+		shown := removed > 0 ||
+			(touched >= 2 && touched*100 >= total*citingFloorPercent) ||
+			(total > 0 && touched == total)
 		sec.Rows = append(sec.Rows, RegistryRow{
 			ID:                       l.Invariant.ID,
 			Status:                   l.Status(),
 			CitingFilesTouched:       touched,
-			CitingFilesTotal:         len(files),
+			CitingFilesTotal:         total,
 			AnchorsRemoved:           removed,
 			NamedTestsInTouchedFiles: namedTouched,
 			NamedTestsTotal:          len(l.NamedTests),
+			Shown:                    shown,
 		})
 	}
 
-	// Most files touched first, so the widest-reaching row is on top. This is an
-	// absolute count, not a proportion: 4 of 18 outranks 2 of 5. Ties break on ID
-	// so the output is stable.
+	// Highest proportion first: touched/citing is the meaningful quantity, not the
+	// raw count. An invariant cited in 147 files that a change touches 7 of (5%) is
+	// close to unavoidable; one touched in 3 of 10 (30%) is a real signal. Raw counts
+	// stay in the output as the evidence, but the ranking is by proportion.
 	sort.SliceStable(sec.Rows, func(i, j int) bool {
-		if sec.Rows[i].AnchorsRemoved != sec.Rows[j].AnchorsRemoved {
+		a, b := sec.Rows[i], sec.Rows[j]
+		if a.AnchorsRemoved != b.AnchorsRemoved {
 			// A removed anchor outranks any amount of touching: it is the change
 			// most likely to leave a declared promise unguarded.
-			return sec.Rows[i].AnchorsRemoved > sec.Rows[j].AnchorsRemoved
+			return a.AnchorsRemoved > b.AnchorsRemoved
 		}
-		if sec.Rows[i].CitingFilesTouched != sec.Rows[j].CitingFilesTouched {
-			return sec.Rows[i].CitingFilesTouched > sec.Rows[j].CitingFilesTouched
+		if a.Shown != b.Shown {
+			// Shown rows sort above the footer's hidden ones, so review.json lists
+			// the table first and the remainder after, in one ordered slice.
+			return a.Shown
 		}
-		if sec.Rows[i].NamedTestsInTouchedFiles != sec.Rows[j].NamedTestsInTouchedFiles {
-			return sec.Rows[i].NamedTestsInTouchedFiles > sec.Rows[j].NamedTestsInTouchedFiles
+		// Proportion touched/citing, descending, by cross-multiplication so the
+		// ranking never divides and never rounds two near-equal ratios together.
+		lhs := a.CitingFilesTouched * b.CitingFilesTotal
+		rhs := b.CitingFilesTouched * a.CitingFilesTotal
+		if lhs != rhs {
+			return lhs > rhs
 		}
-		return sec.Rows[i].ID < sec.Rows[j].ID
+		if a.CitingFilesTouched != b.CitingFilesTouched {
+			return a.CitingFilesTouched > b.CitingFilesTouched
+		}
+		return a.ID < b.ID
 	})
 	return sec
 }
@@ -215,18 +261,34 @@ func writeRegistrySection(b *strings.Builder, sec *RegistrySection) {
 		return
 	}
 
-	b.WriteString("| ID | Status | citing files touched | named tests in touched files |\n")
-	b.WriteString("|---|---|---|---|\n")
+	hidden := 0
 	for _, r := range sec.Rows {
-		if r.CitingFilesTotal == 0 && r.NamedTestsTotal == 0 && r.AnchorsRemoved == 0 {
-			fmt.Fprintf(b, "| `%s` | %s | — | — |\n", r.ID, r.Status)
-			continue
+		if !r.Shown {
+			hidden++
 		}
-		fmt.Fprintf(b, "| `%s` | %s | %d of %d | %d of %d |\n",
-			r.ID, r.Status, r.CitingFilesTouched, r.CitingFilesTotal,
-			r.NamedTestsInTouchedFiles, r.NamedTestsTotal)
 	}
-	b.WriteString("\n")
+
+	// The table renders only the rows that cleared the guard; the rest are counted
+	// in the footer and reachable in review.json. When every touched row is below
+	// the floor there is no table, only the footer — an honest "nothing rose above
+	// the threshold" rather than an empty header.
+	if hidden < len(sec.Rows) {
+		b.WriteString("| ID | Status | citing files touched | named tests in touched files |\n")
+		b.WriteString("|---|---|---|---|\n")
+		for _, r := range sec.Rows {
+			if !r.Shown {
+				continue
+			}
+			if r.CitingFilesTotal == 0 && r.NamedTestsTotal == 0 {
+				fmt.Fprintf(b, "| `%s` | %s | — | — |\n", r.ID, r.Status)
+				continue
+			}
+			fmt.Fprintf(b, "| `%s` | %s | %d of %d | %d of %d |\n",
+				r.ID, r.Status, r.CitingFilesTouched, r.CitingFilesTotal,
+				r.NamedTestsInTouchedFiles, r.NamedTestsTotal)
+		}
+		b.WriteString("\n")
+	}
 
 	var removed []string
 	for _, r := range sec.Rows {
@@ -239,17 +301,17 @@ func writeRegistrySection(b *strings.Builder, sec *RegistrySection) {
 			strings.Join(removed, ", "))
 	}
 
-	var unlinked []string
-	for _, r := range sec.Rows {
-		if r.Status == invariant.StatusUnlinked {
-			unlinked = append(unlinked, "`"+r.ID+"`")
+	// The demoted tail is stated as a count, with the full data one file away. The
+	// wording names no single reason on purpose: a row is hidden either as a diffuse
+	// multi-file touch below the floor (INV-6, 7 of 147) or as a single-file touch
+	// that never cleared the significance guard (INV-12, 1 of 3) — "below the
+	// threshold" is the one phrasing true of both. Singular for a one-row tail.
+	if hidden > 0 {
+		noun := "invariants"
+		if hidden == 1 {
+			noun = "invariant"
 		}
-	}
-	if len(unlinked) > 0 {
-		verb := "is declared but cited in no file"
-		if len(unlinked) > 1 {
-			verb = "are declared but cited in no file"
-		}
-		fmt.Fprintf(b, "%s %s.\n\n", strings.Join(unlinked, ", "), verb)
+		fmt.Fprintf(b, "_%d more touched %s fell below the reporting threshold — see review.json._\n\n",
+			hidden, noun)
 	}
 }
