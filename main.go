@@ -18,9 +18,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/AI-native-Systems-Research/archon/internal/callgraph"
 	"github.com/AI-native-Systems-Research/archon/internal/delta"
@@ -1453,10 +1455,53 @@ func checkoutWorktree(repo, commit string) (string, func()) {
 	if err != nil {
 		fatal("mktemp: %v", err)
 	}
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() { removeWorktree(repo, tmp) })
+	}
+	// Registered before the checkout, not after. `git worktree add` calls fatal()
+	// when the commit is not in the repo, and by then os.MkdirTemp has already
+	// created the directory — so this is the one failure that happens while there
+	// is something to clean up but no checkout yet. A registration at the call
+	// site, or anywhere after this line, leaks exactly that case.
+	onFatal(cleanup)
 	run(repo, "git", "worktree", "add", "--detach", "--quiet", tmp, commit)
-	return tmp, func() {
-		run(repo, "git", "worktree", "remove", "--force", tmp)
-		os.RemoveAll(tmp)
+	return tmp, cleanup
+}
+
+// removeWorktree unregisters a temporary worktree and deletes its directory.
+//
+// It always attempts `git worktree remove` rather than tracking whether the earlier
+// `git worktree add` succeeded: "is not a working tree" means the entry is already
+// gone, which is success, and a boolean would have to be right about a window it
+// cannot see. LC_ALL is pinned because that string is translated — matching git's
+// prose under a non-English locale would turn "already gone" into a false alarm.
+//
+// The directory is deleted even when the unregister fails, and that ordering is the
+// whole point: `git worktree prune` removes an admin entry only when its directory
+// is *missing*. Measured on git 2.50.1 — entry plus directory survives prune
+// indefinitely; entry alone is pruned with "gitdir file points to non-existent
+// location". So deleting the directory is what leaves a stranded entry recoverable,
+// and `git gc` will eventually clear it unattended. Leaving the directory in place
+// would pin the entry forever.
+//
+// It deliberately does not use run(), which calls fatal(): during a drain that skips
+// to os.Exit and abandons the cleanups still queued behind this one.
+func removeWorktree(repo, tmp string) {
+	// --force twice: a single --force fails on a locked worktree.
+	cmd := exec.Command("git", "worktree", "remove", "--force", "--force", tmp)
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANGUAGE=")
+	out, err := cmd.CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "is not a working tree") {
+		fmt.Fprintf(os.Stderr, "archon-go: could not unregister temporary worktree %s in %s: %v\n%s\n",
+			tmp, repo, err, strings.TrimSpace(string(out)))
+		fmt.Fprintf(os.Stderr, "           deleting the directory anyway, which leaves the entry prunable:\n"+
+			"             git -C %s worktree prune\n", repo)
+	}
+	if err := os.RemoveAll(tmp); err != nil {
+		fmt.Fprintf(os.Stderr, "archon-go: could not delete temporary directory %s: %v\n", tmp, err)
+		fmt.Fprintf(os.Stderr, "           until it is gone, `git -C %s worktree prune` cannot clear its entry\n", repo)
 	}
 }
 
@@ -1496,7 +1541,63 @@ func printJSON(v any) {
 	}
 }
 
+// Cleanups that must run even when the process exits through fatal().
+//
+// os.Exit runs no deferred function, so `defer cleanup()` covers only the success
+// path — and for a temporary git worktree the failure path is the one that
+// matters: it leaves a directory on disk and an entry registered in the *target*
+// repository's .git/worktrees, which `git worktree prune` will not clear while the
+// directory exists.
+var (
+	cleanupMu       sync.Mutex
+	pendingCleanups []func()
+	draining        bool
+)
+
+// onFatal registers a cleanup to run if the process exits through fatal().
+func onFatal(f func()) {
+	cleanupMu.Lock()
+	defer cleanupMu.Unlock()
+	pendingCleanups = append(pendingCleanups, f)
+}
+
+// runPendingCleanups drains the list, newest first.
+//
+// Each cleanup runs inside its own recover, so one that panics cannot strand the
+// rest. The draining flag makes a second drain a no-op and stops infinite recursion
+// should a cleanup ever call fatal() — though that call still exits and abandons
+// whatever is queued behind it, which is why removeWorktree reports failures rather
+// than calling fatal().
+func runPendingCleanups() {
+	cleanupMu.Lock()
+	if draining {
+		cleanupMu.Unlock()
+		return
+	}
+	draining = true
+	todo := pendingCleanups
+	pendingCleanups = nil
+	cleanupMu.Unlock()
+
+	for i := len(todo) - 1; i >= 0; i-- {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Discarding this would leave a leaked worktree and no hint
+					// that its cleanup died.
+					fmt.Fprintf(os.Stderr, "archon-go: a cleanup panicked, so its worktree may remain: %v\n%s\n", r, debug.Stack())
+				}
+			}()
+			todo[i]()
+		}()
+	}
+}
+
 func fatal(format string, args ...any) {
+	// The cause is printed first, so a cleanup that fails or is slow cannot bury
+	// the reason we are exiting. This is deliberately the opposite order from the
+	// sketch in issue #71.
 	fmt.Fprintf(os.Stderr, "archon-go: "+format+"\n", args...)
+	runPendingCleanups()
 	os.Exit(1)
 }
