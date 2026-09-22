@@ -1459,8 +1459,10 @@ func checkoutWorktree(repo, commit string) (string, func()) {
 	cleanup := func() {
 		once.Do(func() {
 			if added {
-				// Not run(): that calls fatal(), which would re-enter the drain
-				// and let one stuck worktree stop the rest from being removed.
+				// Not run(): that calls fatal(), and during a drain the
+				// draining flag makes fatal() skip straight to os.Exit — so one
+				// failing removal would abort the remaining cleanups instead of
+				// re-entering. Warn and carry on.
 				cmd := exec.Command("git", "worktree", "remove", "--force", tmp)
 				cmd.Dir = repo
 				if out, err := cmd.CombinedOutput(); err != nil {
@@ -1470,10 +1472,11 @@ func checkoutWorktree(repo, commit string) (string, func()) {
 			os.RemoveAll(tmp)
 		})
 	}
-	// Registered before the checkout, not after: `git worktree add` calls fatal()
-	// when the commit is not in the repo — the likeliest failure of all — and by
-	// then the temp directory already exists. A registration at the call site, or
-	// anywhere after this line, still leaks that case.
+	// Registered before the checkout, not after. `git worktree add` calls fatal()
+	// when the commit is not in the repo, and by then os.MkdirTemp has already
+	// created the directory — so this is the one failure that happens while there
+	// is something to clean up but no checkout yet. A registration at the call
+	// site, or anywhere after this line, leaks exactly that case.
 	onFatal(cleanup)
 	run(repo, "git", "worktree", "add", "--detach", "--quiet", tmp, commit)
 	added = true
@@ -1561,9 +1564,9 @@ func runPendingCleanups() {
 }
 
 func fatal(format string, args ...any) {
-	// The cause is printed first. A cleanup that fails, or one that blocks on a
-	// git index lock, must not bury the reason we are exiting — which is why this
-	// differs from the sketch in issue #71.
+	// The cause is printed first, so a cleanup that fails or is slow cannot bury
+	// the reason we are exiting. This is deliberately the opposite order from the
+	// sketch in issue #71.
 	fmt.Fprintf(os.Stderr, "archon-go: "+format+"\n", args...)
 	runPendingCleanups()
 	os.Exit(1)

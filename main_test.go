@@ -1263,7 +1263,8 @@ func TestWorktreeCleanupOnFatal(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	// state captures everything a leak would show up in.
+	// state captures the two places git records a worktree. Temp directories are
+	// checked separately, by tempWorktrees below.
 	state := func() (string, []string) {
 		t.Helper()
 		entries, err := os.ReadDir(filepath.Join(repo, ".git", "worktrees"))
@@ -1276,14 +1277,21 @@ func TestWorktreeCleanupOnFatal(t *testing.T) {
 		sort.Strings(names)
 		return git("worktree", "list"), names
 	}
-	tempWorktrees := func() []string {
+	// tempWorktrees returns the set of archon worktree directories. os.TempDir is
+	// shared — this machine already holds dozens left by runs predating this fix —
+	// so the assertion below compares sets and reports only paths this test
+	// introduced, rather than comparing counts.
+	tempWorktrees := func() map[string]bool {
 		t.Helper()
 		matches, err := filepath.Glob(filepath.Join(os.TempDir(), "archon-wt-*"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		sort.Strings(matches)
-		return matches
+		set := map[string]bool{}
+		for _, m := range matches {
+			set[m] = true
+		}
+		return set
 	}
 
 	git("init", "--quiet")
@@ -1338,7 +1346,14 @@ func TestWorktreeCleanupOnFatal(t *testing.T) {
 	if !reflect.DeepEqual(gotEntries, wantEntries) {
 		t.Errorf(".git/worktrees entries leaked: before %v, after %v", wantEntries, gotEntries)
 	}
-	if after := tempWorktrees(); len(after) != len(before) {
-		t.Errorf("temp worktree directories leaked: before %d, after %d\n%v", len(before), len(after), after)
+	var leaked []string
+	for p := range tempWorktrees() {
+		if !before[p] {
+			leaked = append(leaked, p)
+		}
+	}
+	sort.Strings(leaked)
+	if len(leaked) > 0 {
+		t.Errorf("temp worktree directories leaked: %v", leaked)
 	}
 }
