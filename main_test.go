@@ -1356,13 +1356,13 @@ func TestWorktreeCleanupOnFatal(t *testing.T) {
 	mustFail(t, "extract", repo, "0000000000000000000000000000000000000000")
 
 	// Two worktrees in one command: delta extracts base then head, so the first
-	// checkout succeeds and is cleaned up normally while the second fails. A
-	// registry that honours only one entry leaks the second, and a cleanup that is
-	// not idempotent re-runs the first and complains.
-	stderr := mustFail(t, "delta", repo, good, bad)
-	if strings.Contains(stderr, "warning: git worktree remove") {
-		t.Errorf("a cleanup ran twice:\n%s", stderr)
-	}
+	// checkout succeeds and is cleaned up normally while the second fails. A registry
+	// that honoured only one entry would leak the second.
+	// What this pins is the leak, not idempotency: a second run of an already-fired
+	// cleanup takes the "is not a working tree" exempt branch and prints nothing, so
+	// the sync.Once guarding it has no observable failure mode to assert on. It stays
+	// as insurance against a future cleanup that is not harmless to repeat.
+	mustFail(t, "delta", repo, good, bad)
 
 	if got := leftovers(); len(got) > 0 {
 		t.Errorf("temp worktree directories leaked: %v", got)
@@ -1438,54 +1438,62 @@ func TestRemoveWorktreeAlreadyGone(t *testing.T) {
 	}
 }
 
-// TestRemoveWorktreeUnregisterFailureStillDeletesTheDirectory covers a forced
-// unregister failure: the directory must be gone afterwards and the operator told
-// how to finish.
+// TestRemoveWorktreeUnregisterFailureStillDeletesTheDirectory pins the ordering this
+// PR had backwards once: when `git worktree remove` fails, the directory must be
+// deleted anyway.
 //
-// Why that ordering: `git worktree prune` clears an admin entry only when its
+// Why that direction: `git worktree prune` clears an admin entry only when its
 // directory is *missing*. Measured on git 2.50.1 — entry plus directory survives
-// prune indefinitely; entry alone is pruned with "gitdir file points to non-existent
-// location". So deleting the directory leaves a stranded entry recoverable, and
-// `git gc` clears it unattended; keeping the directory "to be safe" pins the leak
-// forever. This PR initially had that backwards.
-//
-// Honest limit: this test cannot distinguish deleting the directory ourselves from
-// git having already deleted it. In every failure reachable with ordinary
-// permissions — including the read-only admin directory used here — git removes the
-// checkout first and only then fails on the entry. The branch where git fails *and*
-// leaves the directory is not constructible in a test, so what is pinned is the
-// observable end state, not which line achieved it.
+// prune, `prune --expire` and `git gc` indefinitely; entry alone is pruned at once.
+// So deleting the directory leaves a stranded entry recoverable and `git gc` clears
+// it unattended, while keeping it pins the leak forever.
 func TestRemoveWorktreeUnregisterFailureStillDeletesTheDirectory(t *testing.T) {
-	repo := newGitRepo(t)
-	wt := filepath.Join(t.TempDir(), "archon-wt-forced")
+	// Passing the repository's own main worktree makes git fail in validation,
+	// before it touches anything: "is a main working tree", which is not the
+	// exempt "is not a working tree". So git fails *and* leaves the directory —
+	// the one combination that distinguishes deleting it from bailing out.
+	t.Run("git fails and leaves the directory", func(t *testing.T) {
+		repo := newGitRepo(t)
+		stderr := captureStderr(t, func() { removeWorktree(repo, repo) })
 
-	cmd := exec.Command("git", "worktree", "add", "--detach", "--quiet", wt, "HEAD")
-	cmd.Dir = repo
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git worktree add: %v\n%s", err, out)
-	}
+		if !strings.Contains(stderr, "could not unregister") {
+			t.Errorf("a non-exempt git failure must be reported:\n%s", stderr)
+		}
+		if !strings.Contains(stderr, "worktree prune") {
+			t.Errorf("the message must name the remedy:\n%s", stderr)
+		}
+		if _, err := os.Stat(repo); !os.IsNotExist(err) {
+			t.Errorf("the directory survived a non-exempt git failure, which pins the entry against prune; stat err = %v", err)
+		}
+	})
 
-	// Make the admin directory unwritable so `git worktree remove` cannot complete.
-	admin := filepath.Join(repo, ".git", "worktrees")
-	info, err := os.Stat(admin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(admin, 0o500); err != nil {
-		t.Skipf("cannot make %s read-only: %v", admin, err)
-	}
-	defer os.Chmod(admin, info.Mode())
+	// A read-only admin directory is the other reachable failure. It does not
+	// distinguish the branches — git deletes the checkout before failing on the
+	// entry — but it is the shape that happens in practice, so the end state is
+	// worth pinning.
+	t.Run("read-only admin directory", func(t *testing.T) {
+		repo := newGitRepo(t)
+		wt := filepath.Join(t.TempDir(), "archon-wt-forced")
+		cmd := exec.Command("git", "worktree", "add", "--detach", "--quiet", wt, "HEAD")
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git worktree add: %v\n%s", err, out)
+		}
+		admin := filepath.Join(repo, ".git", "worktrees")
+		info, err := os.Stat(admin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(admin, 0o500); err != nil {
+			t.Skipf("cannot make %s read-only: %v", admin, err)
+		}
+		stderr := captureStderr(t, func() { removeWorktree(repo, wt) })
+		_ = os.Chmod(admin, info.Mode())
 
-	stderr := captureStderr(t, func() { removeWorktree(repo, wt) })
-	_ = os.Chmod(admin, info.Mode())
-
-	if _, err := os.Stat(wt); !os.IsNotExist(err) {
-		t.Errorf("the directory must be deleted even when unregistering fails, stat err = %v\nstderr:\n%s", err, stderr)
-	}
-	// If git did fail, the operator needs to be told and given the remedy.
-	if strings.Contains(stderr, "could not unregister") && !strings.Contains(stderr, "worktree prune") {
-		t.Errorf("a failed unregister must name the remedy:\n%s", stderr)
-	}
+		if _, err := os.Stat(wt); !os.IsNotExist(err) {
+			t.Errorf("the directory must be gone afterwards, stat err = %v\nstderr:\n%s", err, stderr)
+		}
+	})
 }
 
 // newGitRepo makes a throwaway repository with one commit.
