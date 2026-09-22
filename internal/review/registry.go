@@ -149,7 +149,7 @@ type scopeKey struct {
 // citations from vanishing. A function or declaration scope counts only when a
 // changed line range overlaps its span.
 func scopeTouched(s invariant.CitationSite, changed map[string]bool, ranges map[string][]LineRange) bool {
-	if s.Scope == "file" {
+	if s.Scope == invariant.ScopeFile {
 		return changed[s.File]
 	}
 	for _, r := range ranges[s.File] {

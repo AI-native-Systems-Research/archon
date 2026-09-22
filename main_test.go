@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/AI-native-Systems-Research/archon/internal/review"
 )
 
 // buildTool compiles archon-go so the flag table and the exit codes are
@@ -1611,5 +1614,79 @@ func TestChangedRanges_NewSideLineNumbers(t *testing.T) {
 	got := ranges["foo.go"]
 	if len(got) != 1 || got[0].Start != 2 || got[0].End != 4 {
 		t.Fatalf("changedRanges(foo.go) = %+v, want one range [2,4] (new-side); a base-side parser would report line 1", got)
+	}
+}
+
+// gitRepoWith commits `initial` as foo.go, then commits `updated`, and returns
+// the ranges changedRanges reports for foo.go between the two.
+func gitRepoWith(t *testing.T, initial, updated string) []review.LineRange {
+	t.Helper()
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, "foo.go"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write(initial)
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "first")
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.TrimSpace(string(out))
+	write(updated)
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "second")
+	return changedRanges(repo, first, "HEAD")["foo.go"]
+}
+
+// TestChangedRanges_PureDeletionCounted pins the deliberate decision (issue #77
+// review) that a pure-deletion hunk (+N,0) is NOT dropped: deleting lines from a
+// function is a change to it, recorded at the surviving boundary line git reports.
+// An earlier revision skipped these, silently under-reporting a gutted function.
+func TestChangedRanges_PureDeletionCounted(t *testing.T) {
+	// Delete lines 3-4 of a 6-line file; the deletion abuts new-side line 2.
+	got := gitRepoWith(t,
+		"package p\nline2\nline3\nline4\nline5\nline6\n",
+		"package p\nline2\nline5\nline6\n")
+	if len(got) != 1 {
+		t.Fatalf("a pure deletion must produce exactly one boundary range; got %+v", got)
+	}
+	if got[0].Start != 2 || got[0].End != 2 {
+		t.Errorf("deletion boundary range = %+v, want [2,2] (the surviving new-side line the deletion abuts)", got[0])
+	}
+}
+
+// TestChangedRanges_MultipleHunksMultipleRanges pins that two disjoint edits in
+// one file yield two ranges, and that the +start,cnt arithmetic (Start+cnt-1) is
+// correct for a multi-line modification.
+func TestChangedRanges_MultipleHunksMultipleRanges(t *testing.T) {
+	// Two separate one-line edits, far apart, so they land in distinct hunks.
+	initial := "package p\n"
+	for i := 2; i <= 20; i++ {
+		initial += fmt.Sprintf("// line %d\n", i)
+	}
+	updated := strings.Replace(initial, "// line 3\n", "// line 3 EDITED\n", 1)
+	updated = strings.Replace(updated, "// line 17\n", "// line 17 EDITED\n", 1)
+	got := gitRepoWith(t, initial, updated)
+	if len(got) != 2 {
+		t.Fatalf("two disjoint edits must yield two ranges; got %+v", got)
+	}
+	// One-line modifications: each range is a single new-side line, [3,3] and [17,17].
+	if got[0].Start != 3 || got[0].End != 3 || got[1].Start != 17 || got[1].End != 17 {
+		t.Errorf("ranges = %+v, want [3,3] and [17,17]", got)
 	}
 }

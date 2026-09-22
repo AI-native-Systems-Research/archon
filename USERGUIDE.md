@@ -500,8 +500,9 @@ citation-bearing scopes the ID has, `n` how many a changed line reached. This is
 point of the section over file-level counting — a hunk hundreds of lines from a
 citation no longer counts it, and a one-line edit inside a function whose doc comment
 cites the ID counts at full strength. Changed lines are the diff's **new-side**
-ranges, since citations live in the head tree; a pure deletion adds no new-side line
-and so touches no function.
+ranges, since citations live in the head tree; a pure deletion is recorded at the
+surviving head line it abuts, so gutting a function's body still counts as touching
+it.
 
 Rows are **ranked by proportion — `touched / citing`, highest first** — not by raw
 count, so `1 of 4` (25%) leads `18 of 170` (11%) even though 1 < 18. The raw counts

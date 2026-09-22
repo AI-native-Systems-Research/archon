@@ -287,16 +287,16 @@ func (si *scopeIndex) siteAt(off int) CitationSite {
 	if si.parsed {
 		for _, s := range si.funcs {
 			if s.start <= line && line <= s.end {
-				return CitationSite{File: si.rel, Line: line, Func: s.name, Start: s.start, End: s.end, Scope: "func"}
+				return CitationSite{File: si.rel, Line: line, Func: s.name, Start: s.start, End: s.end, Scope: ScopeFunc}
 			}
 		}
 		for _, s := range si.decls {
 			if s.start <= line && line <= s.end {
-				return CitationSite{File: si.rel, Line: line, Start: s.start, End: s.end, Scope: "decl"}
+				return CitationSite{File: si.rel, Line: line, Start: s.start, End: s.end, Scope: ScopeDecl}
 			}
 		}
 	}
-	return CitationSite{File: si.rel, Line: line, Start: 1, End: si.lineCount, Scope: "file"}
+	return CitationSite{File: si.rel, Line: line, Start: 1, End: si.lineCount, Scope: ScopeFile}
 }
 
 func (si *scopeIndex) lineOf(off int) int {

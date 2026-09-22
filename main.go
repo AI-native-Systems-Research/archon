@@ -980,13 +980,18 @@ func changedFiles(repo, base, head string) ([]string, error) {
 // context lines the range would spill past the edit, and a change near a function
 // boundary would spuriously overlap it — the opposite of the precision this
 // feature is for. The new-side (+) range is taken because citations are located
-// in the head tree; matching head citations against base-side (-) line numbers is
-// the subtle way to get the wrong answer. The merge-base is resolved exactly as
-// changedFiles does, so "this change" means the same span on both.
+// in the head tree; matching head citations against base-side (-) line *numbers*
+// is the subtle way to get the wrong answer. A pure deletion is still a change to
+// the function it sits in, so it is recorded at its new-side boundary line (the
+// surviving line git reports as +N), which keeps it in head coordinates. The
+// merge-base is resolved exactly as changedFiles does, so "this change" means the
+// same span on both.
 //
-// A failure or empty diff yields nil, which the review side reads as "no line
-// information" and every citation then rests on its whole-file fallback — never a
-// crash, and never a silently empty section.
+// A git failure yields nil AND is announced on stderr: unlike an empty diff, it
+// means the review lost its line information and every function/declaration-scoped
+// citation silently falls back to needing a whole-file change — a quiet regression
+// to file-level matching that a reviewer should be told about. An empty diff
+// (genuinely no changes) returns nil without noise.
 func changedRanges(repo, base, head string) map[string][]review.LineRange {
 	from := base
 	if mb, err := output(repo, "git", "merge-base", base, head); err == nil && mb != "" {
@@ -998,7 +1003,11 @@ func changedRanges(repo, base, head string) map[string][]review.LineRange {
 	// changedFiles sidesteps with -z. --unified=0 rules out -z here, so the config
 	// is set explicitly instead.
 	out, err := output(repo, "git", "-c", "core.quotePath=false", "diff", "--unified=0", "-M", "--no-relative", from, head)
-	if err != nil || out == "" {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read changed line ranges (%v); the declared-invariant section falls back to file-level matching for this run\n", err)
+		return nil
+	}
+	if out == "" {
 		return nil
 	}
 	// Same hunk grammar as internal/callgraph/render.go; kept separate on purpose
@@ -1027,13 +1036,17 @@ func changedRanges(repo, base, head string) map[string][]review.LineRange {
 				cnt, _ = strconv.Atoi(m[2])
 			}
 			if cnt == 0 {
-				// A pure-deletion hunk reports +start,0: it adds no new-side line, so
-				// there is no head line for a citation to overlap. Skipping it is what
-				// "new-side line numbers throughout" means — counting a phantom line
-				// here would report a function as touched when the head tree it is
-				// matched against never changed inside it. This is the case that keeps
-				// INV-6 off BLIS #1725, where the only edits to determinism-citing
-				// functions are deletions.
+				// A pure-deletion hunk reports +start,0: git gives `start` as the
+				// surviving new-side line the deletion abuts. Deleting lines from a
+				// function is a change to it, so record that one boundary line rather
+				// than dropping the hunk — dropping it is a false negative, a function
+				// whose body a change gutted going unreported. `start` can be 0 when the
+				// deletion is at the very top of the file; clamp to line 1 so it can
+				// still overlap a scope that begins there.
+				if start < 1 {
+					start = 1
+				}
+				ranges[cur] = append(ranges[cur], review.LineRange{Start: start, End: start})
 				continue
 			}
 			ranges[cur] = append(ranges[cur], review.LineRange{Start: start, End: start + cnt - 1})

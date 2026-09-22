@@ -42,6 +42,20 @@ const (
 	StatusUnlinked Status = "UNLINKED"
 )
 
+// CitationScope names how precisely a citation could be attached to the code
+// around it. It is a defined type, not a bare string, so the three-value domain
+// is checkable and a typo cannot become a fourth silent scope.
+type CitationScope string
+
+const (
+	// ScopeFunc: the citation is in a function or its doc comment.
+	ScopeFunc CitationScope = "func"
+	// ScopeDecl: no enclosing function, but a top-level declaration block encloses it.
+	ScopeDecl CitationScope = "decl"
+	// ScopeFile: a file-header or package-doc comment, or a file that did not parse.
+	ScopeFile CitationScope = "file"
+)
+
 // CitationSite is one occurrence of an invariant ID in source, attached to the
 // smallest enclosing scope archon can name. Start and End are 1-based line
 // numbers bounding that scope, inclusive; the review side treats a change that
@@ -63,11 +77,11 @@ const (
 // and file scopes, so it is not a discriminator.
 type CitationSite struct {
 	File  string
-	Line  int    // 1-based line of the citation itself
-	Func  string // enclosing function name, "" unless Scope == "func"
-	Start int    // 1-based first line of the enclosing scope, inclusive
-	End   int    // 1-based last line of the enclosing scope, inclusive
-	Scope string // "func" | "decl" | "file"
+	Line  int           // 1-based line of the citation itself
+	Func  string        // enclosing function name, "" unless Scope == "func"
+	Start int           // 1-based first line of the enclosing scope, inclusive
+	End   int           // 1-based last line of the enclosing scope, inclusive
+	Scope CitationScope // ScopeFunc | ScopeDecl | ScopeFile
 }
 
 // Link is what the code and tests say about one invariant.
