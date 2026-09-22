@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -40,6 +41,31 @@ var testFuncRe = regexp.MustCompile(`(?m)^[ \t]*func (Test[A-Za-z0-9_]*)\(`)
 // non-source trees, "testdata" is excluded because the Go tool itself ignores
 // it: a fixture that mentions an ID is not evidence that anything upholds it.
 var skipDir = map[string]bool{".git": true, "vendor": true, "node_modules": true, "testdata": true}
+
+// Scannable reports whether a repo-relative path is one LinkRepo reads, and is
+// therefore a path that can carry a citation.
+//
+// It exists so a second caller cannot drift from the walk: reporting a deleted
+// file as a removed anchor when the scan would never have read it produces a
+// confident wrong number, which is the failure this package exists to avoid.
+// The directory pruning in the walk below is an optimisation; this predicate is
+// what decides.
+func Scannable(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	base := path.Base(rel)
+	if !strings.HasSuffix(base, ".go") || strings.HasPrefix(base, "_") {
+		return false
+	}
+	for _, seg := range strings.Split(path.Dir(rel), "/") {
+		if seg == "." || seg == "" {
+			continue
+		}
+		if skipDir[seg] || strings.HasPrefix(seg, ".") || strings.HasPrefix(seg, "_") {
+			return false
+		}
+	}
+	return true
+}
 
 // LinkRepo scans the Go sources under root and reports what the repository has
 // behind each declared invariant.
@@ -114,9 +140,13 @@ func LinkRepo(root string, invs []Invariant) ([]Link, int, error) {
 			}
 			return nil
 		}
-		// An underscore-prefixed file is invisible to the Go tool, so it is not
-		// production evidence either.
-		if !strings.HasSuffix(name, ".go") || strings.HasPrefix(name, "_") {
+		rel, err := filepath.Rel(walkRoot, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		// One predicate decides, so a second caller cannot disagree with the walk.
+		if !Scannable(rel) {
 			return nil
 		}
 		scanned++
@@ -124,11 +154,6 @@ func LinkRepo(root string, invs []Invariant) ([]Link, int, error) {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(walkRoot, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		isTest := strings.HasSuffix(name, "_test.go")
 		src := string(b)
 

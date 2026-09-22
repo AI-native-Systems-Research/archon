@@ -19,6 +19,7 @@ R=/path/to/your/repo
 ./archon-go render $R --full --format=dot | dot -Tpng -o arch.png   # draw it
 ./archon-go delta  $R HEAD~1 HEAD --summary             # what did the last commit change?
 ./archon-go pr-review $R <base> <head> --out .archon    # CI review bundle (review.md + json)
+                                                     # + declared-invariant section if a registry exists
 ```
 
 ---

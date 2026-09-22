@@ -6,6 +6,27 @@ _Deterministic · no LLM · package-altitude architecture._
 
 Architectural change — a package boundary moved; an architecture review is required.
 
+### Declared invariants — registry
+
+Registry: `docs/contributing/standards/invariants.md` at `d77764f520568b6c67616ca178b214fe288be7fd` — 23 declared, 22 of 23 anchored (18 LINKED, 4 TEST ONLY, 1 UNLINKED), 318 Go files scanned.
+
+| ID | Status | citing files touched | named tests in touched files |
+|---|---|---|---|
+| `INV-6` | LINKED | 15 of 90 | 1 of 3 |
+| `INV-13` | LINKED | 8 of 20 | 0 of 5 |
+| `INV-1` | LINKED | 5 of 32 | 0 of 6 |
+| `INV-3` | LINKED | 4 of 18 | 0 of 0 |
+| `INV-5` | LINKED | 3 of 15 | 1 of 2 |
+| `INV-8` | LINKED | 2 of 5 | 1 of 1 |
+| `INV-9` | LINKED | 1 of 8 | 1 of 3 |
+| `INV-11` | LINKED | 1 of 4 | 0 of 0 |
+| `INV-2` | TEST ONLY | 1 of 5 | 0 of 1 |
+| `INV-4` | LINKED | 1 of 11 | 0 of 0 |
+| `INV-P2-2` | LINKED | 1 of 5 | 0 of 4 |
+| `INV-PD-2` | UNLINKED | — | — |
+
+`INV-PD-2` is declared but cited in no file.
+
 1 edge− · 2 surface · 1 schema · 4 invariant · 1 contract
 
 ### Component view
@@ -362,6 +383,115 @@ graph LR
       ]
     }
   ],
+  "registry": {
+    "schemaVersion": 1,
+    "registry": "docs/contributing/standards/invariants.md",
+    "commit": "d77764f520568b6c67616ca178b214fe288be7fd",
+    "declared": 23,
+    "anchored": 22,
+    "linked": 18,
+    "testOnly": 4,
+    "unlinked": 1,
+    "filesScanned": 318,
+    "rows": [
+      {
+        "id": "INV-6",
+        "status": "LINKED",
+        "citingFilesTouched": 15,
+        "citingFilesTotal": 90,
+        "namedTestsInTouchedFiles": 1,
+        "namedTestsTotal": 3
+      },
+      {
+        "id": "INV-13",
+        "status": "LINKED",
+        "citingFilesTouched": 8,
+        "citingFilesTotal": 20,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 5
+      },
+      {
+        "id": "INV-1",
+        "status": "LINKED",
+        "citingFilesTouched": 5,
+        "citingFilesTotal": 32,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 6
+      },
+      {
+        "id": "INV-3",
+        "status": "LINKED",
+        "citingFilesTouched": 4,
+        "citingFilesTotal": 18,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 0
+      },
+      {
+        "id": "INV-5",
+        "status": "LINKED",
+        "citingFilesTouched": 3,
+        "citingFilesTotal": 15,
+        "namedTestsInTouchedFiles": 1,
+        "namedTestsTotal": 2
+      },
+      {
+        "id": "INV-8",
+        "status": "LINKED",
+        "citingFilesTouched": 2,
+        "citingFilesTotal": 5,
+        "namedTestsInTouchedFiles": 1,
+        "namedTestsTotal": 1
+      },
+      {
+        "id": "INV-9",
+        "status": "LINKED",
+        "citingFilesTouched": 1,
+        "citingFilesTotal": 8,
+        "namedTestsInTouchedFiles": 1,
+        "namedTestsTotal": 3
+      },
+      {
+        "id": "INV-11",
+        "status": "LINKED",
+        "citingFilesTouched": 1,
+        "citingFilesTotal": 4,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 0
+      },
+      {
+        "id": "INV-2",
+        "status": "TEST ONLY",
+        "citingFilesTouched": 1,
+        "citingFilesTotal": 5,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 1
+      },
+      {
+        "id": "INV-4",
+        "status": "LINKED",
+        "citingFilesTouched": 1,
+        "citingFilesTotal": 11,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 0
+      },
+      {
+        "id": "INV-P2-2",
+        "status": "LINKED",
+        "citingFilesTouched": 1,
+        "citingFilesTotal": 5,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 4
+      },
+      {
+        "id": "INV-PD-2",
+        "status": "UNLINKED",
+        "citingFilesTouched": 0,
+        "citingFilesTotal": 0,
+        "namedTestsInTouchedFiles": 0,
+        "namedTestsTotal": 0
+      }
+    ]
+  },
   "components": {
     "module": "github.com/inference-sim/inference-sim",
     "depth": 2,

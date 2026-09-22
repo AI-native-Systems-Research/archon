@@ -30,6 +30,11 @@ func renderMarkdown(res *Result) string {
 	writePlanClassifySection(&b, res.PlanClassify)
 	writeWideningSection(&b, res.Widenings)
 
+	// Shown regardless of verdict, and before the NO_CHANGE early return: most
+	// changes are NO_CHANGE, and "0 of N anchored" is exactly the finding a repo
+	// adopting a registry needs to see on one.
+	writeRegistrySection(&b, res.Registry)
+
 	if res.Verdict == NoChange {
 		if n := res.Counts.Invariants + res.Counts.SchemaChanged; n > 0 {
 			fmt.Fprintf(&b, "_Note: %d guarded promise(s) (invariant / schema) also changed within the existing boundary — see `review.json`._\n\n", n)
