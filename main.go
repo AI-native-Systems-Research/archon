@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -1454,23 +1455,9 @@ func checkoutWorktree(repo, commit string) (string, func()) {
 	if err != nil {
 		fatal("mktemp: %v", err)
 	}
-	added := false
 	var once sync.Once
 	cleanup := func() {
-		once.Do(func() {
-			if added {
-				// Not run(): that calls fatal(), and during a drain the
-				// draining flag makes fatal() skip straight to os.Exit — so one
-				// failing removal would abort the remaining cleanups instead of
-				// re-entering. Warn and carry on.
-				cmd := exec.Command("git", "worktree", "remove", "--force", tmp)
-				cmd.Dir = repo
-				if out, err := cmd.CombinedOutput(); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: git worktree remove %s: %v\n%s", tmp, err, out)
-				}
-			}
-			os.RemoveAll(tmp)
-		})
+		once.Do(func() { removeWorktree(repo, tmp) })
 	}
 	// Registered before the checkout, not after. `git worktree add` calls fatal()
 	// when the commit is not in the repo, and by then os.MkdirTemp has already
@@ -1479,8 +1466,39 @@ func checkoutWorktree(repo, commit string) (string, func()) {
 	// site, or anywhere after this line, leaks exactly that case.
 	onFatal(cleanup)
 	run(repo, "git", "worktree", "add", "--detach", "--quiet", tmp, commit)
-	added = true
 	return tmp, cleanup
+}
+
+// removeWorktree unregisters a temporary worktree and deletes its directory.
+//
+// It always attempts `git worktree remove` rather than tracking whether the earlier
+// `git worktree add` succeeded: "is not a working tree" means the entry is already
+// gone, which is success, and a boolean would have to be right about a window it
+// cannot see.
+//
+// It deliberately does not use run(), which calls fatal(): during a drain that skips
+// to os.Exit and abandons the cleanups still queued behind this one.
+func removeWorktree(repo, tmp string) {
+	// --force twice: a single --force fails on a locked worktree, and the entry then
+	// survives and resists `git worktree prune` — the leak class this fixes.
+	cmd := exec.Command("git", "worktree", "remove", "--force", "--force", tmp)
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "is not a working tree") {
+		// Not housekeeping noise: the entry is still registered in the user's
+		// repository, and deleting the directory here is what would make it
+		// unprunable. Say what failed, where, and how to finish it — and leave the
+		// directory alone.
+		fmt.Fprintf(os.Stderr, "archon-go: could not unregister temporary worktree %s in %s: %v\n%s\n",
+			tmp, repo, err, strings.TrimSpace(string(out)))
+		fmt.Fprintf(os.Stderr, "           it is still registered there. To finish the cleanup:\n"+
+			"             git -C %s worktree remove --force --force %s\n"+
+			"             git -C %s worktree prune\n", repo, tmp, repo)
+		return
+	}
+	if err := os.RemoveAll(tmp); err != nil {
+		fmt.Fprintf(os.Stderr, "archon-go: could not delete temporary directory %s: %v\n", tmp, err)
+	}
 }
 
 func run(dir, name string, args ...string) {
@@ -1541,9 +1559,10 @@ func onFatal(f func()) {
 
 // runPendingCleanups drains the list, newest first.
 //
-// The draining flag makes a fatal() raised *by* a cleanup exit rather than
-// re-enter, and each cleanup runs inside its own recover so one that panics
-// cannot strand the rest.
+// Each cleanup runs inside its own recover, so one that panics cannot strand the
+// rest. The draining flag only prevents infinite recursion should a cleanup ever
+// call fatal(): that call still exits and abandons whatever is queued behind it,
+// which is why removeWorktree reports failures instead of calling fatal().
 func runPendingCleanups() {
 	cleanupMu.Lock()
 	if draining {
@@ -1557,7 +1576,13 @@ func runPendingCleanups() {
 
 	for i := len(todo) - 1; i >= 0; i-- {
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if r := recover(); r != nil {
+					// Discarding this would leave a leaked worktree and no hint
+					// that its cleanup died.
+					fmt.Fprintf(os.Stderr, "archon-go: a cleanup panicked, so its worktree may remain: %v\n%s\n", r, debug.Stack())
+				}
+			}()
 			todo[i]()
 		}()
 	}

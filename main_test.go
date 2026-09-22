@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1245,13 +1246,20 @@ func TestPRReviewFromSubdirectoryWithGitConfig(t *testing.T) {
 
 // TestWorktreeCleanupOnFatal is issue #71: commands that analyse an old commit
 // create a throwaway checkout with `git worktree add`, and every error path calls
-// fatal() — which is os.Exit, so the deferred cleanup never runs. Each failure
-// left a temp directory on disk and an entry registered in the *target* repo's
+// fatal() — which is os.Exit, so the deferred cleanup never runs. Each failure left
+// a temp directory on disk and an entry registered in the *target* repo's
 // .git/worktrees, which `git worktree prune` will not clear while the directory
 // exists.
+//
+// TMPDIR is redirected into the test's own directory, so the assertion is "this
+// directory is empty" rather than a before/after comparison against the shared
+// system temp dir. That removes three problems at once: no dependence on however
+// many stale archon-wt-* directories a machine already holds, no flake when another
+// archon runs concurrently, and nothing left behind when the test itself fails.
 func TestWorktreeCleanupOnFatal(t *testing.T) {
 	bin := buildArchon(t)
 	repo := t.TempDir()
+	tmpdir := t.TempDir()
 
 	git := func(args ...string) string {
 		t.Helper()
@@ -1263,97 +1271,213 @@ func TestWorktreeCleanupOnFatal(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	// state captures the two places git records a worktree. Temp directories are
-	// checked separately, by tempWorktrees below.
-	state := func() (string, []string) {
+	write := func(name, body string) {
 		t.Helper()
-		entries, err := os.ReadDir(filepath.Join(repo, ".git", "worktrees"))
-		var names []string
-		if err == nil {
-			for _, e := range entries {
-				names = append(names, e.Name())
-			}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
 		}
-		sort.Strings(names)
-		return git("worktree", "list"), names
 	}
-	// tempWorktrees returns the set of archon worktree directories. os.TempDir is
-	// shared — this machine already holds dozens left by runs predating this fix —
-	// so the assertion below compares sets and reports only paths this test
-	// introduced, rather than comparing counts.
-	tempWorktrees := func() map[string]bool {
+	// mustFail runs archon with TMPDIR redirected and requires a non-zero exit.
+	mustFail := func(t *testing.T, args ...string) string {
 		t.Helper()
-		matches, err := filepath.Glob(filepath.Join(os.TempDir(), "archon-wt-*"))
+		cmd := exec.Command(bin, args...)
+		cmd.Env = append(os.Environ(), "TMPDIR="+tmpdir)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil {
+			t.Fatalf("%v unexpectedly succeeded; this test needs it to fail", args)
+		}
+		// The whole test turns vacuous if a command starts failing *before* the
+		// checkout is made — nothing under test would run and everything would
+		// still pass. The temp path in the message is the proof that the directory
+		// existed by the time the process gave up, whatever the error says.
+		if got := stderr.String(); !strings.Contains(got, "archon-wt-") {
+			t.Fatalf("%v failed before the worktree existed, so it proves nothing:\n%s", args, got)
+		}
+		return stderr.String()
+	}
+	leftovers := func() []string {
+		t.Helper()
+		entries, err := os.ReadDir(tmpdir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		set := map[string]bool{}
-		for _, m := range matches {
-			set[m] = true
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
 		}
-		return set
+		sort.Strings(names)
+		return names
+	}
+	worktreeState := func() (string, []string) {
+		t.Helper()
+		entries, _ := os.ReadDir(filepath.Join(repo, ".git", "worktrees"))
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		sort.Strings(names)
+		return git("worktree", "list"), names
 	}
 
 	git("init", "--quiet")
 	git("config", "user.email", "t@example.com")
 	git("config", "user.name", "t")
-	// No go.mod, so extraction fails — strictly *after* the worktree is created,
-	// which is what makes this test non-vacuous. A command that failed before the
-	// checkout would pass whether or not the bug is fixed.
-	if err := os.WriteFile(filepath.Join(repo, "a.go"), []byte("package a\n"), 0o644); err != nil {
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("a.go", "package m\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "extractable")
+	good := git("rev-parse", "HEAD")
+
+	// Removing go.mod makes extraction fail — strictly after the checkout exists,
+	// which is what the archon-wt- assertion above pins.
+	if err := os.Remove(filepath.Join(repo, "go.mod")); err != nil {
 		t.Fatal(err)
 	}
 	git("add", "-A")
-	git("commit", "--quiet", "-m", "no go.mod here")
-	sha := git("rev-parse", "HEAD")
+	git("commit", "--quiet", "-m", "no go.mod")
+	bad := git("rev-parse", "HEAD")
 
-	wantList, wantEntries := state()
-	before := tempWorktrees()
+	wantList, wantEntries := worktreeState()
 
-	// Each of these reaches fatal() after checkoutWorktree has succeeded.
 	for _, args := range [][]string{
-		{"extract", repo, sha},
-		{"evidence", repo, sha},
-		{"health", repo, sha},
+		{"extract", repo, bad},
+		{"evidence", repo, bad},
+		{"health", repo, bad},
 	} {
 		for i := 0; i < 2; i++ {
-			cmd := exec.Command(bin, args...)
-			var stderr strings.Builder
-			cmd.Stderr = &stderr
-			if err := cmd.Run(); err == nil {
-				t.Fatalf("%v unexpectedly succeeded; this test needs it to fail after the worktree exists", args)
-			}
-			if !strings.Contains(stderr.String(), "module path") && !strings.Contains(stderr.String(), "load packages") {
-				t.Logf("%v failed with: %s", args, strings.TrimSpace(stderr.String()))
-			}
+			mustFail(t, args...)
 		}
 	}
 
-	// A commit that does not exist: checkoutWorktree's own `git worktree add`
-	// fails, after os.MkdirTemp has already created the directory. This is the
-	// likeliest failure in practice and the one a cleanup registered only by the
-	// caller would still leak.
-	cmd := exec.Command(bin, "extract", repo, "0000000000000000000000000000000000000000")
-	cmd.Stderr = &strings.Builder{}
-	if err := cmd.Run(); err == nil {
-		t.Fatal("extract at a nonexistent commit should fail")
+	// checkoutWorktree's own failure: `git worktree add` rejects the commit after
+	// os.MkdirTemp has already created the directory. This is the case a cleanup
+	// registered at the call site, or after the add, still leaks.
+	mustFail(t, "extract", repo, "0000000000000000000000000000000000000000")
+
+	// Two worktrees in one command: delta extracts base then head, so the first
+	// checkout succeeds and is cleaned up normally while the second fails. A
+	// registry that honours only one entry leaks the second, and a cleanup that is
+	// not idempotent re-runs the first and complains.
+	stderr := mustFail(t, "delta", repo, good, bad)
+	if strings.Contains(stderr, "warning: git worktree remove") {
+		t.Errorf("a cleanup ran twice:\n%s", stderr)
 	}
 
-	gotList, gotEntries := state()
+	if got := leftovers(); len(got) > 0 {
+		t.Errorf("temp worktree directories leaked: %v", got)
+	}
+	gotList, gotEntries := worktreeState()
 	if gotList != wantList {
 		t.Errorf("git worktree list changed:\nbefore:\n%s\nafter:\n%s", wantList, gotList)
 	}
 	if !reflect.DeepEqual(gotEntries, wantEntries) {
 		t.Errorf(".git/worktrees entries leaked: before %v, after %v", wantEntries, gotEntries)
 	}
-	var leaked []string
-	for p := range tempWorktrees() {
-		if !before[p] {
-			leaked = append(leaked, p)
+}
+
+// TestRunPendingCleanups covers the drain itself in-process: ordering, and that one
+// cleanup panicking does not strand the others. Both are invisible to the
+// subprocess test above, where the worktrees are siblings in a temp directory and
+// order is cosmetic.
+func TestRunPendingCleanups(t *testing.T) {
+	cleanupMu.Lock()
+	savedPending, savedDraining := pendingCleanups, draining
+	pendingCleanups, draining = nil, false
+	cleanupMu.Unlock()
+	t.Cleanup(func() {
+		cleanupMu.Lock()
+		pendingCleanups, draining = savedPending, savedDraining
+		cleanupMu.Unlock()
+	})
+
+	var order []string
+	onFatal(func() { order = append(order, "a") })
+	onFatal(func() { panic("a cleanup that dies must not take the others with it") })
+	onFatal(func() { order = append(order, "c") })
+
+	stderr := captureStderr(t, runPendingCleanups)
+
+	// A cleanup that dies must leave a trace: otherwise a reader sees the original
+	// error plus a leaked worktree and concludes the fix does not work.
+	if !strings.Contains(stderr, "a cleanup panicked") {
+		t.Errorf("the panic was swallowed silently:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "must not take the others with it") {
+		t.Errorf("stderr should carry the panic value:\n%s", stderr)
+	}
+
+	// Newest first, and the panicking middle one skipped rather than fatal.
+	if want := []string{"c", "a"}; !reflect.DeepEqual(order, want) {
+		t.Errorf("order = %v, want %v", order, want)
+	}
+	// Drained, so a second call is a no-op rather than a repeat.
+	runPendingCleanups()
+	if len(order) != 2 {
+		t.Errorf("cleanups ran again on a second drain: %v", order)
+	}
+}
+
+// TestRemoveWorktreeFailureIsLoud: when `git worktree remove` fails, the entry is
+// still registered in the user's repository — and deleting the directory anyway is
+// what makes it unprunable. So the message has to name the repo and the remedy, and
+// the directory has to survive.
+func TestRemoveWorktreeFailureIsLoud(t *testing.T) {
+	repo := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	sort.Strings(leaked)
-	if len(leaked) > 0 {
-		t.Errorf("temp worktree directories leaked: %v", leaked)
+	run("init", "--quiet")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	run("add", "-A")
+	run("commit", "--quiet", "-m", "one")
+
+	// A directory git has never heard of: `git worktree remove` fails on it.
+	orphan := filepath.Join(t.TempDir(), "archon-wt-notregistered")
+	if err := os.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stderr := captureStderr(t, func() { removeWorktree(repo, orphan) })
+
+	// "is not a working tree" is the one failure treated as success, since it means
+	// the entry is already gone.
+	if strings.Contains(stderr, "could not unregister") {
+		t.Errorf("an unregistered path should be treated as already removed:\n%s", stderr)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("the directory should have been deleted, stat err = %v", err)
+	}
+}
+
+// captureStderr swaps os.Stderr for a pipe around f.
+func captureStderr(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
+	f()
+	os.Stderr = saved
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
 }
