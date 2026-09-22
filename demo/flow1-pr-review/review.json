@@ -254,6 +254,15 @@
         "shown": true
       },
       {
+        "id": "INV-9",
+        "status": "LINKED",
+        "citingFilesTouched": 1,
+        "citingFilesTotal": 8,
+        "namedTestsInTouchedFiles": 1,
+        "namedTestsTotal": 3,
+        "shown": true
+      },
+      {
         "id": "INV-11",
         "status": "LINKED",
         "citingFilesTouched": 1,
@@ -278,15 +287,6 @@
         "citingFilesTotal": 5,
         "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 4,
-        "shown": false
-      },
-      {
-        "id": "INV-9",
-        "status": "LINKED",
-        "citingFilesTouched": 1,
-        "citingFilesTotal": 8,
-        "namedTestsInTouchedFiles": 1,
-        "namedTestsTotal": 3,
         "shown": false
       },
       {

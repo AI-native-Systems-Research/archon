@@ -18,8 +18,9 @@ Registry: `docs/contributing/standards/invariants.md` at `d77764f520568b6c67616c
 | `INV-5` | LINKED | 3 of 15 | 1 of 2 |
 | `INV-6` | LINKED | 15 of 90 | 1 of 3 |
 | `INV-1` | LINKED | 5 of 32 | 0 of 6 |
+| `INV-9` | LINKED | 1 of 8 | 1 of 3 |
 
-_5 more touched invariants fell below the reporting threshold — see review.json._
+_4 more touched invariants did not clear the reporting threshold — see review.json._
 
 1 edge− · 2 surface · 1 schema · 4 invariant · 1 contract
 
@@ -443,6 +444,15 @@ graph LR
         "shown": true
       },
       {
+        "id": "INV-9",
+        "status": "LINKED",
+        "citingFilesTouched": 1,
+        "citingFilesTotal": 8,
+        "namedTestsInTouchedFiles": 1,
+        "namedTestsTotal": 3,
+        "shown": true
+      },
+      {
         "id": "INV-11",
         "status": "LINKED",
         "citingFilesTouched": 1,
@@ -467,15 +477,6 @@ graph LR
         "citingFilesTotal": 5,
         "namedTestsInTouchedFiles": 0,
         "namedTestsTotal": 4,
-        "shown": false
-      },
-      {
-        "id": "INV-9",
-        "status": "LINKED",
-        "citingFilesTouched": 1,
-        "citingFilesTotal": 8,
-        "namedTestsInTouchedFiles": 1,
-        "namedTestsTotal": 3,
         "shown": false
       },
       {

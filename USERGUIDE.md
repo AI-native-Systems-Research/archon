@@ -484,7 +484,7 @@ Registry: `docs/contributing/standards/invariants.md` at `d77764f520568b6c67616c
 | `INV-6` | LINKED | 15 of 90 | 1 of 3 |
 | `INV-1` | LINKED | 5 of 32 | 0 of 6 |
 
-_5 more touched invariants fell below the reporting threshold — see review.json._
+_5 more touched invariants did not clear the reporting threshold — see review.json._
 ```
 
 (Every number above is from that pinned commit, and `demo/flow1-pr-review`'s golden
@@ -498,12 +498,18 @@ though 8 < 15. The raw counts stay in the table as the evidence; only the rankin
 changed. Rows at an equal proportion break the tie on the raw touched count, then on ID.
 
 **The table is bounded so the signal is not buried in a tail.** A row appears only
-when it is a real exposure: a multi-file touch (`touched ≥ 2`) that also reaches at
-least 10% of the citing files, *or* full coverage — every file citing that invariant
-was changed, which counts at any size. Everything else the change touched — a single
+when it is a real exposure, by any one of: a **multi-file touch** (`touched ≥ 2`)
+that also reaches at least 10% of the citing files; **full coverage** — every file
+citing that invariant was changed, which counts at any size, `1 of 1` included; a
+**touched named test** — a test named for the invariant sits in a file the change
+edited (the event the last column exists for, so it shows whatever its proportion);
+or a **removed citation** (below). Everything else the change touched — a single
 incidental file citing a widely-cited invariant, or a diffuse touch well under 10% —
-is collapsed into the `_N more…_` footer and kept in full in `review.json`, where each
-row carries a `shown` flag saying whether it made the table.
+did not clear that bar, so it collapses into the footer and is kept in full in
+`review.json`, where each row carries a `shown` flag saying whether it made the
+table. The footer reads "did not clear the reporting threshold" rather than "fell
+below" it: the hidden set mixes low-proportion touches with single-file touches that
+can sit above 10% (a `1 of 3` is 33%) yet still are not worth a row.
 
 Two limits worth knowing. "Named tests in touched files" is exactly that: the link
 data carries `file:function`, not line ranges, so a change elsewhere in the same

@@ -467,7 +467,7 @@ func TestRankByProportion_BLIS1725(t *testing.T) {
 	var b strings.Builder
 	writeRegistrySection(&b, sec)
 	out := b.String()
-	if !strings.Contains(out, "_9 more touched invariants fell below the reporting threshold — see review.json._") {
+	if !strings.Contains(out, "_9 more touched invariants did not clear the reporting threshold — see review.json._") {
 		t.Errorf("want a footer counting the 9 hidden rows:\n%s", out)
 	}
 	// The table's first data row is INV-8, before INV-4, before anything else.
@@ -572,5 +572,140 @@ func TestJSONHiddenRowsCarryShownFlag(t *testing.T) {
 	}
 	if !shownByID["INV-8"] || shownByID["INV-6"] {
 		t.Errorf("shown flags wrong: INV-8=%v (want true), INV-6=%v (want false)", shownByID["INV-8"], shownByID["INV-6"])
+	}
+}
+
+// TestTouchedNamedTestIsShown: a test named for an invariant, in a file the change
+// edited, is the exact event the "named tests in touched files" column exists for.
+// It carries no citing-file proportion, so the proportion floor must not bury it —
+// the change touched a test guarding the promise, which a reviewer needs to see.
+func TestTouchedNamedTestIsShown(t *testing.T) {
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 10,
+		Links: []invariant.Link{
+			// Cited across many files; the change touched none of them, but it did
+			// touch a file holding a test named for the invariant. touched == 0.
+			{Invariant: invariant.Invariant{ID: "INV-GUARD", Scope: "docs/invariants.md"},
+				CodeFiles:  []string{"sim/a.go", "sim/b.go", "sim/c.go"},
+				NamedTests: []string{"sim/guard_test.go:TestINVGUARD_Holds"}},
+		},
+	}
+	sec := buildRegistrySection(reg, []string{"sim/guard_test.go"}, nil)
+	if len(sec.Rows) != 1 {
+		t.Fatalf("the touched named test must produce a row; got %d", len(sec.Rows))
+	}
+	if r := sec.Rows[0]; !r.Shown || r.NamedTestsInTouchedFiles != 1 || r.CitingFilesTouched != 0 {
+		t.Errorf("a touched named test must be shown regardless of citing proportion; got %+v", r)
+	}
+}
+
+// TestFloorBoundary pins the 10% comparison as inclusive: a multi-file touch at
+// exactly 10% shows, just under does not. In the acceptance fixture the only
+// exact-10% rows are single-file (killed by touched>=2), so the floor's own
+// boundary is otherwise never exercised — a flip of >= to > or *10 to *11 would
+// ship green without this.
+func TestFloorBoundary(t *testing.T) {
+	mk := func(id string, citing int) invariant.Link {
+		var files []string
+		for i := 0; i < citing; i++ {
+			files = append(files, fmt.Sprintf("sim/%s_%d.go", id, i))
+		}
+		return invariant.Link{Invariant: invariant.Invariant{ID: id, Scope: "docs/invariants.md"}, CodeFiles: files}
+	}
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 50,
+		Links:        []invariant.Link{mk("INV-AT", 20), mk("INV-UNDER", 21)},
+	}
+	// Touch exactly 2 files of each: INV-AT = 2/20 = 10% (shown), INV-UNDER = 2/21
+	// < 10% (hidden). Both have touched >= 2, so only the floor decides.
+	changedFiles := []string{"sim/INV-AT_0.go", "sim/INV-AT_1.go", "sim/INV-UNDER_0.go", "sim/INV-UNDER_1.go"}
+	sec := buildRegistrySection(reg, changedFiles, nil)
+	byID := map[string]RegistryRow{}
+	for _, r := range sec.Rows {
+		byID[r.ID] = r
+	}
+	if !byID["INV-AT"].Shown {
+		t.Error("2 of 20 = exactly 10% must show; the floor is inclusive")
+	}
+	if byID["INV-UNDER"].Shown {
+		t.Error("2 of 21 < 10% must be hidden")
+	}
+}
+
+// TestTieBreakOnTouchedCount: two rows at equal proportion break the tie on the raw
+// touched count, then ID. Nothing in the acceptance fixture ties, so this pins the
+// comparator's second and third keys.
+func TestTieBreakOnTouchedCount(t *testing.T) {
+	mk := func(id string, citing int) invariant.Link {
+		var files []string
+		for i := 0; i < citing; i++ {
+			files = append(files, fmt.Sprintf("sim/%s_%d.go", id, i))
+		}
+		return invariant.Link{Invariant: invariant.Invariant{ID: id, Scope: "docs/invariants.md"}, CodeFiles: files}
+	}
+	// INV-BIG 4/20 and INV-SMALL 2/10 are both 20%; INV-BIG's larger touch leads.
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 50,
+		Links:        []invariant.Link{mk("INV-SMALL", 10), mk("INV-BIG", 20)},
+	}
+	var changedFiles []string
+	for i := 0; i < 2; i++ {
+		changedFiles = append(changedFiles, fmt.Sprintf("sim/INV-SMALL_%d.go", i))
+	}
+	for i := 0; i < 4; i++ {
+		changedFiles = append(changedFiles, fmt.Sprintf("sim/INV-BIG_%d.go", i))
+	}
+	sec := buildRegistrySection(reg, changedFiles, nil)
+	if len(sec.Rows) != 2 || sec.Rows[0].ID != "INV-BIG" || sec.Rows[1].ID != "INV-SMALL" {
+		var ids []string
+		for _, r := range sec.Rows {
+			ids = append(ids, r.ID)
+		}
+		t.Errorf("equal proportion (20%%) must break on touched count: want [INV-BIG INV-SMALL], got %v", ids)
+	}
+}
+
+// TestAllRowsHidden covers the render branch where every touched row is below the
+// guard: no table header (which would otherwise be an empty, misleading table), and
+// a footer that drops "more" — there is no table for the tail to be more than — while
+// the count still distinguishes this from a registry the change never touched.
+func TestAllRowsHidden(t *testing.T) {
+	mk := func(id string, citing int) invariant.Link {
+		var files []string
+		for i := 0; i < citing; i++ {
+			files = append(files, fmt.Sprintf("sim/%s_%d.go", id, i))
+		}
+		return invariant.Link{Invariant: invariant.Invariant{ID: id, Scope: "docs/invariants.md"}, CodeFiles: files}
+	}
+	// Three single-file touches of multi-file invariants: each touched == 1, none is
+	// full coverage or a named-test edit, so all three are hidden.
+	reg := &invariant.Result{
+		Registry:     "docs/invariants.md",
+		FilesScanned: 50,
+		Links:        []invariant.Link{mk("INV-A", 8), mk("INV-B", 9), mk("INV-C", 10)},
+	}
+	sec := buildRegistrySection(reg, []string{"sim/INV-A_0.go", "sim/INV-B_0.go", "sim/INV-C_0.go"}, nil)
+	if len(sec.Rows) != 3 {
+		t.Fatalf("all three are touched, so all three are rows; got %d", len(sec.Rows))
+	}
+	for _, r := range sec.Rows {
+		if r.Shown {
+			t.Fatalf("every row should be hidden; %s is shown", r.ID)
+		}
+	}
+	var b strings.Builder
+	writeRegistrySection(&b, sec)
+	out := b.String()
+	if strings.Contains(out, "| ID | Status") {
+		t.Errorf("no shown rows, so no table header:\n%s", out)
+	}
+	if !strings.Contains(out, "_3 touched invariants did not clear the reporting threshold — see review.json._") {
+		t.Errorf("want an all-hidden footer without \"more\":\n%s", out)
+	}
+	if strings.Contains(out, "more touched") {
+		t.Errorf("with no table, the footer must not say \"more\":\n%s", out)
 	}
 }

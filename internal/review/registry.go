@@ -21,12 +21,12 @@ import (
 // guards against.
 const registrySchemaVersion = 2
 
-// citingFloorPercent is the minimum touched/citing proportion for a row to appear
-// in the rendered table. Below it a touched invariant is real but too diffuse to
-// act on — INV-6 at 7 of 147 (5%) on BLIS #1725 — so it drops to the footer while
-// staying in review.json. Paired with the touched>=2 significance gate so a
-// high-proportion single-file touch (INV-12 at 1 of 3) cannot pass on proportion
-// alone.
+// citingFloorPercent is the minimum touched/citing proportion for a multi-file
+// touch to appear in the rendered table. Below it a touched invariant is real but
+// too diffuse to act on — a change touching 7 of 147 citing files (5%) — so it drops
+// to the footer while staying in review.json. It gates only the multi-file branch,
+// paired there with touched>=2; a single-file touch never rides proportion into the
+// table (a 1-of-3 is 33% but still one file), and full coverage bypasses it.
 const citingFloorPercent = 10
 
 // RegistryRow is one declared invariant this change has a reason to mention:
@@ -177,16 +177,24 @@ func buildRegistrySection(reg *invariant.Result, changedFiles []string, removedA
 			continue
 		}
 		total := len(files)
-		// A row is shown when it clears the guard the issue specifies: a removed
-		// anchor (the loudest finding, always shown); OR a multi-file touch that also
-		// clears the proportion floor — the floor alone would promote a 1-of-3 = 33%
-		// single-file touch, and touched>=2 alone would keep INV-6's diffuse 7-of-147;
-		// OR full coverage, every citing file changed, which is real signal at any
-		// count and so bypasses the floor. The floor is compared by cross-
-		// multiplication so nothing divides or rounds: touched/total >= p/100.
+		// A row is shown when it is a real exposure, by any of four count-free or
+		// proportional signals:
+		//   - a removed anchor — the loudest finding, a promise this change may have
+		//     left unguarded;
+		//   - a touched named test — a test named for the invariant sits in a file the
+		//     change edited; the "named tests" column exists precisely for this event,
+		//     and it carries no proportion to threshold, so it shows on its own;
+		//   - full coverage — every file citing the invariant was changed, real signal
+		//     at any count, including 1 of 1;
+		//   - otherwise a multi-file touch (>=2) that also reaches the proportion
+		//     floor. Both halves are needed: the floor alone would admit a 1-of-3
+		//     (33%) single-file touch, and touched>=2 alone would keep a diffuse
+		//     touch like 7 of 147 (5%). The floor is compared by cross-multiplication
+		//     so nothing divides or rounds: touched/total >= p/100.
 		shown := removed > 0 ||
-			(touched >= 2 && touched*100 >= total*citingFloorPercent) ||
-			(total > 0 && touched == total)
+			namedTouched > 0 ||
+			(total > 0 && touched == total) ||
+			(touched >= 2 && touched*100 >= total*citingFloorPercent)
 		sec.Rows = append(sec.Rows, RegistryRow{
 			ID:                       l.Invariant.ID,
 			Status:                   l.Status(),
@@ -301,17 +309,24 @@ func writeRegistrySection(b *strings.Builder, sec *RegistrySection) {
 			strings.Join(removed, ", "))
 	}
 
-	// The demoted tail is stated as a count, with the full data one file away. The
-	// wording names no single reason on purpose: a row is hidden either as a diffuse
-	// multi-file touch below the floor (INV-6, 7 of 147) or as a single-file touch
-	// that never cleared the significance guard (INV-12, 1 of 3) — "below the
-	// threshold" is the one phrasing true of both. Singular for a one-row tail.
+	// The demoted tail is stated as a count, with the full data one file away. It
+	// mixes two populations — a diffuse multi-file touch under the floor, and a
+	// single-file touch that is neither full coverage nor a named-test edit — so the
+	// wording says "did not clear the reporting threshold" rather than "fell below"
+	// it: not all of them are low-proportion (a 1-of-3 is 33%), but none cleared the
+	// compound guard. "more" only when a table precedes it; when every touched row is
+	// hidden there is nothing for them to be more than, and the count alone still
+	// distinguishes this from an untouched registry. Singular for a one-row tail.
 	if hidden > 0 {
 		noun := "invariants"
 		if hidden == 1 {
 			noun = "invariant"
 		}
-		fmt.Fprintf(b, "_%d more touched %s fell below the reporting threshold — see review.json._\n\n",
-			hidden, noun)
+		more := "more "
+		if hidden == len(sec.Rows) {
+			more = ""
+		}
+		fmt.Fprintf(b, "_%d %stouched %s did not clear the reporting threshold — see review.json._\n\n",
+			hidden, more, noun)
 	}
 }
