@@ -1474,30 +1474,34 @@ func checkoutWorktree(repo, commit string) (string, func()) {
 // It always attempts `git worktree remove` rather than tracking whether the earlier
 // `git worktree add` succeeded: "is not a working tree" means the entry is already
 // gone, which is success, and a boolean would have to be right about a window it
-// cannot see.
+// cannot see. LC_ALL is pinned because that string is translated — matching git's
+// prose under a non-English locale would turn "already gone" into a false alarm.
+//
+// The directory is deleted even when the unregister fails, and that ordering is the
+// whole point: `git worktree prune` removes an admin entry only when its directory
+// is *missing*. Measured on git 2.50.1 — entry plus directory survives prune
+// indefinitely; entry alone is pruned with "gitdir file points to non-existent
+// location". So deleting the directory is what leaves a stranded entry recoverable,
+// and `git gc` will eventually clear it unattended. Leaving the directory in place
+// would pin the entry forever.
 //
 // It deliberately does not use run(), which calls fatal(): during a drain that skips
 // to os.Exit and abandons the cleanups still queued behind this one.
 func removeWorktree(repo, tmp string) {
-	// --force twice: a single --force fails on a locked worktree, and the entry then
-	// survives and resists `git worktree prune` — the leak class this fixes.
+	// --force twice: a single --force fails on a locked worktree.
 	cmd := exec.Command("git", "worktree", "remove", "--force", "--force", tmp)
 	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANGUAGE=")
 	out, err := cmd.CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "is not a working tree") {
-		// Not housekeeping noise: the entry is still registered in the user's
-		// repository, and deleting the directory here is what would make it
-		// unprunable. Say what failed, where, and how to finish it — and leave the
-		// directory alone.
 		fmt.Fprintf(os.Stderr, "archon-go: could not unregister temporary worktree %s in %s: %v\n%s\n",
 			tmp, repo, err, strings.TrimSpace(string(out)))
-		fmt.Fprintf(os.Stderr, "           it is still registered there. To finish the cleanup:\n"+
-			"             git -C %s worktree remove --force --force %s\n"+
-			"             git -C %s worktree prune\n", repo, tmp, repo)
-		return
+		fmt.Fprintf(os.Stderr, "           deleting the directory anyway, which leaves the entry prunable:\n"+
+			"             git -C %s worktree prune\n", repo)
 	}
 	if err := os.RemoveAll(tmp); err != nil {
 		fmt.Fprintf(os.Stderr, "archon-go: could not delete temporary directory %s: %v\n", tmp, err)
+		fmt.Fprintf(os.Stderr, "           until it is gone, `git -C %s worktree prune` cannot clear its entry\n", repo)
 	}
 }
 

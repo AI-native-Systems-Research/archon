@@ -1418,30 +1418,11 @@ func TestRunPendingCleanups(t *testing.T) {
 	}
 }
 
-// TestRemoveWorktreeFailureIsLoud: when `git worktree remove` fails, the entry is
-// still registered in the user's repository — and deleting the directory anyway is
-// what makes it unprunable. So the message has to name the repo and the remedy, and
-// the directory has to survive.
-func TestRemoveWorktreeFailureIsLoud(t *testing.T) {
-	repo := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "--quiet")
-	run("config", "user.email", "t@example.com")
-	run("config", "user.name", "t")
-	if err := os.WriteFile(filepath.Join(repo, "f"), []byte("x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", "-A")
-	run("commit", "--quiet", "-m", "one")
-
-	// A directory git has never heard of: `git worktree remove` fails on it.
+// TestRemoveWorktreeAlreadyGone: "is not a working tree" is the one git failure
+// treated as success, because it means the entry is already unregistered. Getting
+// this wrong would turn every ordinary cleanup into a false alarm.
+func TestRemoveWorktreeAlreadyGone(t *testing.T) {
+	repo := newGitRepo(t)
 	orphan := filepath.Join(t.TempDir(), "archon-wt-notregistered")
 	if err := os.MkdirAll(orphan, 0o755); err != nil {
 		t.Fatal(err)
@@ -1449,14 +1430,88 @@ func TestRemoveWorktreeFailureIsLoud(t *testing.T) {
 
 	stderr := captureStderr(t, func() { removeWorktree(repo, orphan) })
 
-	// "is not a working tree" is the one failure treated as success, since it means
-	// the entry is already gone.
 	if strings.Contains(stderr, "could not unregister") {
-		t.Errorf("an unregistered path should be treated as already removed:\n%s", stderr)
+		t.Errorf("a path git never registered should count as already removed:\n%s", stderr)
 	}
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Errorf("the directory should have been deleted, stat err = %v", err)
 	}
+}
+
+// TestRemoveWorktreeUnregisterFailureStillDeletesTheDirectory covers a forced
+// unregister failure: the directory must be gone afterwards and the operator told
+// how to finish.
+//
+// Why that ordering: `git worktree prune` clears an admin entry only when its
+// directory is *missing*. Measured on git 2.50.1 — entry plus directory survives
+// prune indefinitely; entry alone is pruned with "gitdir file points to non-existent
+// location". So deleting the directory leaves a stranded entry recoverable, and
+// `git gc` clears it unattended; keeping the directory "to be safe" pins the leak
+// forever. This PR initially had that backwards.
+//
+// Honest limit: this test cannot distinguish deleting the directory ourselves from
+// git having already deleted it. In every failure reachable with ordinary
+// permissions — including the read-only admin directory used here — git removes the
+// checkout first and only then fails on the entry. The branch where git fails *and*
+// leaves the directory is not constructible in a test, so what is pinned is the
+// observable end state, not which line achieved it.
+func TestRemoveWorktreeUnregisterFailureStillDeletesTheDirectory(t *testing.T) {
+	repo := newGitRepo(t)
+	wt := filepath.Join(t.TempDir(), "archon-wt-forced")
+
+	cmd := exec.Command("git", "worktree", "add", "--detach", "--quiet", wt, "HEAD")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v\n%s", err, out)
+	}
+
+	// Make the admin directory unwritable so `git worktree remove` cannot complete.
+	admin := filepath.Join(repo, ".git", "worktrees")
+	info, err := os.Stat(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(admin, 0o500); err != nil {
+		t.Skipf("cannot make %s read-only: %v", admin, err)
+	}
+	defer os.Chmod(admin, info.Mode())
+
+	stderr := captureStderr(t, func() { removeWorktree(repo, wt) })
+	_ = os.Chmod(admin, info.Mode())
+
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("the directory must be deleted even when unregistering fails, stat err = %v\nstderr:\n%s", err, stderr)
+	}
+	// If git did fail, the operator needs to be told and given the remedy.
+	if strings.Contains(stderr, "could not unregister") && !strings.Contains(stderr, "worktree prune") {
+		t.Errorf("a failed unregister must name the remedy:\n%s", stderr)
+	}
+}
+
+// newGitRepo makes a throwaway repository with one commit.
+func newGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "--quiet"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "f"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "--quiet", "-m", "one"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return repo
 }
 
 // captureStderr swaps os.Stderr for a pipe around f.
