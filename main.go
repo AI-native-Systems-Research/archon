@@ -1010,9 +1010,10 @@ func changedRanges(repo, base, head string) map[string][]review.LineRange {
 	if out == "" {
 		return nil
 	}
-	// Same hunk grammar as internal/callgraph/render.go; kept separate on purpose
-	// (that one diffs the working tree for call-graph rendering and returns an
-	// internal type), so this is a deliberate second use, not an accidental fork.
+	// Same hunk-header regexp as internal/callgraph/render.go, though this parser
+	// adds -M and its own pure-deletion handling; kept separate on purpose (that one
+	// diffs the working tree for call-graph rendering and returns an internal type),
+	// so this is a deliberate second use, not an accidental fork.
 	hunk := regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 	ranges := map[string][]review.LineRange{}
 	cur := ""
@@ -1040,13 +1041,16 @@ func changedRanges(repo, base, head string) map[string][]review.LineRange {
 				// surviving new-side line the deletion abuts. Deleting lines from a
 				// function is a change to it, so record that one boundary line rather
 				// than dropping the hunk — dropping it is a false negative, a function
-				// whose body a change gutted going unreported. `start` can be 0 when the
-				// deletion is at the very top of the file; clamp to line 1 so it can
-				// still overlap a scope that begins there.
-				if start < 1 {
-					start = 1
+				// whose body a change gutted going unreported.
+				//
+				// start==0 is the exception: the deletion is at the very top of the
+				// file, with no surviving head line below it. There is no head scope it
+				// abuts — attributing it to whatever function now begins at line 1 would
+				// falsely flag that function for a header or import block deleted above
+				// it — so record nothing.
+				if start >= 1 {
+					ranges[cur] = append(ranges[cur], review.LineRange{Start: start, End: start})
 				}
-				ranges[cur] = append(ranges[cur], review.LineRange{Start: start, End: start})
 				continue
 			}
 			ranges[cur] = append(ranges[cur], review.LineRange{Start: start, End: start + cnt - 1})

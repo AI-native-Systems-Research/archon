@@ -1690,3 +1690,100 @@ func TestChangedRanges_MultipleHunksMultipleRanges(t *testing.T) {
 		t.Errorf("ranges = %+v, want [3,3] and [17,17]", got)
 	}
 }
+
+// TestChangedRanges_TopOfFileDeletionNotRecorded pins the +0,0 exception: a
+// deletion at the very top of the file (a header/import block removed above
+// everything) has no surviving head line below it to abut, so it records nothing
+// rather than clamping onto whatever scope now begins at line 1 — which would
+// falsely flag that function. Deleting the two header-comment lines yields the
+// hunk `@@ -1,2 +0,0 @@`, whose new-side start is 0.
+func TestChangedRanges_TopOfFileDeletionNotRecorded(t *testing.T) {
+	got := gitRepoWith(t,
+		"// header 1\n// header 2\npackage p\n\nfunc F() {}\n",
+		"package p\n\nfunc F() {}\n")
+	if len(got) != 0 {
+		t.Errorf("a top-of-file (+0,0) deletion must record no range; got %+v", got)
+	}
+}
+
+// TestPRReviewDeletionInsideCitingFunctionReports is the end-to-end proof that a
+// deletion inside a citing function flows through changedRanges into
+// buildRegistrySection and surfaces the invariant — the exact false negative the
+// pure-deletion fix exists to prevent, exercised through the real binary rather
+// than a hand-built range.
+func TestPRReviewDeletionInsideCitingFunctionReports(t *testing.T) {
+	bin := buildArchon(t)
+	repo := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "--quiet")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	write("go.mod", "module m\n\ngo 1.26.3\n")
+	write("docs/invariants.md", "### INV-1: One\n\n**Statement:** First.\n")
+	// F cites INV-1 in its doc comment and has a body with lines to delete.
+	write("a/a.go", "package a\n\n// F upholds INV-1.\nfunc F() {\n\tx := 1\n\ty := 2\n\t_ = x\n\t_ = y\n}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "base")
+	base := git("rev-parse", "HEAD")
+
+	// Delete two lines from inside F's body — a pure deletion, no additions.
+	write("a/a.go", "package a\n\n// F upholds INV-1.\nfunc F() {\n\tx := 1\n\t_ = x\n}\n")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "delete inside F")
+	head := git("rev-parse", "HEAD")
+
+	out := filepath.Join(t.TempDir(), "bundle")
+	cmd := exec.Command(bin, "pr-review", repo, base, head, "--out", out)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	b, err := os.ReadFile(filepath.Join(out, "review.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Registry struct {
+			Rows []struct {
+				ID                     string `json:"id"`
+				CitingFunctionsTouched int    `json:"citingFunctionsTouched"`
+			} `json:"rows"`
+		} `json:"registry"`
+	}
+	if err := json.Unmarshal(b, &res); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, r := range res.Registry.Rows {
+		if r.ID == "INV-1" {
+			found = true
+			if r.CitingFunctionsTouched != 1 {
+				t.Errorf("INV-1 touched = %d, want 1 — the deletion inside F must count", r.CitingFunctionsTouched)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("INV-1 must be reported after a deletion inside its citing function F:\n%s", b)
+	}
+}
